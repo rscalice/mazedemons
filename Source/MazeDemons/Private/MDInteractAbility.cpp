@@ -5,6 +5,7 @@
 UMDInteractAbility::UMDInteractAbility()
 {
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
+	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerOnly;
 }
 
 AActor* UMDInteractAbility::FindInteractTarget() const

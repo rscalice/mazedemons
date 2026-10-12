@@ -41,7 +41,8 @@ public:
 
 	// Applies raw damage through GAS; Defense mitigation is applied by the attribute set.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
-	void ApplyDamage(float Damage);
+	// Server-only. Instigator/causer feed team checks (friendly fire) and the effect context.
+	void ApplyDamage(float Damage, AActor* DamageInstigator = nullptr, AActor* DamageCauser = nullptr);
 
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void ApplyHealing(float Amount);
@@ -56,6 +57,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
 	bool IsDead() const;
+
+	// Server-only: refills Health to MaxHealth (used on respawn).
+	void ResetHealthToMax();
+
+	// Stores the attribute set (created as a default subobject by the owner actor).
+	void RegisterAttributeSet(UMDAttributeSet* InSet);
 
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|GAS")
 	FMDDeathSignature OnDeath;
@@ -72,10 +79,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|GAS")
 	FMDAttributeValueChanged OnDefenseChanged;
 
-protected:
-	virtual void BeginPlay() override;
+	virtual void InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor) override;
 
 private:
+	void BindAttributeDelegates();
+	bool bDelegatesBound = false;
+
 	void RecalculateDefense();
 
 	void HandleHealthChanged(const FOnAttributeChangeData& ChangeData);

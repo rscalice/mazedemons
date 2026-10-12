@@ -1,7 +1,13 @@
 #include "MDAbilitySystemComponent.h"
 
 #include "MDAttributeSet.h"
+#include "MDDamageEffect.h"
+#include "MDGameplayStatics.h"
+#include "MDGameplayTags.h"
+#include "GameFramework/Actor.h"
 #include "GameplayEffect.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogMDAbilitySystem, Log, All);
 
 UMDAbilitySystemComponent::UMDAbilitySystemComponent()
 {
@@ -10,31 +16,68 @@ UMDAbilitySystemComponent::UMDAbilitySystemComponent()
 
 UMDAttributeSet* UMDAbilitySystemComponent::GetMazeDemonsAttributes() const
 {
-	return MazeDemonsAttributes;
+	if (MazeDemonsAttributes)
+	{
+		return MazeDemonsAttributes;
+	}
+	return const_cast<UMDAttributeSet*>(GetSet<UMDAttributeSet>());
+}
+
+void UMDAbilitySystemComponent::RegisterAttributeSet(UMDAttributeSet* InSet)
+{
+	MazeDemonsAttributes = InSet;
+	if (InSet && !GetSet<UMDAttributeSet>())
+	{
+		AddAttributeSetSubobject(InSet);
+	}
+}
+
+void UMDAbilitySystemComponent::InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor)
+{
+	Super::InitAbilityActorInfo(InOwnerActor, InAvatarActor);
+	BindAttributeDelegates();
+}
+
+void UMDAbilitySystemComponent::ResetHealthToMax()
+{
+	UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	if (Attrs && GetOwner() && GetOwner()->HasAuthority())
+	{
+		Attrs->SetHealth(Attrs->GetMaxHealth());
+	}
 }
 
 float UMDAbilitySystemComponent::GetHealth() const
 {
-	return MazeDemonsAttributes ? MazeDemonsAttributes->GetHealth() : 0.0f;
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetHealth() : 0.0f;
 }
 
 float UMDAbilitySystemComponent::GetMaxHealth() const
 {
-	return MazeDemonsAttributes ? MazeDemonsAttributes->GetMaxHealth() : 0.0f;
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetMaxHealth() : 0.0f;
 }
 
 float UMDAbilitySystemComponent::GetAttackPower() const
 {
-	return MazeDemonsAttributes ? MazeDemonsAttributes->GetAttackPower() : 0.0f;
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetAttackPower() : 0.0f;
 }
 
 float UMDAbilitySystemComponent::GetDefense() const
 {
-	return MazeDemonsAttributes ? MazeDemonsAttributes->GetDefense() : 0.0f;
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetDefense() : 0.0f;
 }
 
 void UMDAbilitySystemComponent::SetArmorPieceDamageReduction(FName ArmorSlot, float DamageReductionPercent)
 {
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
 	if (ArmorSlot.IsNone())
 	{
 		return;
@@ -46,6 +89,11 @@ void UMDAbilitySystemComponent::SetArmorPieceDamageReduction(FName ArmorSlot, fl
 
 void UMDAbilitySystemComponent::RemoveArmorPieceDamageReduction(FName ArmorSlot)
 {
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
 	if (ArmorSlot.IsNone())
 	{
 		return;
@@ -55,49 +103,78 @@ void UMDAbilitySystemComponent::RemoveArmorPieceDamageReduction(FName ArmorSlot)
 	RecalculateDefense();
 }
 
-void UMDAbilitySystemComponent::ApplyDamage(float Damage)
+void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigator, AActor* DamageCauser)
 {
-	if (Damage <= 0.0f || !MazeDemonsAttributes || IsDead())
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		UE_LOG(LogMDAbilitySystem, Verbose, TEXT("ApplyDamage ignored on non-authority."));
+		return;
+	}
+	if (Damage <= 0.0f || IsDead())
 	{
 		return;
 	}
 
-	UGameplayEffect* DamageEffect = NewObject<UGameplayEffect>(GetTransientPackage(), TEXT("MDDamageEffect"));
-	DamageEffect->DurationPolicy = EGameplayEffectDurationType::Instant;
+	AActor* Target = GetAvatarActor();
+	if (!Target)
+	{
+		Target = GetOwner();
+	}
+	if (!UMDGameplayStatics::CanDamage(DamageInstigator, Target))
+	{
+		UE_LOG(LogMDAbilitySystem, Verbose, TEXT("ApplyDamage blocked by team rules: %s -> %s"),
+			*GetNameSafe(DamageInstigator), *GetNameSafe(Target));
+		return;
+	}
 
-	FGameplayModifierInfo& Modifier = DamageEffect->Modifiers.AddDefaulted_GetRef();
-	Modifier.Attribute = UMDAttributeSet::GetIncomingDamageAttribute();
-	Modifier.ModifierOp = EGameplayModOp::Additive;
-	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(FScalableFloat(Damage));
+	FGameplayEffectContextHandle Context = MakeEffectContext();
+	Context.AddInstigator(DamageInstigator, DamageCauser ? DamageCauser : DamageInstigator);
 
-	ApplyGameplayEffectToSelf(DamageEffect, 1.0f, MakeEffectContext());
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UMDDamageEffect::StaticClass(), 1.0f, Context);
+	if (Spec.IsValid() && Spec.Data.IsValid())
+	{
+		Spec.Data->SetSetByCallerMagnitude(TAG_Data_Damage.GetTag(), Damage);
+		ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
+	}
 }
 
 void UMDAbilitySystemComponent::ApplyHealing(float Amount)
 {
-	if (Amount > 0.0f && MazeDemonsAttributes && !IsDead())
+	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
-		MazeDemonsAttributes->SetHealth(FMath::Clamp(MazeDemonsAttributes->GetHealth() + Amount, 0.0f, MazeDemonsAttributes->GetMaxHealth()));
+		return;
+	}
+
+	UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	if (Amount > 0.0f && Attrs && !IsDead())
+	{
+		Attrs->SetHealth(FMath::Clamp(Attrs->GetHealth() + Amount, 0.0f, Attrs->GetMaxHealth()));
 	}
 }
 
 void UMDAbilitySystemComponent::InitializeStats(float NewMaxHealth, float NewAttackPower, float NewBaseDefense)
 {
-	if (!MazeDemonsAttributes)
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	if (!Attrs)
 	{
 		return;
 	}
 
 	BaseDefense = FMath::Clamp(NewBaseDefense, 0.0f, 90.0f);
-	MazeDemonsAttributes->SetMaxHealth(FMath::Max(NewMaxHealth, 1.0f));
-	MazeDemonsAttributes->SetHealth(MazeDemonsAttributes->GetMaxHealth());
-	MazeDemonsAttributes->SetAttackPower(FMath::Max(NewAttackPower, 0.0f));
+	Attrs->SetMaxHealth(FMath::Max(NewMaxHealth, 1.0f));
+	Attrs->SetHealth(Attrs->GetMaxHealth());
+	Attrs->SetAttackPower(FMath::Max(NewAttackPower, 0.0f));
 	RecalculateDefense();
 }
 
 FGameplayAbilitySpecHandle UMDAbilitySystemComponent::GrantAbility(TSubclassOf<UGameplayAbility> AbilityClass, int32 Level)
 {
-	if (!AbilityClass)
+	if (!AbilityClass || !GetOwner() || !GetOwner()->HasAuthority())
 	{
 		return FGameplayAbilitySpecHandle();
 	}
@@ -106,7 +183,8 @@ FGameplayAbilitySpecHandle UMDAbilitySystemComponent::GrantAbility(TSubclassOf<U
 
 bool UMDAbilitySystemComponent::IsDead() const
 {
-	return MazeDemonsAttributes && MazeDemonsAttributes->GetHealth() <= 0.0f;
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs && Attrs->GetHealth() <= 0.0f;
 }
 
 void UMDAbilitySystemComponent::RecalculateDefense()
@@ -117,30 +195,28 @@ void UMDAbilitySystemComponent::RecalculateDefense()
 		RemainingDamageFraction *= 1.0f - ArmorPiece.Value / 100.0f;
 	}
 
-	if (MazeDemonsAttributes)
+	if (UMDAttributeSet* Attrs = GetMazeDemonsAttributes())
 	{
-		MazeDemonsAttributes->SetDefense(FMath::Clamp((1.0f - RemainingDamageFraction) * 100.0f, 0.0f, 90.0f));
+		Attrs->SetDefense(FMath::Clamp((1.0f - RemainingDamageFraction) * 100.0f, 0.0f, 90.0f));
 	}
 }
 
-void UMDAbilitySystemComponent::BeginPlay()
+void UMDAbilitySystemComponent::BindAttributeDelegates()
 {
-	Super::BeginPlay();
-
-	if (AActor* Owner = GetOwner())
+	if (bDelegatesBound)
 	{
-		MazeDemonsAttributes = NewObject<UMDAttributeSet>(Owner, TEXT("MazeDemonsAttributes"));
-		AddAttributeSetSubobject(MazeDemonsAttributes.Get());
-		InitAbilityActorInfo(Owner, Owner);
-		GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetHealthAttribute())
-			.AddUObject(this, &UMDAbilitySystemComponent::HandleHealthChanged);
-		GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetMaxHealthAttribute())
-			.AddUObject(this, &UMDAbilitySystemComponent::HandleMaxHealthChanged);
-		GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetAttackPowerAttribute())
-			.AddUObject(this, &UMDAbilitySystemComponent::HandleAttackPowerChanged);
-		GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetDefenseAttribute())
-			.AddUObject(this, &UMDAbilitySystemComponent::HandleDefenseChanged);
+		return;
 	}
+	bDelegatesBound = true;
+
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetHealthAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandleHealthChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetMaxHealthAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandleMaxHealthChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetAttackPowerAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandleAttackPowerChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetDefenseAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandleDefenseChanged);
 }
 
 void UMDAbilitySystemComponent::HandleHealthChanged(const FOnAttributeChangeData& ChangeData)

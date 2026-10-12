@@ -12,6 +12,8 @@ public class MazeDemons : ModuleRules
 				"Core",
 				"CoreUObject",
 				"Engine",
+				"NetCore",
+				"AIModule",
 				"GameplayAbilities",
 				"GameplayTags",
 				"GameplayTasks"
