@@ -80,8 +80,17 @@ public:
 	FMDAttributeValueChanged OnDefenseChanged;
 
 	virtual void InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 private:
+	// Server sets this when Health reaches 0 (and clears it when Health > 0). Replicated so every
+	// client fires OnDeath exactly once per death via OnRep_IsDeadState.
+	UPROPERTY(ReplicatedUsing = OnRep_IsDeadState)
+	bool bIsDeadState = false;
+
+	UFUNCTION()
+	void OnRep_IsDeadState(bool bOldValue);
+
 	void BindAttributeDelegates();
 	bool bDelegatesBound = false;
 

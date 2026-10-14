@@ -6,6 +6,7 @@
 #include "MDGameplayTags.h"
 #include "GameFramework/Actor.h"
 #include "GameplayEffect.h"
+#include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMDAbilitySystem, Log, All);
 
@@ -222,10 +223,34 @@ void UMDAbilitySystemComponent::BindAttributeDelegates()
 void UMDAbilitySystemComponent::HandleHealthChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnHealthChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
-	if (ChangeData.NewValue <= 0.0f && ChangeData.OldValue > 0.0f)
+
+	// Death state is server-authoritative; clients receive it through bIsDeadState (RepNotify).
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		if (ChangeData.NewValue <= 0.0f && !bIsDeadState)
+		{
+			bIsDeadState = true;
+			OnDeath.Broadcast();
+		}
+		else if (ChangeData.NewValue > 0.0f && bIsDeadState)
+		{
+			bIsDeadState = false; // respawn / revive
+		}
+	}
+}
+
+void UMDAbilitySystemComponent::OnRep_IsDeadState(bool bOldValue)
+{
+	if (bIsDeadState && !bOldValue)
 	{
 		OnDeath.Broadcast();
 	}
+}
+
+void UMDAbilitySystemComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UMDAbilitySystemComponent, bIsDeadState);
 }
 
 void UMDAbilitySystemComponent::HandleMaxHealthChanged(const FOnAttributeChangeData& ChangeData)
