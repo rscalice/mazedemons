@@ -43,6 +43,13 @@ protected:
 	UFUNCTION()
 	void HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn);
 
+	// Bound to the ASC's OnDeath on every machine; ragdolls the current pawn locally.
+	UFUNCTION()
+	void HandleDeath();
+
 private:
+	void RagdollPawn(APawn* Pawn);
+
 	bool bStatsInitialized = false;
+	bool bDeathBound = false;
 };
