@@ -10,7 +10,7 @@ class UDataTable;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDInventoryChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDEquipmentChanged);
 
-// Server-authoritative inventory. Items/Gold replicate to the owner only; Equipped replicates to everyone.
+// Server-authoritative inventory. Items/GoldAmount replicate to the owner only; Equipped replicates to everyone.
 // Item data (slot type, max stack) is read from ItemTable (DT_Items) by row name.
 UCLASS(Blueprintable, BlueprintType, ClassGroup = (MazeDemons), meta = (BlueprintSpawnableComponent))
 class MAZEDEMONS_API UMDInventoryComponent : public UActorComponent
@@ -23,7 +23,7 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Inventory", meta = (ClampMin = "1"))
-	int32 InventorySize = 20;
+	int32 MaxSlots = 20;
 
 	// DT_Items. Used server-side to validate rows, find an item's equip slot (column itemType) and max stack (column maxStack).
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Inventory")
@@ -66,7 +66,7 @@ public:
 	const TArray<FMDEquippedSlot>& GetEquipped() const { return Equipped; }
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
-	int32 GetGold() const { return Gold; }
+	int32 GetGold() const { return GoldAmount; }
 
 protected:
 	UFUNCTION(Server, Reliable, WithValidation)
@@ -107,13 +107,13 @@ protected:
 	UFUNCTION()
 	void OnRep_Equipped();
 
-	UPROPERTY(ReplicatedUsing = OnRep_Items)
+	UPROPERTY(ReplicatedUsing = OnRep_Items, BlueprintReadOnly, Category = "Maze Demons|Inventory")
 	TArray<FMDItemStack> Items;
 
-	UPROPERTY(ReplicatedUsing = OnRep_Gold)
-	int32 Gold = 0;
+	UPROPERTY(ReplicatedUsing = OnRep_Gold, BlueprintReadOnly, Category = "Maze Demons|Inventory")
+	int32 GoldAmount = 0;
 
-	UPROPERTY(ReplicatedUsing = OnRep_Equipped)
+	UPROPERTY(ReplicatedUsing = OnRep_Equipped, BlueprintReadOnly, Category = "Maze Demons|Inventory")
 	TArray<FMDEquippedSlot> Equipped;
 
 private:

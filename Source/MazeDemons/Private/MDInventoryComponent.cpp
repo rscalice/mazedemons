@@ -43,7 +43,7 @@ void UMDInventoryComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, Items, COND_OwnerOnly);
-	DOREPLIFETIME_CONDITION(UMDInventoryComponent, Gold, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UMDInventoryComponent, GoldAmount, COND_OwnerOnly);
 	DOREPLIFETIME(UMDInventoryComponent, Equipped);
 }
 
@@ -115,7 +115,7 @@ bool UMDInventoryComponent::HasRoomForItem(FName Row, int32 Qty) const
 	{
 		return true;
 	}
-	const int32 FreeSlots = InventorySize - Items.Num();
+	const int32 FreeSlots = MaxSlots - Items.Num();
 	return FreeSlots > 0 && FreeSlots * MaxStack >= Remaining;
 }
 
@@ -180,7 +180,7 @@ void UMDInventoryComponent::AddGold(int32 Amount)
 	{
 		return;
 	}
-	Gold = FMath::Max(0, Gold + Amount);
+	GoldAmount = FMath::Max(0, GoldAmount + Amount);
 	OnInventoryChanged.Broadcast();
 }
 
