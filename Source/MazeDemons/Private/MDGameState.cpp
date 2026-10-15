@@ -13,6 +13,26 @@ void AMDGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(AMDGameState, bFriendlyFireEnabled);
+	DOREPLIFETIME(AMDGameState, bHasCheckpoint);
+	DOREPLIFETIME(AMDGameState, CheckpointTransform);
+	DOREPLIFETIME(AMDGameState, CheckpointOrder);
+}
+
+void AMDGameState::SetCheckpoint(const FTransform& Transform, int32 Order)
+{
+	if (!HasAuthority() || (bHasCheckpoint && Order < CheckpointOrder))
+	{
+		return;
+	}
+	bHasCheckpoint = true;
+	CheckpointTransform = Transform;
+	CheckpointOrder = Order;
+}
+
+bool AMDGameState::GetCheckpoint(FTransform& OutTransform) const
+{
+	OutTransform = CheckpointTransform;
+	return bHasCheckpoint;
 }
 
 void AMDGameState::SetFriendlyFireEnabled(bool bEnabled)

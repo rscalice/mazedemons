@@ -3,13 +3,18 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "MDAbilitySystemComponent.h"
+#include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
 #include "MDPickupBase.h"
+#include "MDPlayerController.h"
+#include "MDPlayerState.h"
 #include "MDInventoryTestListener.h"
 
 #include "Engine/DataTable.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
 
 // Friend of UMDInventoryComponent (see MDInventoryComponent.h) so tests can reach protected RPC bodies / row lookups.
@@ -779,6 +784,210 @@ bool FMDInvPickupTest::RunTest(const FString& Parameters)
 	// The destroyed actor's memory survives until GC, so the guard on bPickedUp can be exercised directly.
 	TestFalse(TEXT("second pickup rejected"), Pickup->TryPickup(Fx.Owner));
 	TestEqual(TEXT("no double add"), TotalOfRow(Fx.Inv, Row), Qty);
+	return true;
+}
+
+// ---- Inventory hosted on the PlayerState (design D1) ----
+
+namespace
+{
+	// Transient world with an AMDPlayerState that owns the inventory; pawns are swapped in and out.
+	struct FMDPsFixture
+	{
+		UWorld* World = nullptr;
+		AMDPlayerState* PS = nullptr;
+		UMDInventoryComponent* Inv = nullptr;
+
+		bool Init(FAutomationTestBase& Test)
+		{
+			UDataTable* Table = LoadObject<UDataTable>(nullptr, TEXT("/Game/Blueprints/Items/DT_Items"));
+			if (!Table)
+			{
+				Test.AddError(TEXT("Could not load /Game/Blueprints/Items/DT_Items"));
+				return false;
+			}
+			World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("MDPsTestWorld")));
+			if (!World)
+			{
+				Test.AddError(TEXT("UWorld::CreateWorld failed"));
+				return false;
+			}
+			World->InitializeActorsForPlay(FURL());
+			PS = World->SpawnActor<AMDPlayerState>();
+			if (!PS)
+			{
+				Test.AddError(TEXT("Could not spawn AMDPlayerState"));
+				return false;
+			}
+			PS->SetRole(ROLE_Authority);
+			Inv = NewObject<UMDInventoryComponent>(PS);
+			Inv->ItemTable = Table;
+			Inv->RegisterComponent();
+			return true;
+		}
+
+		APawn* SpawnPawn()
+		{
+			return World->SpawnActor<APawn>();
+		}
+
+		~FMDPsFixture()
+		{
+			if (World)
+			{
+				World->DestroyWorld(false);
+				if (World->IsRooted())
+				{
+					World->RemoveFromRoot();
+				}
+				World = nullptr;
+			}
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDInvGetInventoryTest, "MazeDemons.Inventory.PlayerState.GetInventoryResolves", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDInvGetInventoryTest::RunTest(const FString& Parameters)
+{
+	FMDPsFixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	APawn* Pawn = Fx.SpawnPawn();
+	AMDPlayerController* PC = Fx.World->SpawnActor<AMDPlayerController>();
+	if (!Pawn || !PC)
+	{
+		AddError(TEXT("Could not spawn pawn/controller"));
+		return false;
+	}
+	Pawn->SetPlayerState(Fx.PS);
+	PC->PlayerState = Fx.PS;
+
+	TestTrue(TEXT("from PlayerState"), UMDGameplayStatics::GetInventory(Fx.PS) == Fx.Inv);
+	TestTrue(TEXT("from pawn"), UMDGameplayStatics::GetInventory(Pawn) == Fx.Inv);
+	TestTrue(TEXT("from controller"), UMDGameplayStatics::GetInventory(PC) == Fx.Inv);
+	TestTrue(TEXT("null actor"), UMDGameplayStatics::GetInventory(nullptr) == nullptr);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDInvSurvivesPawnSwapTest, "MazeDemons.Inventory.PlayerState.SurvivesPawnSwap", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDInvSurvivesPawnSwapTest::RunTest(const FString& Parameters)
+{
+	FMDPsFixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	APawn* First = Fx.SpawnPawn();
+	if (!First)
+	{
+		AddError(TEXT("Could not spawn pawn"));
+		return false;
+	}
+	First->SetPlayerState(Fx.PS);
+	TestTrue(TEXT("owner pawn is first pawn"), Fx.Inv->GetOwnerPawn() == First);
+
+	const FName Row = TEXT("ClothChestPiece");
+	if (!FMDInventoryTestAccess::IsValid(Fx.Inv, Row))
+	{
+		AddWarning(TEXT("DT_Items has no ClothChestPiece row; skipping"));
+		return true;
+	}
+	TestTrue(TEXT("add item"), Fx.Inv->AddItem(Row, 1));
+	Fx.Inv->AddGold(25);
+	Fx.Inv->RequestEquip(0);
+	TestEqual(TEXT("equipped before swap"), Fx.Inv->GetEquipped().Num(), 1);
+
+	// The pawn dies and is destroyed; a new one is possessed.
+	First->SetPlayerState(nullptr);
+	First->Destroy();
+	APawn* Second = Fx.SpawnPawn();
+	if (!Second)
+	{
+		AddError(TEXT("Could not spawn second pawn"));
+		return false;
+	}
+	Second->SetPlayerState(Fx.PS);
+
+	TestTrue(TEXT("owner pawn follows the new pawn"), Fx.Inv->GetOwnerPawn() == Second);
+	TestEqual(TEXT("gold survives"), Fx.Inv->GetGold(), 25);
+	TestEqual(TEXT("equipment survives"), Fx.Inv->GetEquipped().Num(), 1);
+	TestTrue(TEXT("equipped row survives"), Fx.Inv->GetEquipped().Num() > 0 && Fx.Inv->GetEquipped()[0].ItemRowName == Row);
+
+	// ReapplyAllEquipment must not change contents and must notify listeners.
+	UMDInventoryTestListener* Listener = NewObject<UMDInventoryTestListener>(GetTransientPackage());
+	Fx.Inv->OnEquipmentChanged.AddDynamic(Listener, &UMDInventoryTestListener::HandleEquipmentChanged);
+	Fx.Inv->ReapplyAllEquipment();
+	TestEqual(TEXT("equipment unchanged by reapply"), Fx.Inv->GetEquipped().Num(), 1);
+	TestTrue(TEXT("reapply notifies"), Listener->EquipmentCount > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDInvDropWithoutPawnTest, "MazeDemons.Inventory.PlayerState.DropWithoutPawnRejected", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDInvDropWithoutPawnTest::RunTest(const FString& Parameters)
+{
+	FMDPsFixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	const FName Row = TEXT("ClothChestPiece");
+	if (!FMDInventoryTestAccess::IsValid(Fx.Inv, Row))
+	{
+		AddWarning(TEXT("DT_Items has no ClothChestPiece row; skipping"));
+		return true;
+	}
+	TestTrue(TEXT("add item"), Fx.Inv->AddItem(Row, 1));
+	AddExpectedError(TEXT("Drop rejected"), EAutomationExpectedErrorFlags::Contains, 0);
+	Fx.Inv->RequestDrop(0, 1);
+	TestEqual(TEXT("item kept: no pawn to drop next to"), Fx.Inv->GetItems().Num(), 1);
+
+	// With a pawn the same drop goes through.
+	APawn* Pawn = Fx.SpawnPawn();
+	Pawn->SetPlayerState(Fx.PS);
+	Fx.Inv->RequestDrop(0, 1);
+	TestEqual(TEXT("item dropped once a pawn exists"), Fx.Inv->GetItems().Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDInvArmorViaPlayerStateTest, "MazeDemons.Inventory.PlayerState.ArmorReduction", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDInvArmorViaPlayerStateTest::RunTest(const FString& Parameters)
+{
+	FMDPsFixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	UMDAbilitySystemComponent* ASC = Fx.PS->GetMDAbilitySystemComponent();
+	APawn* Pawn = Fx.SpawnPawn();
+	if (!ASC || !Pawn)
+	{
+		AddError(TEXT("Missing ASC or pawn"));
+		return false;
+	}
+	Pawn->SetPlayerState(Fx.PS);
+	ASC->InitAbilityActorInfo(Fx.PS, Pawn);
+	ASC->RegisterAttributeSet(Fx.PS->Attributes);
+	ASC->InitializeStats(100.0f, 10.0f, 0.0f);
+	if (!ASC->GetMazeDemonsAttributes())
+	{
+		AddWarning(TEXT("ASC has no attribute set in the test world; skipping"));
+		return true;
+	}
+
+	const FName Row = TEXT("ClothChestPiece"); // armorDamageReductionPercent 8, slot Chest
+	if (!FMDInventoryTestAccess::IsValid(Fx.Inv, Row))
+	{
+		AddWarning(TEXT("DT_Items has no ClothChestPiece row; skipping"));
+		return true;
+	}
+	TestEqual(TEXT("defense starts at 0"), ASC->GetDefense(), 0.0f);
+	TestTrue(TEXT("add armor"), Fx.Inv->AddItem(Row, 1));
+	Fx.Inv->RequestEquip(0);
+	TestTrue(TEXT("equipping raises defense"), ASC->GetDefense() > 0.0f);
+	Fx.Inv->RequestUnequip(FMDInventoryTestAccess::GetSlot(Fx.Inv, Row));
+	TestEqual(TEXT("unequipping restores defense"), ASC->GetDefense(), 0.0f);
 	return true;
 }
 

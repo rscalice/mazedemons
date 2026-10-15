@@ -2,6 +2,8 @@
 
 #include "MDAbilitySystemComponent.h"
 #include "MDAttributeSet.h"
+#include "MDGameplayStatics.h"
+#include "MDInventoryComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -52,7 +54,20 @@ UMDAbilitySystemComponent* AMDPlayerState::GetMDAbilitySystemComponent() const
 
 void AMDPlayerState::HandleDeath()
 {
+	if (HasAuthority())
+	{
+		DeadPawn = GetPawn();
+	}
 	RagdollPawn(GetPawn());
+}
+
+void AMDPlayerState::OnRep_DeadPawn()
+{
+	// The pointer can arrive after the pawn itself (late join): ragdoll once both are known and match.
+	if (DeadPawn && DeadPawn == GetPawn())
+	{
+		RagdollPawn(DeadPawn);
+	}
 }
 
 void AMDPlayerState::RagdollPawn(APawn* Pawn)
@@ -172,6 +187,7 @@ void AMDPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(AMDPlayerState, HandsMesh);
 	DOREPLIFETIME(AMDPlayerState, LegsMesh);
 	DOREPLIFETIME(AMDPlayerState, FeetMesh);
+	DOREPLIFETIME(AMDPlayerState, DeadPawn);
 }
 
 void AMDPlayerState::BeginPlay()
@@ -216,16 +232,27 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 			bStatsInitialized = true;
 			AbilitySystem->InitializeStats(StartingMaxHealth, StartingAttackPower, StartingBaseDefense);
 		}
-		else if (AbilitySystem->IsDead())
+		else if (AbilitySystem->IsDead() && NewPawn != DeadPawn)
 		{
 			// Respawn: stats persist, but a new pawn must not start dead.
 			AbilitySystem->ResetHealthToMax();
 		}
+
+		if (NewPawn != DeadPawn)
+		{
+			DeadPawn = nullptr; // a different pawn than the corpse: the death is over
+		}
+
+		// The new avatar re-receives the persisted equipment (visuals via BP hooks, armor reductions).
+		if (UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(NewPawn))
+		{
+			Inventory->ReapplyAllEquipment();
+		}
 	}
 
-	// Pawn arrived after death was already replicated (late join / pawn set later). Checked after the
-	// server-side respawn reset so a fresh respawn pawn is not ragdolled.
-	if (AbilitySystem->IsDead())
+	// Pawn arrived after its death was already replicated (late join / pawn set later). Identity, not the death
+	// flag, decides: a respawn pawn is never ragdolled even while the replicated flag still reads dead.
+	if (NewPawn == DeadPawn)
 	{
 		RagdollPawn(NewPawn);
 	}

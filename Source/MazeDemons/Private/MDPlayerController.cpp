@@ -1,8 +1,13 @@
 #include "MDPlayerController.h"
 
 #include "MDAbilitySystemComponent.h"
+#include "MDGameplayStatics.h"
+#include "MDGameState.h"
 #include "MDPlayerState.h"
 #include "MDInventoryComponent.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/Character.h"
+#include "Kismet/GameplayStatics.h"
 
 #include "Engine/DataTable.h"
 #include "Engine/World.h"
@@ -13,20 +18,11 @@
 #if !UE_BUILD_SHIPPING
 namespace
 {
-	// Inventory may live on the pawn, the controller or the PlayerState.
+	// Inventory may live on the pawn, the controller or the PlayerState; GetInventory checks all of them.
 	UMDInventoryComponent* FindInventoryFor(const APawn* Pawn, const AController* Controller)
 	{
-		UMDInventoryComponent* Inv = Pawn ? Pawn->FindComponentByClass<UMDInventoryComponent>() : nullptr;
-		if (!Inv && Controller)
-		{
-			Inv = Controller->FindComponentByClass<UMDInventoryComponent>();
-		}
-		if (!Inv)
-		{
-			const APlayerState* PS = Pawn ? Pawn->GetPlayerState() : (Controller ? Controller->PlayerState.Get() : nullptr);
-			Inv = PS ? PS->FindComponentByClass<UMDInventoryComponent>() : nullptr;
-		}
-		return Inv;
+		UMDInventoryComponent* Inv = UMDGameplayStatics::GetInventory(Pawn);
+		return Inv ? Inv : UMDGameplayStatics::GetInventory(Controller);
 	}
 
 	const TCHAR* NetModeName(ENetMode Mode)
@@ -70,6 +66,143 @@ namespace
 	}
 }
 #endif
+
+// ---- Respawn ----
+
+void AMDPlayerController::OnPossess(APawn* InPawn)
+{
+	Super::OnPossess(InPawn);
+
+	// Server only (OnPossess is authority-side). One binding for the PlayerState's lifetime.
+	if (const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>())
+	{
+		if (UMDAbilitySystemComponent* ASC = PS->GetMDAbilitySystemComponent())
+		{
+			ASC->OnDeath.AddUniqueDynamic(this, &AMDPlayerController::HandleOwnerDeath);
+		}
+	}
+}
+
+void AMDPlayerController::HandleOwnerDeath()
+{
+	if (!HasAuthority() || GetWorldTimerManager().IsTimerActive(RespawnTimer))
+	{
+		return;
+	}
+	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMDPlayerController::Respawn, FMath::Max(RespawnDelay, 0.01f), false);
+}
+
+bool AMDPlayerController::FindRespawnTransform(FTransform& OutTransform) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	// 1. Party: near the first living teammate that has a pawn.
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		const APlayerController* Other = It->Get();
+		if (!Other || Other == this)
+		{
+			continue;
+		}
+		const APawn* Mate = Other->GetPawn();
+		const AMDPlayerState* MatePS = Other->GetPlayerState<AMDPlayerState>();
+		const UMDAbilitySystemComponent* MateASC = MatePS ? MatePS->GetMDAbilitySystemComponent() : nullptr;
+		if (!Mate || !MateASC || MateASC->IsDead())
+		{
+			continue;
+		}
+
+		const float HalfHeight = 90.0f;
+		const FCollisionShape Capsule = FCollisionShape::MakeCapsule(34.0f, HalfHeight);
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(MDRespawnSpot), false, Mate);
+		const float StartAngle = FMath::FRandRange(0.0f, 360.0f);
+		for (int32 i = 0; i < 8; ++i)
+		{
+			const FVector Dir = FRotator(0.0f, StartAngle + i * 45.0f, 0.0f).Vector();
+			const FVector Base = Mate->GetActorLocation() + Dir * PartySpawnRadius;
+
+			// Find the floor under the candidate.
+			FHitResult Floor;
+			const FVector TraceStart = Base + FVector(0.0f, 0.0f, 200.0f);
+			const FVector TraceEnd = Base - FVector(0.0f, 0.0f, 600.0f);
+			if (!World->LineTraceSingleByChannel(Floor, TraceStart, TraceEnd, ECC_WorldStatic, Params))
+			{
+				continue;
+			}
+			const FVector Spot = Floor.ImpactPoint + FVector(0.0f, 0.0f, HalfHeight + 5.0f);
+			if (World->OverlapBlockingTestByChannel(Spot, FQuat::Identity, ECC_Pawn, Capsule, Params))
+			{
+				continue; // inside a wall or another actor
+			}
+			OutTransform = FTransform(FRotator(0.0f, (-Dir).Rotation().Yaw, 0.0f), Spot);
+			return true;
+		}
+		// No free spot around this teammate: fall back to the checkpoint rather than a wall.
+		break;
+	}
+
+	// 2. Solo (or no free spot near the party): the last zone checkpoint.
+	if (const AMDGameState* State = World->GetGameState<AMDGameState>())
+	{
+		if (State->GetCheckpoint(OutTransform))
+		{
+			return true;
+		}
+	}
+
+	// 3. Caller falls back to a level PlayerStart.
+	return false;
+}
+
+void AMDPlayerController::Respawn()
+{
+	AGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode() : nullptr;
+	if (!HasAuthority() || !GameMode)
+	{
+		return;
+	}
+	GetWorldTimerManager().ClearTimer(RespawnTimer);
+
+	// Only dead players respawn (the timer can fire after a revive or disconnect-reconnect).
+	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
+	const UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+	if (!ASC || !ASC->IsDead())
+	{
+		return;
+	}
+
+	FTransform Spot;
+	const bool bHaveSpot = FindRespawnTransform(Spot);
+
+	if (APawn* CorpsePawn = GetPawn())
+	{
+		UnPossess();
+		CorpsePawn->Destroy(); // no persistent corpse in the slice
+	}
+
+	// Possessing the new pawn makes AMDPlayerState reset health, clear DeadPawn and re-apply equipment.
+	if (bHaveSpot)
+	{
+		GameMode->RestartPlayerAtTransform(this, Spot);
+	}
+	else
+	{
+		GameMode->RestartPlayer(this);
+	}
+	Client_OnRespawned();
+}
+
+void AMDPlayerController::Client_OnRespawned_Implementation()
+{
+	ResetIgnoreInputFlags();
+	EnableInput(this);
+	SetIgnoreMoveInput(false);
+	SetIgnoreLookInput(false);
+}
 
 void AMDPlayerController::KillPlayer()
 {

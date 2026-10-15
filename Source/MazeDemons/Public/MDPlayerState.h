@@ -63,6 +63,15 @@ protected:
 	UFUNCTION()
 	void OnRep_Armor();
 
+	// The pawn that died. Only this exact pawn is ever ragdolled, so a respawn pawn is never mistaken for a corpse
+	// while the replicated death flag lags behind (late join, respawn). Server sets it on death and clears it when a
+	// different pawn is possessed.
+	UPROPERTY(ReplicatedUsing = OnRep_DeadPawn)
+	TObjectPtr<APawn> DeadPawn;
+
+	UFUNCTION()
+	void OnRep_DeadPawn();
+
 	void ApplyArmorVisuals();
 
 	UFUNCTION()

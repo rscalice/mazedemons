@@ -31,6 +31,24 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Rules")
 	FMDFriendlyFireChanged OnFriendlyFireChanged;
 
+	// ---- Zone checkpoint (respawn point for a solo player; see AMDPlayerController::Respawn) ----
+
+	// Authority only. Ignored when Order is lower than the current checkpoint's order (never walks backwards).
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Respawn")
+	void SetCheckpoint(const FTransform& Transform, int32 Order);
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Respawn")
+	bool GetCheckpoint(FTransform& OutTransform) const;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Respawn")
+	bool bHasCheckpoint = false;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Respawn")
+	FTransform CheckpointTransform;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Respawn")
+	int32 CheckpointOrder = 0;
+
 protected:
 	UFUNCTION()
 	void OnRep_FriendlyFire();

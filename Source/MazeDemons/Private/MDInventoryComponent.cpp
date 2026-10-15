@@ -117,7 +117,41 @@ int32 UMDInventoryComponent::GetMaxStackForItem_Implementation(FName ItemRowName
 	return FMath::Max(1, Prop->GetPropertyValue_InContainer(RowData));
 }
 
-// ---- Armor reduction (server) ----
+// ---- Owner resolution / armor reduction (server) ----
+
+APawn* UMDInventoryComponent::GetOwnerPawn() const
+{
+	AActor* Owner = GetOwner();
+	if (APawn* Pawn = Cast<APawn>(Owner))
+	{
+		return Pawn;
+	}
+	if (const APlayerState* PS = Cast<APlayerState>(Owner))
+	{
+		return PS->GetPawn();
+	}
+	if (const AController* Controller = Cast<AController>(Owner))
+	{
+		return Controller->GetPawn();
+	}
+	return nullptr;
+}
+
+void UMDInventoryComponent::ReapplyAllEquipment()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	// Copy: BP handlers may touch the inventory while we iterate.
+	const TArray<FMDEquippedSlot> Snapshot = Equipped;
+	for (const FMDEquippedSlot& Entry : Snapshot)
+	{
+		ApplyArmorReduction(Entry.Slot, Entry.ItemRowName);
+		K2_ApplyEquipment(Entry.Slot, Entry.ItemRowName);
+	}
+	OnEquipmentChanged.Broadcast();
+}
 
 void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
 {
@@ -127,21 +161,22 @@ void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
 		return;
 	}
 
-	// The ASC lives on the PlayerState for players; fall back to the owner itself.
+	// The ASC lives on the PlayerState for players; an owner that is itself a PlayerState (or has its own ASC)
+	// is checked directly, otherwise go through the owner pawn's PlayerState.
 	UAbilitySystemComponent* BaseASC = nullptr;
 	const AActor* Owner = GetOwner();
-	if (const APawn* Pawn = Cast<APawn>(Owner))
+	if (const IAbilitySystemInterface* Iface = Cast<IAbilitySystemInterface>(Owner))
 	{
-		if (const IAbilitySystemInterface* PS = Cast<IAbilitySystemInterface>(Pawn->GetPlayerState()))
-		{
-			BaseASC = PS->GetAbilitySystemComponent();
-		}
+		BaseASC = Iface->GetAbilitySystemComponent();
 	}
 	if (!BaseASC)
 	{
-		if (const IAbilitySystemInterface* Iface = Cast<IAbilitySystemInterface>(Owner))
+		if (const APawn* Pawn = GetOwnerPawn())
 		{
-			BaseASC = Iface->GetAbilitySystemComponent();
+			if (const IAbilitySystemInterface* PS = Cast<IAbilitySystemInterface>(Pawn->GetPlayerState()))
+			{
+				BaseASC = PS->GetAbilitySystemComponent();
+			}
 		}
 	}
 	UMDAbilitySystemComponent* ASC = Cast<UMDAbilitySystemComponent>(BaseASC);
@@ -441,21 +476,19 @@ void UMDInventoryComponent::DropItem_Impl(int32 Index, int32 Quantity)
 	}
 
 	FVector Location = FVector::ZeroVector;
-	if (const AActor* Owner = GetOwner())
+	if (const APawn* Pawn = GetOwnerPawn())
 	{
-		// Owner may be a controller/PlayerState; prefer the possessed pawn's location when available.
+		Location = Pawn->GetActorLocation() + Pawn->GetActorForwardVector() * DropDistance;
+	}
+	else if (const AActor* Owner = GetOwner())
+	{
+		if (Owner->IsA<APlayerState>() || Owner->IsA<AController>())
+		{
+			// Player-owned inventory with no pawn (dead / between lives): nothing to drop next to.
+			UE_LOG(LogMDInventory, Warning, TEXT("Drop rejected: %s has no pawn."), *GetNameSafe(Owner));
+			return;
+		}
 		Location = Owner->GetActorLocation();
-		if (const APawn* Pawn = Cast<APawn>(Owner))
-		{
-			Location += Pawn->GetActorForwardVector() * DropDistance;
-		}
-		else if (const AController* Controller = Cast<AController>(Owner))
-		{
-			if (const APawn* P = Controller->GetPawn())
-			{
-				Location = P->GetActorLocation() + P->GetActorForwardVector() * DropDistance;
-			}
-		}
 	}
 
 	if (RemoveItem(Index, Quantity))

@@ -5,6 +5,7 @@
 #include "MDInventoryTypes.h"
 #include "MDInventoryComponent.generated.h"
 
+class APawn;
 class UDataTable;
 
 MAZEDEMONS_API DECLARE_LOG_CATEGORY_EXTERN(LogMDInventory, Log, All);
@@ -40,6 +41,15 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Inventory")
 	FMDEquipmentChanged OnEquipmentChanged;
+
+	// The pawn this inventory acts through. The owner may be the pawn itself, its controller or its PlayerState.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	APawn* GetOwnerPawn() const;
+
+	// Authority only: re-fires K2_ApplyEquipment for every equipped slot and the armor reductions, then broadcasts
+	// OnEquipmentChanged. Call after the avatar pawn changes (respawn) so the new pawn shows/uses its equipment.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Inventory")
+	void ReapplyAllEquipment();
 
 	// ---- Authority only ----
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Inventory")

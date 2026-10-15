@@ -8,7 +8,40 @@
 #include "GameFramework/PlayerState.h"
 #include "MDAbilitySystemComponent.h"
 #include "MDGameState.h"
+#include "MDInventoryComponent.h"
 #include "MDPlayerState.h"
+
+UMDInventoryComponent* UMDGameplayStatics::GetInventory(const AActor* Actor)
+{
+	if (!Actor)
+	{
+		return nullptr;
+	}
+	// Accepts a pawn, controller or PlayerState. Checks the actor itself, then controller, then PlayerState.
+	if (UMDInventoryComponent* Inv = Actor->FindComponentByClass<UMDInventoryComponent>())
+	{
+		return Inv;
+	}
+	const AController* Controller = Cast<AController>(Actor);
+	const APlayerState* PS = Cast<APlayerState>(Actor);
+	if (const APawn* Pawn = Cast<APawn>(Actor))
+	{
+		Controller = Pawn->GetController();
+		PS = Pawn->GetPlayerState();
+	}
+	if (Controller)
+	{
+		if (UMDInventoryComponent* Inv = Controller->FindComponentByClass<UMDInventoryComponent>())
+		{
+			return Inv;
+		}
+		if (!PS)
+		{
+			PS = Controller->PlayerState;
+		}
+	}
+	return PS ? PS->FindComponentByClass<UMDInventoryComponent>() : nullptr;
+}
 
 UMDAbilitySystemComponent* UMDGameplayStatics::GetMDAbilitySystemComponent(const AActor* Actor)
 {
