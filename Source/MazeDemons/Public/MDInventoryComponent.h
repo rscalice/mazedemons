@@ -61,6 +61,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	void RequestDrop(int32 Index, int32 Quantity);
 
+	// Server-authoritative delete (no world pickup spawned).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	void RequestDestroy(int32 Index, int32 Quantity);
+
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	const TArray<FMDItemStack>& GetItems() const { return Items; }
 
@@ -79,6 +83,9 @@ protected:
 
 	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_DropItem(int32 Index, int32 Quantity);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_DestroyItem(int32 Index, int32 Quantity);
 
 	// Called on the server after an item is equipped. BP applies mesh/stats/abilities (and handles two-handed rules).
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|Inventory", meta = (DisplayName = "Apply Equipment"))
@@ -125,6 +132,7 @@ private:
 	friend class AMDPlayerController;
 
 	bool IsValidRow(FName Row) const;
+	void ApplyArmorReduction(uint8 Slot, FName Row);
 	void EquipItem_Impl(int32 Index);
 	void UnequipSlot_Impl(uint8 Slot);
 	void DropItem_Impl(int32 Index, int32 Quantity);

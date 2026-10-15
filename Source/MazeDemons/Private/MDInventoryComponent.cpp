@@ -1,6 +1,9 @@
 #include "MDInventoryComponent.h"
 
+#include "AbilitySystemInterface.h"
 #include "Engine/DataTable.h"
+#include "GameFramework/PlayerState.h"
+#include "MDAbilitySystemComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
@@ -14,6 +17,20 @@ namespace
 	constexpr uint8 InvalidSlot = 255;
 	constexpr uint8 GoldSlot = 9; // E_ItemTypes::Gold, never equippable
 	constexpr int32 MaxRequestQuantity = 100000;
+
+	// Armor slot -> name used by the ASC (matches the names BP_Player already uses).
+	FName ArmorSlotName(uint8 Slot)
+	{
+		switch (Slot)
+		{
+		case 4: return FName("Helmet");
+		case 5: return FName("Chest");
+		case 6: return FName("Gloves");
+		case 7: return FName("Legs");
+		case 8: return FName("Boots");
+		default: return NAME_None;
+		}
+	}
 
 	// BP struct properties are named "<name>_<index>_<GUID>", so match by prefix.
 	const FProperty* FindRowProperty(const UScriptStruct* Struct, const TCHAR* Prefix)
@@ -98,6 +115,64 @@ int32 UMDInventoryComponent::GetMaxStackForItem_Implementation(FName ItemRowName
 		return 1;
 	}
 	return FMath::Max(1, Prop->GetPropertyValue_InContainer(RowData));
+}
+
+// ---- Armor reduction (server) ----
+
+void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
+{
+	const FName SlotName = ArmorSlotName(Slot);
+	if (SlotName.IsNone() || !GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	// The ASC lives on the PlayerState for players; fall back to the owner itself.
+	UAbilitySystemComponent* BaseASC = nullptr;
+	const AActor* Owner = GetOwner();
+	if (const APawn* Pawn = Cast<APawn>(Owner))
+	{
+		if (const IAbilitySystemInterface* PS = Cast<IAbilitySystemInterface>(Pawn->GetPlayerState()))
+		{
+			BaseASC = PS->GetAbilitySystemComponent();
+		}
+	}
+	if (!BaseASC)
+	{
+		if (const IAbilitySystemInterface* Iface = Cast<IAbilitySystemInterface>(Owner))
+		{
+			BaseASC = Iface->GetAbilitySystemComponent();
+		}
+	}
+	UMDAbilitySystemComponent* ASC = Cast<UMDAbilitySystemComponent>(BaseASC);
+	if (!ASC)
+	{
+		return;
+	}
+
+	float Percent = 0.0f;
+	if (!Row.IsNone() && ItemTable)
+	{
+		const uint8* RowData = ItemTable->FindRowUnchecked(Row);
+		const FProperty* Prop = FindRowProperty(ItemTable->GetRowStruct(), TEXT("armorDamageReductionPercent"));
+		if (RowData && Prop)
+		{
+			const void* Ptr = Prop->ContainerPtrToValuePtr<void>(RowData);
+			if (const FNumericProperty* Num = CastField<FNumericProperty>(Prop))
+			{
+				Percent = Num->IsFloatingPoint() ? static_cast<float>(Num->GetFloatingPointPropertyValue(Ptr)) : static_cast<float>(Num->GetSignedIntPropertyValue(Ptr));
+			}
+		}
+	}
+
+	if (Percent > 0.0f)
+	{
+		ASC->SetArmorPieceDamageReduction(SlotName, Percent);
+	}
+	else
+	{
+		ASC->RemoveArmorPieceDamageReduction(SlotName);
+	}
 }
 
 // ---- Authority API ----
@@ -224,6 +299,28 @@ void UMDInventoryComponent::RequestDrop(int32 Index, int32 Quantity)
 	}
 }
 
+void UMDInventoryComponent::RequestDestroy(int32 Index, int32 Quantity)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		RemoveItem(Index, Quantity);
+	}
+	else
+	{
+		Server_DestroyItem(Index, Quantity);
+	}
+}
+
+bool UMDInventoryComponent::Server_DestroyItem_Validate(int32 Index, int32 Quantity)
+{
+	return Index >= 0 && Index < 1024 && Quantity > 0 && Quantity <= MaxRequestQuantity;
+}
+
+void UMDInventoryComponent::Server_DestroyItem_Implementation(int32 Index, int32 Quantity)
+{
+	RemoveItem(Index, Quantity);
+}
+
 bool UMDInventoryComponent::Server_EquipItem_Validate(int32 Index)
 {
 	return Index >= 0 && Index < 1024;
@@ -309,6 +406,7 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 
 	OnInventoryChanged.Broadcast();
 	OnEquipmentChanged.Broadcast();
+	ApplyArmorReduction(Slot, NewRow);
 	K2_ApplyEquipment(Slot, NewRow);
 }
 
@@ -326,6 +424,7 @@ void UMDInventoryComponent::UnequipSlot_Impl(uint8 Slot)
 	}
 	Equipped.RemoveAt(EqIdx);
 	OnEquipmentChanged.Broadcast();
+	ApplyArmorReduction(Slot, NAME_None);
 	K2_ClearEquipment(Slot);
 }
 
