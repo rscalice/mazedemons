@@ -7,6 +7,7 @@
 
 class UMDAbilitySystemComponent;
 class UMDAttributeSet;
+class USkeletalMesh;
 
 // Owns the player's ASC and attributes so stats/abilities persist across pawn respawns.
 UCLASS()
@@ -37,8 +38,32 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Stats", meta = (ClampMin = "0", ClampMax = "90"))
 	float StartingBaseDefense = 0.0f;
 
+	// Authority only: copies the pawn's current Torso/Hands/Legs/Feet meshes into the replicated armor
+	// properties and applies them. Call from Blueprint after equip/unequip.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Armor")
+	void SyncArmorFromPawn();
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 protected:
 	virtual void BeginPlay() override;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Armor)
+	TObjectPtr<USkeletalMesh> TorsoMesh;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Armor)
+	TObjectPtr<USkeletalMesh> HandsMesh;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Armor)
+	TObjectPtr<USkeletalMesh> LegsMesh;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Armor)
+	TObjectPtr<USkeletalMesh> FeetMesh;
+
+	UFUNCTION()
+	void OnRep_Armor();
+
+	void ApplyArmorVisuals();
 
 	UFUNCTION()
 	void HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn);

@@ -7,6 +7,27 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
+#include "PhysicsEngine/PhysicsAsset.h"
+#include "Net/UnrealNetwork.h"
+
+static USkeletalMeshComponent* FindPawnMeshComponent(const APawn* Pawn, const TCHAR* Name)
+{
+	if (!Pawn)
+	{
+		return nullptr;
+	}
+	TArray<USkeletalMeshComponent*> Comps;
+	Pawn->GetComponents<USkeletalMeshComponent>(Comps);
+	for (USkeletalMeshComponent* C : Comps)
+	{
+		if (C && C->GetFName() == FName(Name))
+		{
+			return C;
+		}
+	}
+	return nullptr;
+}
 
 AMDPlayerState::AMDPlayerState()
 {
@@ -42,7 +63,15 @@ void AMDPlayerState::RagdollPawn(APawn* Pawn)
 		return;
 	}
 	USkeletalMeshComponent* Mesh = Character->GetMesh();
-	if (!Mesh || Mesh->IsSimulatingPhysics())
+	if (!Mesh)
+	{
+		return;
+	}
+	// The visible body is the "Manny" component; CharacterMesh0 is the hidden source. Fall back to
+	// CharacterMesh0 if the pawn has no such component.
+	USkeletalMeshComponent* Body = FindPawnMeshComponent(Pawn, TEXT("Manny"));
+	USkeletalMeshComponent* Simulated = Body ? Body : Mesh;
+	if (Simulated->IsSimulatingPhysics())
 	{
 		return;
 	}
@@ -56,8 +85,93 @@ void AMDPlayerState::RagdollPawn(APawn* Pawn)
 	{
 		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
-	Mesh->SetCollisionProfileName(TEXT("Ragdoll"));
-	Mesh->SetSimulatePhysics(true);
+	if (!Body)
+	{
+		Mesh->SetCollisionProfileName(TEXT("Ragdoll"));
+		Mesh->SetSimulatePhysics(true);
+		return;
+	}
+
+	// Stop the hidden source mesh from fighting the ragdoll.
+	Mesh->bPauseAnims = true;
+	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	Body->SetLeaderPoseComponent(nullptr);
+	Body->SetAnimInstanceClass(nullptr);
+	Body->bPauseAnims = true;
+	// Use the body mesh's own physics asset (MetaHuman body; PA_Mannequin bones would not match).
+	Body->SetCollisionProfileName(TEXT("Ragdoll"));
+	Body->SetAllBodiesSimulatePhysics(true);
+	Body->SetSimulatePhysics(true);
+	Body->SetPhysicsBlendWeight(1.0f);
+	Body->WakeAllRigidBodies();
+
+	// Armor/face parts follow the simulated body; they are not simulated themselves.
+	static const TCHAR* FollowParts[] = { TEXT("Torso"), TEXT("Hands"), TEXT("Legs"), TEXT("Feet"), TEXT("Face") };
+	for (const TCHAR* PartName : FollowParts)
+	{
+		if (USkeletalMeshComponent* Part = FindPawnMeshComponent(Pawn, PartName))
+		{
+			if (Part != Body)
+			{
+				Part->SetLeaderPoseComponent(Body, true);
+			}
+		}
+	}
+}
+
+void AMDPlayerState::SyncArmorFromPawn()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	APawn* Pawn = GetPawn();
+	auto Read = [Pawn](const TCHAR* Name) -> USkeletalMesh*
+	{
+		USkeletalMeshComponent* C = FindPawnMeshComponent(Pawn, Name);
+		return C ? C->GetSkeletalMeshAsset() : nullptr;
+	};
+	TorsoMesh = Read(TEXT("Torso"));
+	HandsMesh = Read(TEXT("Hands"));
+	LegsMesh = Read(TEXT("Legs"));
+	FeetMesh = Read(TEXT("Feet"));
+	ApplyArmorVisuals();
+}
+
+void AMDPlayerState::OnRep_Armor()
+{
+	ApplyArmorVisuals();
+}
+
+void AMDPlayerState::ApplyArmorVisuals()
+{
+	APawn* Pawn = GetPawn();
+	if (!Pawn)
+	{
+		return;
+	}
+	auto Apply = [Pawn](const TCHAR* Name, USkeletalMesh* Mesh)
+	{
+		USkeletalMeshComponent* C = FindPawnMeshComponent(Pawn, Name);
+		if (C && C->GetSkeletalMeshAsset() != Mesh)
+		{
+			C->SetSkeletalMeshAsset(Mesh);
+		}
+	};
+	Apply(TEXT("Torso"), TorsoMesh);
+	Apply(TEXT("Hands"), HandsMesh);
+	Apply(TEXT("Legs"), LegsMesh);
+	Apply(TEXT("Feet"), FeetMesh);
+}
+
+void AMDPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AMDPlayerState, TorsoMesh);
+	DOREPLIFETIME(AMDPlayerState, HandsMesh);
+	DOREPLIFETIME(AMDPlayerState, LegsMesh);
+	DOREPLIFETIME(AMDPlayerState, FeetMesh);
 }
 
 void AMDPlayerState::BeginPlay()
@@ -76,6 +190,12 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 	if (!NewPawn || !AbilitySystem)
 	{
 		return;
+	}
+
+	// Clients only: on the server the BP equip logic owns the meshes (SyncArmorFromPawn publishes them).
+	if (!HasAuthority())
+	{
+		ApplyArmorVisuals();
 	}
 
 	AbilitySystem->InitAbilityActorInfo(this, NewPawn);
