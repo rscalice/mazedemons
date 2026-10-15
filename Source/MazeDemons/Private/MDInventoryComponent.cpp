@@ -7,6 +7,8 @@
 #include "Net/UnrealNetwork.h"
 #include "UObject/UnrealType.h"
 
+DEFINE_LOG_CATEGORY(LogMDInventory);
+
 namespace
 {
 	constexpr uint8 InvalidSlot = 255;
@@ -116,7 +118,7 @@ bool UMDInventoryComponent::HasRoomForItem(FName Row, int32 Qty) const
 		return true;
 	}
 	const int32 FreeSlots = MaxSlots - Items.Num();
-	return FreeSlots > 0 && FreeSlots * MaxStack >= Remaining;
+	return FreeSlots > 0 && static_cast<int64>(FreeSlots) * static_cast<int64>(MaxStack) >= static_cast<int64>(Remaining);
 }
 
 bool UMDInventoryComponent::AddItem(FName ItemRowName, int32 Quantity)

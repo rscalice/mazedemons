@@ -7,6 +7,8 @@
 
 class UDataTable;
 
+MAZEDEMONS_API DECLARE_LOG_CATEGORY_EXTERN(LogMDInventory, Log, All);
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDInventoryChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDEquipmentChanged);
 
@@ -117,6 +119,11 @@ protected:
 	TArray<FMDEquippedSlot> Equipped;
 
 private:
+	// Lets the automation tests (Private/Tests/MDInventoryTests.cpp) reach protected/private members.
+	friend struct FMDInventoryTestAccess;
+	// Debug exec commands (ListItemRows) read GetSlotForItem.
+	friend class AMDPlayerController;
+
 	bool IsValidRow(FName Row) const;
 	void EquipItem_Impl(int32 Index);
 	void UnequipSlot_Impl(uint8 Slot);
