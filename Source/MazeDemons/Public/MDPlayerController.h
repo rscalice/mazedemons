@@ -4,12 +4,28 @@
 #include "GameFramework/PlayerController.h"
 #include "MDPlayerController.generated.h"
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDPickupNotified, FName, ItemRowName, int32, Quantity);
+
 UCLASS()
 class MAZEDEMONS_API AMDPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 
 public:
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	// Server world time (AGameStateBase::GetServerWorldTimeSeconds) at which this player respawns; 0 while alive.
+	// Replicated to the owner only; the HUD derives the death countdown from it.
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Respawn")
+	double RespawnAtServerTime = 0.0;
+
+	// Owning client: the server added Quantity of ItemRowName to this player's inventory (HUD toast).
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Inventory")
+	FMDPickupNotified OnPickupNotified;
+
+	// Authority only: tells the owning client a pickup succeeded.
+	void NotifyPickup(FName ItemRowName, int32 Quantity);
+
 	// Seconds between death and respawn.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Respawn", meta = (ClampMin = "0"))
 	float RespawnDelay = 5.0f;
@@ -72,6 +88,9 @@ protected:
 	// Owning client: undo anything the death left behind (disabled input, ignore flags).
 	UFUNCTION(Client, Reliable)
 	void Client_OnRespawned();
+
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyPickup(FName ItemRowName, int32 Quantity);
 
 private:
 	bool FindRespawnTransform(FTransform& OutTransform) const;

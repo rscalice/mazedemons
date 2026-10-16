@@ -1,0 +1,105 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "MDUIWidgets.h"
+#include "MDHUDWidget.generated.h"
+
+class AMDPlayerController;
+class UMDAbilitySystemComponent;
+class UMDStaminaComponent;
+
+// Native base of the in-game HUD (W_MDHUD). Binds once to the local player's PlayerState (ASC + stamina) and keeps
+// plain cached values; the Blueprint child only lays out widgets and reacts to the events below. No game logic and no
+// raw attribute reads live in Blueprint, so a missing/late PlayerState or a zero max never divides by zero.
+UCLASS(Abstract)
+class MAZEDEMONS_API UMDHUDWidget : public UMDUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	// Value / Max in [0,1]; returns 0 when Max <= 0 (never divides by zero).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
+	static float SafePercent(float Value, float Max);
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|HUD")
+	float GetHealthPercent() const { return SafePercent(Health, MaxHealth); }
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|HUD")
+	float GetStaminaPercent() const { return SafePercent(Stamina, MaxStamina); }
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|HUD")
+	bool IsBound() const { return bBound; }
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	float Health = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	float MaxHealth = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	float Stamina = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	float MaxStamina = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	bool bExhausted = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	int32 Gold = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	bool bDead = false;
+
+	// Seconds until the server respawns this player (0 when alive). Derived from the replicated respawn time.
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	float RespawnSecondsRemaining = 0.0f;
+
+protected:
+	virtual void NativeConstruct() override;
+	virtual void NativeDestruct() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
+	// Fired every time the widget (re)binds to a PlayerState, after the cached values are seeded.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnBound();
+
+	// Delta < 0 is damage (drives the lag bar), Delta > 0 is healing (drives the heal flash).
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnHealthUpdated(float Percent, float Delta);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnStaminaUpdated(float Percent, bool bNowExhausted);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnGoldUpdated(int32 NewGold, int32 Delta);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnDeathStateChanged(bool bNowDead);
+
+	// Server confirmed a pickup for this player (shown as a toast).
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnPickupToast(FName ItemRowName, int32 Quantity);
+
+private:
+	void TryBind();
+	void Unbind();
+
+	UFUNCTION()
+	void HandleHealthChanged(float OldValue, float NewValue);
+	UFUNCTION()
+	void HandleMaxHealthChanged(float OldValue, float NewValue);
+	UFUNCTION()
+	void HandleStaminaChanged(float OldValue, float NewValue);
+	UFUNCTION()
+	void HandleMaxStaminaChanged(float OldValue, float NewValue);
+	UFUNCTION()
+	void HandleExhaustedChanged(bool bNowExhausted);
+	UFUNCTION()
+	void HandlePickupNotified(FName ItemRowName, int32 Quantity);
+
+	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
+	TWeakObjectPtr<UMDStaminaComponent> BoundStamina;
+	TWeakObjectPtr<AMDPlayerController> BoundController;
+	bool bBound = false;
+};

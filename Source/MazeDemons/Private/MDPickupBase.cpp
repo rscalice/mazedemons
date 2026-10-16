@@ -2,6 +2,7 @@
 
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "MDPlayerController.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
@@ -34,6 +35,15 @@ bool AMDPickupBase::TryPickup(AActor* Interactor)
 	if (!Inventory || !Inventory->AddItem(ItemRowName, Quantity))
 	{
 		return false;
+	}
+
+	// Toast on the picker's screen. Row/quantity are captured first: Destroy() follows.
+	if (const APawn* Picker = Cast<APawn>(Interactor))
+	{
+		if (AMDPlayerController* PC = Cast<AMDPlayerController>(Picker->GetController()))
+		{
+			PC->NotifyPickup(ItemRowName, Quantity);
+		}
 	}
 
 	bPickedUp = true;

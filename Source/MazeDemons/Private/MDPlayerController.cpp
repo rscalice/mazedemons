@@ -15,6 +15,8 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/GameStateBase.h"
+#include "Net/UnrealNetwork.h"
 
 #if !UE_BUILD_SHIPPING
 namespace
@@ -90,7 +92,40 @@ void AMDPlayerController::HandleOwnerDeath()
 	{
 		return;
 	}
-	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMDPlayerController::Respawn, FMath::Max(RespawnDelay, 0.01f), false);
+	const float Delay = FMath::Max(RespawnDelay, 0.01f);
+	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMDPlayerController::Respawn, Delay, false);
+
+	if (const AGameStateBase* GS = GetWorld() ? GetWorld()->GetGameState() : nullptr)
+	{
+		RespawnAtServerTime = GS->GetServerWorldTimeSeconds() + Delay;
+	}
+}
+
+void AMDPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME_CONDITION(AMDPlayerController, RespawnAtServerTime, COND_OwnerOnly);
+}
+
+void AMDPlayerController::NotifyPickup(FName ItemRowName, int32 Quantity)
+{
+	if (!HasAuthority() || ItemRowName.IsNone() || Quantity <= 0)
+	{
+		return;
+	}
+	if (IsLocalController())
+	{
+		OnPickupNotified.Broadcast(ItemRowName, Quantity); // listen-server host: no RPC hop
+	}
+	else
+	{
+		Client_NotifyPickup(ItemRowName, Quantity);
+	}
+}
+
+void AMDPlayerController::Client_NotifyPickup_Implementation(FName ItemRowName, int32 Quantity)
+{
+	OnPickupNotified.Broadcast(ItemRowName, Quantity);
 }
 
 bool AMDPlayerController::FindRespawnTransform(FTransform& OutTransform) const
@@ -167,6 +202,7 @@ void AMDPlayerController::Respawn()
 		return;
 	}
 	GetWorldTimerManager().ClearTimer(RespawnTimer);
+	RespawnAtServerTime = 0.0;
 
 	// Only dead players respawn (the timer can fire after a revive or disconnect-reconnect).
 	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
