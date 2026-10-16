@@ -16,7 +16,11 @@ public class MazeDemons : ModuleRules
 				"AIModule",
 				"GameplayAbilities",
 				"GameplayTags",
-				"GameplayTasks"
+				"GameplayTasks",
+				"UMG",
+				"Slate",
+				"SlateCore",
+				"DeveloperSettings"
 			});
 	}
 }
