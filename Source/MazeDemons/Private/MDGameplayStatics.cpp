@@ -11,6 +11,7 @@
 #include "MDInventoryComponent.h"
 #include "MDPlayerState.h"
 #include "MDPlayerController.h"
+#include "MDStaminaComponent.h"
 
 UMDInventoryComponent* UMDGameplayStatics::GetInventory(const AActor* Actor)
 {
@@ -67,6 +68,69 @@ UMDAbilitySystemComponent* UMDGameplayStatics::GetMDAbilitySystemComponent(const
 		return Actor->FindComponentByClass<UMDAbilitySystemComponent>();
 	}
 	return Cast<UMDAbilitySystemComponent>(ASC);
+}
+
+UMDStaminaComponent* UMDGameplayStatics::GetStaminaComponent(const AActor* Actor)
+{
+	if (!Actor)
+	{
+		return nullptr;
+	}
+	if (UMDStaminaComponent* Comp = Actor->FindComponentByClass<UMDStaminaComponent>())
+	{
+		return Comp;
+	}
+	const APlayerState* PS = Cast<APlayerState>(Actor);
+	if (const APawn* Pawn = Cast<APawn>(Actor))
+	{
+		PS = Pawn->GetPlayerState();
+	}
+	else if (const AController* Controller = Cast<AController>(Actor))
+	{
+		PS = Controller->PlayerState;
+	}
+	return PS ? PS->FindComponentByClass<UMDStaminaComponent>() : nullptr;
+}
+
+void UMDGameplayStatics::GetStamina(const AActor* Actor, float& Stamina, float& MaxStamina)
+{
+	const UMDAbilitySystemComponent* ASC = GetMDAbilitySystemComponent(Actor);
+	Stamina = ASC ? ASC->GetStamina() : 0.0f;
+	MaxStamina = ASC ? ASC->GetMaxStamina() : 0.0f;
+}
+
+bool UMDGameplayStatics::CanSprint(const APawn* Pawn)
+{
+	const UMDStaminaComponent* Comp = GetStaminaComponent(Pawn);
+	return !Comp || Comp->IsSprintAllowedFor(Pawn && Pawn->IsLocallyControlled());
+}
+
+bool UMDGameplayStatics::HasStaminaForJump(const AActor* Actor)
+{
+	const UMDStaminaComponent* Comp = GetStaminaComponent(Actor);
+	return !Comp || Comp->CanJump();
+}
+
+bool UMDGameplayStatics::HasStaminaForVault(const AActor* Actor)
+{
+	const UMDStaminaComponent* Comp = GetStaminaComponent(Actor);
+	return !Comp || Comp->CanVault();
+}
+
+void UMDGameplayStatics::NotifyJumped(const AActor* Actor)
+{
+	if (UMDStaminaComponent* Comp = GetStaminaComponent(Actor))
+	{
+		Comp->NotifyJumped();
+	}
+}
+
+void UMDGameplayStatics::NotifyTraversalStarted(const AActor* Actor)
+{
+	if (UMDStaminaComponent* Comp = GetStaminaComponent(Actor))
+	{
+		Comp->NotifyTraversalStarted();
+	}
 }
 
 uint8 UMDGameplayStatics::GetTeamId(const AActor* Actor)

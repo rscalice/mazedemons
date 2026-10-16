@@ -68,6 +68,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Stamina", meta = (ClampMin = "0"))
 	float SprintSpeedThreshold = 550.0f;
 
+	// Grace (seconds) during which the server still lets a REMOTE client's pawn sprint after exhaustion starts, so a
+	// client that has not yet received the exhausted flag is not corrected (rubber-banded).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Stamina", meta = (ClampMin = "0"))
+	float SprintGateGrace = 0.25f;
+
 	// Server simulation interval in seconds.
 	UPROPERTY(EditDefaultsOnly, Category = "Maze Demons|Stamina", meta = (ClampMin = "0.02"))
 	float SimulationInterval = 0.1f;
@@ -79,6 +84,11 @@ public:
 	// True when sprinting is currently allowed (not exhausted).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
 	bool IsSprintAllowed() const { return !bExhausted; }
+
+	// Movement-gate version of IsSprintAllowed. The owning client is strict; the server gives a remote client's pawn
+	// SprintGateGrace seconds after exhaustion starts (see above).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
+	bool IsSprintAllowedFor(bool bPawnLocallyControlled) const;
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
 	bool HasStaminaFor(float Cost) const;
@@ -128,5 +138,6 @@ private:
 	void SetExhausted(bool bNewExhausted);
 
 	double LastSpendTime = -1000.0;
+	double ExhaustedStartTime = -1000.0; // server only
 	bool bSprintTagged = false;
 };

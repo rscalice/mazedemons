@@ -215,6 +215,28 @@ bool FMDStaminaRespawnTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDStaminaSprintGateTest, "MazeDemons.Stamina.SprintGateGrace", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDStaminaSprintGateTest::RunTest(const FString& Parameters)
+{
+	FMDStaminaFixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return true;
+	}
+	TestTrue(TEXT("local sprint allowed when rested"), Fx.Stamina->IsSprintAllowedFor(true));
+	TestTrue(TEXT("remote sprint allowed when rested"), Fx.Stamina->IsSprintAllowedFor(false));
+
+	Fx.ASC->SetStaminaClamped(0.0f);
+	Fx.Stamina->Consume(1.0f);
+	TestTrue(TEXT("exhausted"), Fx.Stamina->IsExhausted());
+	TestFalse(TEXT("the owning client is strict the moment it is exhausted"), Fx.Stamina->IsSprintAllowedFor(true));
+	TestTrue(TEXT("server gives a remote client's pawn a grace window"), Fx.Stamina->IsSprintAllowedFor(false));
+
+	Fx.Stamina->SprintGateGrace = 0.0f;
+	TestFalse(TEXT("remote sprint is refused once the grace has elapsed"), Fx.Stamina->IsSprintAllowedFor(false));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDStaminaMeleeFreeTest, "MazeDemons.Stamina.MeleeHasNoStaminaCost", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FMDStaminaMeleeFreeTest::RunTest(const FString& Parameters)
 {

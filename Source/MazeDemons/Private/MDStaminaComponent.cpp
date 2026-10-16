@@ -45,6 +45,21 @@ bool UMDStaminaComponent::HasStaminaFor(float Cost) const
 	return ASC && ASC->GetStamina() >= Cost;
 }
 
+bool UMDStaminaComponent::IsSprintAllowedFor(bool bPawnLocallyControlled) const
+{
+	if (!bExhausted)
+	{
+		return true;
+	}
+	if (bPawnLocallyControlled || !GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return false;
+	}
+	const UWorld* World = GetWorld();
+	const double Now = World ? World->GetTimeSeconds() : 0.0;
+	return (Now - ExhaustedStartTime) < SprintGateGrace;
+}
+
 FMDStaminaStepOutput UMDStaminaComponent::Step(const FMDStaminaStepInput& In)
 {
 	FMDStaminaStepOutput Out;
@@ -178,6 +193,10 @@ void UMDStaminaComponent::SetExhausted(bool bNewExhausted)
 		return;
 	}
 	bExhausted = bNewExhausted;
+	if (bExhausted && GetOwner() && GetOwner()->HasAuthority() && GetWorld())
+	{
+		ExhaustedStartTime = GetWorld()->GetTimeSeconds();
+	}
 
 	if (UMDAbilitySystemComponent* ASC = GetASC())
 	{

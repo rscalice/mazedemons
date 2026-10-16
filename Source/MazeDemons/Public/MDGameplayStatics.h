@@ -6,6 +6,7 @@
 
 class UMDAbilitySystemComponent;
 class UMDInventoryComponent;
+class UMDStaminaComponent;
 class APawn;
 
 namespace MDTeams
@@ -33,6 +34,30 @@ public:
 	// pressing interact (its controller must be an AMDPlayerController); Pickup is any actor (non-pickups are ignored).
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	static void RequestPickup(AActor* Pickup, const APawn* Interactor);
+
+	// ---- Stamina (accepts a pawn, controller or PlayerState). Actors with no stamina component (AI) are never gated. ----
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
+	static UMDStaminaComponent* GetStaminaComponent(const AActor* Actor);
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
+	static void GetStamina(const AActor* Actor, float& Stamina, float& MaxStamina);
+
+	// Sprint gate: strict for the locally controlled pawn, short grace on the server for remote clients' pawns.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
+	static bool CanSprint(const APawn* Pawn);
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
+	static bool HasStaminaForJump(const AActor* Actor);
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
+	static bool HasStaminaForVault(const AActor* Actor);
+
+	// Charge on the server when a jump / vault actually starts. No-ops on clients.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Stamina")
+	static void NotifyJumped(const AActor* Actor);
+
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Stamina")
+	static void NotifyTraversalStarted(const AActor* Actor);
 
 	// Accepts a pawn, PlayerState or Controller. 1 = Players, 2 = Demons.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Teams")
