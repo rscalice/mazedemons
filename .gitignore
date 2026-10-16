@@ -1,5 +1,6 @@
 # Visual Studio 2015 user specific files
 .vs/
+Windows/
 
 # Compiled Object files
 *.slo
@@ -35,11 +36,13 @@
 *.xcodeproj
 *.xcworkspace
 *.sln
+*.slnx
 *.suo
 *.opensdf
 *.sdf
 *.VC.db
 *.VC.opendb
+.vsconfig
 
 # Precompiled Assets
 SourceArt/**/*.png
@@ -72,3 +75,13 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+
+# Python bytecode (editor tooling)
+__pycache__/
+*.pyc
+
+# Armor fit tool: scratch MetaHuman builds (re-created by Fit Armor; kept locally for re-harvest)
+Content/BlackwoodHollow/Characters/BodyTypes/*/Built_Fit/
+
+# STF demo open-world map (390 MB) - kept locally, never tracked
+/Content/Fab/STF/Pack03-LandscapePro/Maps/open_world_LSP_v2.umap
