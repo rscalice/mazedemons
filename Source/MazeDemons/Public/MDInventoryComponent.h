@@ -136,6 +136,9 @@ protected:
 	TArray<FMDEquippedSlot> Equipped;
 
 private:
+	// Client-side snapshot used by OnRep_Equipped to diff what changed.
+	TArray<FMDEquippedSlot> PrevEquipped;
+
 	// Lets the automation tests (Private/Tests/MDInventoryTests.cpp) reach protected/private members.
 	friend struct FMDInventoryTestAccess;
 	// Debug exec commands (ListItemRows) read GetSlotForItem.

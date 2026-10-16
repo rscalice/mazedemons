@@ -511,5 +511,26 @@ void UMDInventoryComponent::OnRep_Gold()
 
 void UMDInventoryComponent::OnRep_Equipped()
 {
+	// Clients: weapon/helmet visuals (slots 0..4) are spawned locally from the replicated list, so every machine
+	// sees them attached to the wielder. Armor meshes arrive via the PlayerState (ApplyArmorVisuals).
+	for (const FMDEquippedSlot& Old : PrevEquipped)
+	{
+		if (Old.Slot > 4) { continue; }
+		const FMDEquippedSlot* Now = Equipped.FindByPredicate([&Old](const FMDEquippedSlot& E) { return E.Slot == Old.Slot; });
+		if (!Now || Now->ItemRowName != Old.ItemRowName)
+		{
+			K2_ClearEquipment(Old.Slot);
+		}
+	}
+	for (const FMDEquippedSlot& Now : Equipped)
+	{
+		if (Now.Slot > 4) { continue; }
+		const FMDEquippedSlot* Old = PrevEquipped.FindByPredicate([&Now](const FMDEquippedSlot& E) { return E.Slot == Now.Slot; });
+		if (!Old || Old->ItemRowName != Now.ItemRowName)
+		{
+			K2_ApplyEquipment(Now.Slot, Now.ItemRowName);
+		}
+	}
+	PrevEquipped = Equipped;
 	OnEquipmentChanged.Broadcast();
 }
