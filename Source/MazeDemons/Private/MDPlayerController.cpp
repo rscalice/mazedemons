@@ -5,6 +5,7 @@
 #include "MDGameState.h"
 #include "MDPlayerState.h"
 #include "MDInventoryComponent.h"
+#include "MDPickupBase.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
@@ -204,6 +205,29 @@ void AMDPlayerController::Client_OnRespawned_Implementation()
 	SetIgnoreLookInput(false);
 }
 
+void AMDPlayerController::RequestPickup(AActor* Pickup)
+{
+	if (Pickup)
+	{
+		Server_RequestPickup(Pickup);
+	}
+}
+
+void AMDPlayerController::Server_RequestPickup_Implementation(AActor* Pickup)
+{
+	AMDPickupBase* PickupActor = Cast<AMDPickupBase>(Pickup);
+	APawn* PlayerPawn = GetPawn();
+	if (!PickupActor || !PlayerPawn)
+	{
+		return;
+	}
+	// The client only asks; the server re-validates range so a client cannot grab pickups across the map.
+	if (FVector::DistSquared(PlayerPawn->GetActorLocation(), PickupActor->GetActorLocation()) > FMath::Square(MaxPickupDistance))
+	{
+		return;
+	}
+	PickupActor->TryPickup(PlayerPawn);
+}
 void AMDPlayerController::KillPlayer()
 {
 #if !UE_BUILD_SHIPPING

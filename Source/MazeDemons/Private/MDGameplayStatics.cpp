@@ -10,6 +10,7 @@
 #include "MDGameState.h"
 #include "MDInventoryComponent.h"
 #include "MDPlayerState.h"
+#include "MDPlayerController.h"
 
 UMDInventoryComponent* UMDGameplayStatics::GetInventory(const AActor* Actor)
 {
@@ -130,4 +131,16 @@ bool UMDGameplayStatics::CanDamage(const AActor* DamageInstigator, const AActor*
 		return AMDGameState::IsFriendlyFireEnabled(DamageInstigator);
 	}
 	return false;
+}
+
+void UMDGameplayStatics::RequestPickup(AActor* Pickup, const APawn* Interactor)
+{
+	if (!Pickup || !Interactor)
+	{
+		return;
+	}
+	if (AMDPlayerController* Controller = Cast<AMDPlayerController>(Interactor->GetController()))
+	{
+		Controller->RequestPickup(Pickup);
+	}
 }

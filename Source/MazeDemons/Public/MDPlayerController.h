@@ -25,6 +25,18 @@ public:
 
 	virtual void OnPossess(APawn* InPawn) override;
 
+	// Max distance between the pawn and a pickup for a client pickup request to be honoured.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Inventory", meta = (ClampMin = "0"))
+	float MaxPickupDistance = 400.0f;
+
+	// Local call (any machine): asks the server to pick Pickup up for this player. Interact input runs locally, but
+	// pickups are server-authoritative, so clients must go through this RPC.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	void RequestPickup(AActor* Pickup);
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestPickup(AActor* Pickup);
+
 	// Debug console command: kills the local player via the server. Body is compiled out in shipping builds.
 	UFUNCTION(Exec)
 	void KillPlayer();

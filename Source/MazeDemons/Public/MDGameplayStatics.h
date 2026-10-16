@@ -6,6 +6,7 @@
 
 class UMDAbilitySystemComponent;
 class UMDInventoryComponent;
+class APawn;
 
 namespace MDTeams
 {
@@ -27,6 +28,11 @@ public:
 	// UMDInventoryComponent on whichever of them hosts it.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	static UMDInventoryComponent* GetInventory(const AActor* Actor);
+
+	// Interact input runs locally; this routes a pickup to the server from any machine. Interactor is the pawn
+	// pressing interact (its controller must be an AMDPlayerController); Pickup is any actor (non-pickups are ignored).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	static void RequestPickup(AActor* Pickup, const APawn* Interactor);
 
 	// Accepts a pawn, PlayerState or Controller. 1 = Players, 2 = Demons.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Teams")
