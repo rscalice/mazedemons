@@ -61,6 +61,24 @@ public:
 	// Server-only: refills Health to MaxHealth (used on respawn).
 	void ResetHealthToMax();
 
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetStamina() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetMaxStamina() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetStaminaRegenRate() const;
+
+	// Server-only: sets the stamina pool and regen rate; stamina is filled to the new max.
+	void InitializeStamina(float NewMaxStamina, float NewRegenRate);
+
+	// Server-only: refills Stamina to MaxStamina (used on respawn).
+	void ResetStaminaToMax();
+
+	// Server-only: sets Stamina directly (clamped to [0, MaxStamina]). Used by UMDStaminaComponent.
+	void SetStaminaClamped(float NewStamina);
+
 	// Stores the attribute set (created as a default subobject by the owner actor).
 	void RegisterAttributeSet(UMDAttributeSet* InSet);
 
@@ -78,6 +96,12 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|GAS")
 	FMDAttributeValueChanged OnDefenseChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|GAS")
+	FMDAttributeValueChanged OnStaminaChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|GAS")
+	FMDAttributeValueChanged OnMaxStaminaChanged;
 
 	virtual void InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -100,6 +124,8 @@ private:
 	void HandleMaxHealthChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleAttackPowerChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleDefenseChanged(const FOnAttributeChangeData& ChangeData);
+	void HandleStaminaChanged(const FOnAttributeChangeData& ChangeData);
+	void HandleMaxStaminaChanged(const FOnAttributeChangeData& ChangeData);
 
 	UPROPERTY()
 	TObjectPtr<UMDAttributeSet> MazeDemonsAttributes;

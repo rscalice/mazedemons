@@ -9,6 +9,9 @@ UMDAttributeSet::UMDAttributeSet()
 	, AttackPower(10.0f)
 	, Defense(0.0f)
 	, IncomingDamage(0.0f)
+	, Stamina(100.0f)
+	, MaxStamina(100.0f)
+	, StaminaRegenRate(20.0f)
 {
 }
 
@@ -21,6 +24,9 @@ void UMDAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME_CONDITION_NOTIFY(UMDAttributeSet, AttackPower, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UMDAttributeSet, Defense, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UMDAttributeSet, IncomingDamage, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UMDAttributeSet, Stamina, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UMDAttributeSet, MaxStamina, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UMDAttributeSet, StaminaRegenRate, COND_None, REPNOTIFY_Always);
 }
 
 void UMDAttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue)
@@ -42,6 +48,14 @@ void UMDAttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, fl
 	else if (Attribute == GetDefenseAttribute())
 	{
 		NewValue = FMath::Clamp(NewValue, 0.0f, 90.0f);
+	}
+	else if (Attribute == GetStaminaAttribute())
+	{
+		NewValue = FMath::Clamp(NewValue, 0.0f, GetMaxStamina());
+	}
+	else if (Attribute == GetMaxStaminaAttribute() || Attribute == GetStaminaRegenRateAttribute())
+	{
+		NewValue = FMath::Max(NewValue, 0.0f);
 	}
 }
 
@@ -73,6 +87,15 @@ void UMDAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallback
 	{
 		SetDefense(FMath::Clamp(GetDefense(), 0.0f, 90.0f));
 	}
+	else if (Data.EvaluatedData.Attribute == GetStaminaAttribute())
+	{
+		SetStamina(FMath::Clamp(GetStamina(), 0.0f, GetMaxStamina()));
+	}
+	else if (Data.EvaluatedData.Attribute == GetMaxStaminaAttribute())
+	{
+		SetMaxStamina(FMath::Max(GetMaxStamina(), 0.0f));
+		SetStamina(FMath::Clamp(GetStamina(), 0.0f, GetMaxStamina()));
+	}
 }
 
 void UMDAttributeSet::OnRep_Health(const FGameplayAttributeData& OldValue)
@@ -98,4 +121,19 @@ void UMDAttributeSet::OnRep_Defense(const FGameplayAttributeData& OldValue)
 void UMDAttributeSet::OnRep_IncomingDamage(const FGameplayAttributeData& OldValue)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UMDAttributeSet, IncomingDamage, OldValue);
+}
+
+void UMDAttributeSet::OnRep_Stamina(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UMDAttributeSet, Stamina, OldValue);
+}
+
+void UMDAttributeSet::OnRep_MaxStamina(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UMDAttributeSet, MaxStamina, OldValue);
+}
+
+void UMDAttributeSet::OnRep_StaminaRegenRate(const FGameplayAttributeData& OldValue)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UMDAttributeSet, StaminaRegenRate, OldValue);
 }

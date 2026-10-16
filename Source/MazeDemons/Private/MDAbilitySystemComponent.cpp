@@ -48,6 +48,53 @@ void UMDAbilitySystemComponent::ResetHealthToMax()
 	}
 }
 
+float UMDAbilitySystemComponent::GetStamina() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetStamina() : 0.0f;
+}
+
+float UMDAbilitySystemComponent::GetMaxStamina() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetMaxStamina() : 0.0f;
+}
+
+float UMDAbilitySystemComponent::GetStaminaRegenRate() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetStaminaRegenRate() : 0.0f;
+}
+
+void UMDAbilitySystemComponent::InitializeStamina(float NewMaxStamina, float NewRegenRate)
+{
+	UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	if (Attrs && GetOwner() && GetOwner()->HasAuthority())
+	{
+		Attrs->SetMaxStamina(FMath::Max(NewMaxStamina, 1.0f));
+		Attrs->SetStaminaRegenRate(FMath::Max(NewRegenRate, 0.0f));
+		Attrs->SetStamina(Attrs->GetMaxStamina());
+	}
+}
+
+void UMDAbilitySystemComponent::ResetStaminaToMax()
+{
+	UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	if (Attrs && GetOwner() && GetOwner()->HasAuthority())
+	{
+		Attrs->SetStamina(Attrs->GetMaxStamina());
+	}
+}
+
+void UMDAbilitySystemComponent::SetStaminaClamped(float NewStamina)
+{
+	UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	if (Attrs && GetOwner() && GetOwner()->HasAuthority())
+	{
+		Attrs->SetStamina(FMath::Clamp(NewStamina, 0.0f, Attrs->GetMaxStamina()));
+	}
+}
+
 float UMDAbilitySystemComponent::GetHealth() const
 {
 	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
@@ -218,6 +265,10 @@ void UMDAbilitySystemComponent::BindAttributeDelegates()
 		.AddUObject(this, &UMDAbilitySystemComponent::HandleAttackPowerChanged);
 	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetDefenseAttribute())
 		.AddUObject(this, &UMDAbilitySystemComponent::HandleDefenseChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetStaminaAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandleStaminaChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetMaxStaminaAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandleMaxStaminaChanged);
 }
 
 void UMDAbilitySystemComponent::HandleHealthChanged(const FOnAttributeChangeData& ChangeData)
@@ -266,4 +317,20 @@ void UMDAbilitySystemComponent::HandleAttackPowerChanged(const FOnAttributeChang
 void UMDAbilitySystemComponent::HandleDefenseChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnDefenseChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+}
+
+void UMDAbilitySystemComponent::HandleStaminaChanged(const FOnAttributeChangeData& ChangeData)
+{
+	OnStaminaChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+}
+
+void UMDAbilitySystemComponent::HandleMaxStaminaChanged(const FOnAttributeChangeData& ChangeData)
+{
+	OnMaxStaminaChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+
+	// A lowered maximum pulls current stamina down with it (authority only; clients receive the result).
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		SetStaminaClamped(GetStamina());
+	}
 }

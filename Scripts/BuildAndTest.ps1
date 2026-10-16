@@ -24,7 +24,7 @@ param(
 	[string]$EngineRoot = 'D:\Epic Games\UE_5.8',
 
 	# Automation filter passed to "Automation RunTests <filter>".
-	[string]$TestFilter = 'MazeDemons.Inventory',
+	[string]$TestFilter = 'MazeDemons',
 
 	[switch]$NoRelaunch,
 	[switch]$SkipBuild

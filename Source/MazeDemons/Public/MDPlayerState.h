@@ -7,6 +7,7 @@
 
 class UMDAbilitySystemComponent;
 class UMDAttributeSet;
+class UMDStaminaComponent;
 class USkeletalMesh;
 
 // Owns the player's ASC and attributes so stats/abilities persist across pawn respawns.
@@ -28,6 +29,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|GAS")
 	TObjectPtr<UMDAttributeSet> Attributes;
+
+	// Server-side stamina rules (drain/regen/exhaustion). Pool size and regen come from its tunables.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Stamina")
+	TObjectPtr<UMDStaminaComponent> StaminaComponent;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Stats", meta = (ClampMin = "1"))
 	float StartingMaxHealth = 100.0f;

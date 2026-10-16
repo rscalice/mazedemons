@@ -4,6 +4,7 @@
 #include "MDAttributeSet.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "MDStaminaComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -38,6 +39,8 @@ AMDPlayerState::AMDPlayerState()
 	AbilitySystem->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
 
 	Attributes = CreateDefaultSubobject<UMDAttributeSet>(TEXT("MazeDemonsAttributes"));
+
+	StaminaComponent = CreateDefaultSubobject<UMDStaminaComponent>(TEXT("StaminaComponent"));
 
 	SetNetUpdateFrequency(100.0f);
 }
@@ -231,11 +234,20 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 		{
 			bStatsInitialized = true;
 			AbilitySystem->InitializeStats(StartingMaxHealth, StartingAttackPower, StartingBaseDefense);
+			if (StaminaComponent)
+			{
+				AbilitySystem->InitializeStamina(StaminaComponent->StartingMaxStamina, StaminaComponent->RegenPerSec);
+			}
 		}
 		else if (AbilitySystem->IsDead() && NewPawn != DeadPawn)
 		{
-			// Respawn: stats persist, but a new pawn must not start dead.
+			// Respawn: stats persist, but a new pawn must not start dead (or exhausted).
 			AbilitySystem->ResetHealthToMax();
+			AbilitySystem->ResetStaminaToMax();
+			if (StaminaComponent)
+			{
+				StaminaComponent->ResetState();
+			}
 		}
 
 		if (NewPawn != DeadPawn)
