@@ -317,6 +317,25 @@ void AMDPlayerController::Server_KillPlayer_Implementation()
 #endif
 }
 
+void AMDPlayerController::DamageSelf(float Amount)
+{
+#if !UE_BUILD_SHIPPING
+	Server_DamageSelf(Amount);
+#endif
+}
+
+void AMDPlayerController::Server_DamageSelf_Implementation(float Amount)
+{
+#if !UE_BUILD_SHIPPING
+	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
+	UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+	if (ASC && !ASC->IsDead() && Amount > 0.0f)
+	{
+		ASC->ApplyDamage(FMath::Min(Amount, 10000.0f), GetPawn(), GetPawn());
+	}
+#endif
+}
+
 void AMDPlayerController::GiveItem(FName RowName, int32 Qty)
 {
 #if !UE_BUILD_SHIPPING

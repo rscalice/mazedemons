@@ -66,6 +66,13 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_KillPlayer();
 
+	// Debug (non-shipping): `DamageSelf 40` applies 40 raw damage to the local player via the server (Defense still applies).
+	UFUNCTION(Exec)
+	void DamageSelf(float Amount = 25.0f);
+
+	UFUNCTION(Server, Reliable)
+	void Server_DamageSelf(float Amount);
+
 	// Debug (non-shipping): asks the server to add Qty of DT_Items row RowName to this player's inventory. Bodies compiled out in shipping.
 	UFUNCTION(Exec)
 	void GiveItem(FName RowName, int32 Qty = 1);
