@@ -55,6 +55,7 @@ UMDInventoryComponent::UMDInventoryComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	SetIsReplicatedByDefault(true);
+	QuickSlots.Init(NAME_None, NumQuickSlots);
 }
 
 void UMDInventoryComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -64,6 +65,7 @@ void UMDInventoryComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, Items, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, GoldAmount, COND_OwnerOnly);
 	DOREPLIFETIME(UMDInventoryComponent, Equipped);
+	DOREPLIFETIME_CONDITION(UMDInventoryComponent, QuickSlots, COND_OwnerOnly);
 }
 
 // ---- Row data ----
@@ -219,27 +221,178 @@ void UMDInventoryComponent::Server_UseItem_Implementation(int32 Index)
 	UseItem_Impl(Index);
 }
 
-void UMDInventoryComponent::UseItem_Impl(int32 Index)
+bool UMDInventoryComponent::UseItem_Impl(int32 Index)
 {
 	if (!Items.IsValidIndex(Index))
 	{
-		return;
+		return false;
 	}
 	const FMDConsumableRow* Row = FindConsumable(Items[Index].ItemRowName);
 	UMDAbilitySystemComponent* ASC = ResolveASC();
 	const UWorld* World = GetWorld();
 	if (!Row || !ASC || !World)
 	{
-		return;
+		return false;
 	}
 	const double Now = World->GetTimeSeconds();
 	if (!CanUseHeal(ASC->GetHealth(), ASC->GetMaxHealth(), ASC->IsDead(), Now, ConsumableReadyAt))
 	{
-		return;
+		return false;
 	}
 	ConsumableReadyAt = Now + Row->CooldownSeconds;
 	ASC->ApplyHealing(Row->HealAmount);
 	RemoveItem(Index, 1);
+	return true;
+}
+
+// ---- Quick slots ----
+
+bool UMDInventoryComponent::IsValidQuickAssignment(FName Row, const UDataTable* InConsumableTable)
+{
+	return !Row.IsNone() && InConsumableTable && InConsumableTable->FindRowUnchecked(Row) != nullptr;
+}
+
+FName UMDInventoryComponent::GetQuickSlotItem(int32 QuickIndex) const
+{
+	return QuickSlots.IsValidIndex(QuickIndex) ? QuickSlots[QuickIndex] : NAME_None;
+}
+
+int32 UMDInventoryComponent::GetQuickSlotCount(int32 QuickIndex) const
+{
+	const FName Row = GetQuickSlotItem(QuickIndex);
+	int32 Total = 0;
+	if (!Row.IsNone())
+	{
+		for (const FMDItemStack& Stack : Items)
+		{
+			if (Stack.ItemRowName == Row)
+			{
+				Total += Stack.Quantity;
+			}
+		}
+	}
+	return Total;
+}
+
+int32 UMDInventoryComponent::ResolveQuickSlotIndex(int32 QuickIndex) const
+{
+	const FName Row = GetQuickSlotItem(QuickIndex);
+	if (Row.IsNone())
+	{
+		return INDEX_NONE;
+	}
+	return Items.IndexOfByPredicate([Row](const FMDItemStack& S) { return S.ItemRowName == Row && S.Quantity > 0; });
+}
+
+void UMDInventoryComponent::RequestAssignQuickSlot(int32 QuickIndex, int32 InventoryIndex)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		AssignQuickSlot_Impl(QuickIndex, InventoryIndex);
+	}
+	else
+	{
+		Server_AssignQuickSlot(QuickIndex, InventoryIndex);
+	}
+}
+
+void UMDInventoryComponent::RequestUseQuickSlot(int32 QuickIndex)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		UseQuickSlot_Impl(QuickIndex);
+	}
+	else
+	{
+		Server_UseQuickSlot(QuickIndex);
+	}
+}
+
+bool UMDInventoryComponent::Server_AssignQuickSlot_Validate(int32 QuickIndex, int32 InventoryIndex)
+{
+	return QuickIndex >= 0 && QuickIndex < NumQuickSlots && InventoryIndex >= INDEX_NONE && InventoryIndex < 1024;
+}
+
+void UMDInventoryComponent::Server_AssignQuickSlot_Implementation(int32 QuickIndex, int32 InventoryIndex)
+{
+	AssignQuickSlot_Impl(QuickIndex, InventoryIndex);
+}
+
+bool UMDInventoryComponent::Server_UseQuickSlot_Validate(int32 QuickIndex)
+{
+	return QuickIndex >= 0 && QuickIndex < NumQuickSlots;
+}
+
+void UMDInventoryComponent::Server_UseQuickSlot_Implementation(int32 QuickIndex)
+{
+	UseQuickSlot_Impl(QuickIndex);
+}
+
+bool UMDInventoryComponent::AssignQuickSlot_Impl(int32 QuickIndex, int32 InventoryIndex)
+{
+	if (QuickIndex < 0 || QuickIndex >= NumQuickSlots)
+	{
+		return false;
+	}
+	if (QuickSlots.Num() != NumQuickSlots)
+	{
+		QuickSlots.SetNum(NumQuickSlots);
+	}
+	if (InventoryIndex == INDEX_NONE)
+	{
+		QuickSlots[QuickIndex] = NAME_None;
+		OnQuickSlotsChanged.Broadcast();
+		return true;
+	}
+	if (!Items.IsValidIndex(InventoryIndex))
+	{
+		return false;
+	}
+	const FName Row = Items[InventoryIndex].ItemRowName;
+	if (!IsValidQuickAssignment(Row, ConsumableTable.LoadSynchronous()))
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("AssignQuickSlot rejected: '%s' is not a consumable."), *Row.ToString());
+		return false;
+	}
+	for (int32 i = 0; i < QuickSlots.Num(); ++i)
+	{
+		if (i != QuickIndex && QuickSlots[i] == Row)
+		{
+			QuickSlots[i] = NAME_None; // an item lives in one quick slot at a time
+		}
+	}
+	QuickSlots[QuickIndex] = Row;
+	OnQuickSlotsChanged.Broadcast();
+	return true;
+}
+
+bool UMDInventoryComponent::UseQuickSlot_Impl(int32 QuickIndex)
+{
+	const int32 Index = ResolveQuickSlotIndex(QuickIndex);
+	return Index != INDEX_NONE && UseItem_Impl(Index); // keeps CanUseHeal + cooldown
+}
+
+void UMDInventoryComponent::ValidateQuickSlots()
+{
+	bool bChanged = false;
+	const UDataTable* Table = ConsumableTable.LoadSynchronous();
+	for (FName& Row : QuickSlots)
+	{
+		if (!Row.IsNone() && !IsValidQuickAssignment(Row, Table))
+		{
+			Row = NAME_None;
+			bChanged = true;
+		}
+	}
+	if (bChanged)
+	{
+		OnQuickSlotsChanged.Broadcast();
+	}
+}
+
+void UMDInventoryComponent::OnRep_QuickSlots()
+{
+	OnQuickSlotsChanged.Broadcast();
 }
 
 void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
@@ -339,6 +492,7 @@ bool UMDInventoryComponent::AddItem(FName ItemRowName, int32 Quantity)
 	}
 
 	OnInventoryChanged.Broadcast();
+	OnQuickSlotsChanged.Broadcast(); // counts changed
 	return true;
 }
 
@@ -353,7 +507,9 @@ bool UMDInventoryComponent::RemoveItem(int32 Index, int32 Quantity)
 	{
 		Items.RemoveAt(Index);
 	}
+	ValidateQuickSlots();
 	OnInventoryChanged.Broadcast();
+	OnQuickSlotsChanged.Broadcast(); // counts changed
 	return true;
 }
 
@@ -573,6 +729,7 @@ void UMDInventoryComponent::DropItem_Impl(int32 Index, int32 Quantity)
 void UMDInventoryComponent::OnRep_Items()
 {
 	OnInventoryChanged.Broadcast();
+	OnQuickSlotsChanged.Broadcast();
 }
 
 void UMDInventoryComponent::OnRep_Gold()

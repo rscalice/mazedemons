@@ -6,12 +6,71 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDPickupNotified, FName, ItemRowName, int32, Quantity);
 
+class UInputAction;
+struct FInputActionValue;
+
+// Local only: the interactable the player is looking at changed (nullptr = none). Prompt is the text for the HUD.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDInteractFocusChanged, AActor*, Focus, FText, Prompt);
+// Local only: the last input came from a gamepad (true) or keyboard/mouse (false) - drives glyph switching.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMDInputDeviceChanged, bool, bGamepad);
+
 UCLASS()
 class MAZEDEMONS_API AMDPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 
 public:
+	// ---- Quick slots / pause input (assets set in BP_MDPlayerController defaults) ----
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> QuickSlot1Action;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> QuickSlot2Action;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> PauseAction;
+
+	// Console / debug: Slot is 1 or 2.
+	UFUNCTION(Exec)
+	void UseQuickSlot(int32 Slot);
+
+	// Console / debug: assigns inventory item InvIndex to quick slot Slot (1 or 2). InvIndex -1 clears.
+	UFUNCTION(Exec)
+	void AssignQuickSlot(int32 Slot, int32 InvIndex);
+
+	// ---- Interaction focus (local only, never replicated) ----
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Interaction")
+	FMDInteractFocusChanged OnInteractFocusChanged;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Interaction")
+	AActor* GetInteractFocus() const { return InteractFocus.Get(); }
+
+	// Called by the BP_Player interaction trace every time it runs. Broadcasts only when focus or prompt changes.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Interaction")
+	void SetInteractFocus(AActor* NewFocus, FText Prompt);
+
+	// ---- Input device (glyph switching) ----
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Input")
+	FMDInputDeviceChanged OnInputDeviceChanged;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Input")
+	bool IsUsingGamepad() const { return bUsingGamepad; }
+
+	// ---- Pause menu: only a UI toggle, never SetPause / time dilation (co-op safe) ----
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|UI")
+	void TogglePauseMenu();
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
+	bool IsPauseMenuOpen() const { return PauseWidget != nullptr && bPauseMenuOpen; }
+
+	// Called after a respawn so the pawn can drop sprint state. Implement in BP_MDPlayerController: call StopSprint
+	// on the pawn (C++ already resets MaxWalkSpeed to the class default).
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|Respawn")
+	void OnRespawnResetMovement(APawn* RespawnedPawn);
+
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
+	virtual void SetupInputComponent() override;
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// Server world time (AGameStateBase::GetServerWorldTimeSeconds) at which this player respawns; 0 while alive.
@@ -108,7 +167,24 @@ protected:
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyPickup(FName ItemRowName, int32 Quantity);
 
+	// Owning client: drops leftover sprint state after a respawn (MaxWalkSpeed back to default + OnRespawnResetMovement).
+	UFUNCTION(Client, Reliable)
+	void Client_ResetMovementState();
+
 private:
+	void OnQuickSlot1(const FInputActionValue& Value);
+	void OnQuickSlot2(const FInputActionValue& Value);
+	void OnPause(const FInputActionValue& Value);
+	void ApplyMovementReset();
+
+	TWeakObjectPtr<AActor> InteractFocus;
+	FText InteractPrompt;
+	bool bUsingGamepad = false;
+	bool bPauseMenuOpen = false;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UUserWidget> PauseWidget;
+
 	bool FindRespawnTransform(FTransform& OutTransform) const;
 
 	FTimerHandle RespawnTimer;

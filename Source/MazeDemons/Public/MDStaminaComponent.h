@@ -114,6 +114,10 @@ public:
 	// Clears exhaustion and the regen delay (respawn). Stamina itself is refilled via the ASC.
 	void ResetState();
 
+	// Authority only: full respawn reset. Stamina = Max, exhausted cleared, State.Sprinting / State.Exhausted loose
+	// tags forced to 0 and abilities carrying the sprint tag cancelled, so a new life never inherits a stuck sprint.
+	void ResetForRespawn();
+
 	// One simulation step; pure, used by TickComponent and by the automation tests.
 	static FMDStaminaStepOutput Step(const FMDStaminaStepInput& In);
 

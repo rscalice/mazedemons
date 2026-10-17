@@ -246,7 +246,7 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 			AbilitySystem->ResetStaminaToMax();
 			if (StaminaComponent)
 			{
-				StaminaComponent->ResetState();
+				StaminaComponent->ResetForRespawn();
 			}
 		}
 

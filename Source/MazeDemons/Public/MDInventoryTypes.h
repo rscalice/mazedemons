@@ -20,6 +20,19 @@ struct MAZEDEMONS_API FMDConsumableRow : public FTableRowBase
 	float CooldownSeconds = 1.0f;
 };
 
+// Row of DT_ItemDisplay (same row names as DT_Items): player-facing text. Kept in C++ because S_ItemInfo cannot be edited via tools.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDItemDisplayRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
+	FText DisplayName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
+	FText Description;
+};
+
 // One stack in a player's inventory. ItemRowName is a row in /Game/Blueprints/Items/DT_Items.
 // DT_Items rows carry no per-instance data (no durability / rolled stats), so row name + quantity is enough.
 USTRUCT(BlueprintType)

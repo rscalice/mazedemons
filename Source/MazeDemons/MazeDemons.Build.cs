@@ -20,7 +20,9 @@ public class MazeDemons : ModuleRules
 				"UMG",
 				"Slate",
 				"SlateCore",
-				"DeveloperSettings"
+				"DeveloperSettings",
+				"InputCore",
+				"EnhancedInput"
 			});
 	}
 }

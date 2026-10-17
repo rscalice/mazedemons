@@ -186,6 +186,30 @@ void UMDStaminaComponent::ResetState()
 	SetExhausted(false);
 }
 
+void UMDStaminaComponent::ResetForRespawn()
+{
+	UMDAbilitySystemComponent* ASC = GetASC();
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	if (ASC)
+	{
+		ASC->ResetStaminaToMax();
+	}
+	ResetState();
+	bSprintTagged = false;
+	if (ASC)
+	{
+		const FGameplayTag SprintTag = TAG_State_Sprinting.GetTag();
+		ASC->SetLooseGameplayTagCount(SprintTag, 0);
+		ASC->SetLooseGameplayTagCount(TAG_State_Exhausted.GetTag(), 0);
+		FGameplayTagContainer SprintTags;
+		SprintTags.AddTag(SprintTag);
+		ASC->CancelAbilities(&SprintTags);
+	}
+}
+
 void UMDStaminaComponent::SetExhausted(bool bNewExhausted)
 {
 	if (bExhausted == bNewExhausted)

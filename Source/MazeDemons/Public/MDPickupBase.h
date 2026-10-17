@@ -24,8 +24,28 @@ public:
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Pickup")
 	bool bPickedUp = false;
 
+	// True while a player wields this actor: it must not be interactable / pick-up-able by anyone. Replicated to all.
+	UPROPERTY(ReplicatedUsing = OnRep_Equipped, BlueprintReadOnly, Category = "Maze Demons|Pickup")
+	bool bEquipped = false;
+
+	// Authority only: call on equip (true) and on drop / unequip (false).
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Pickup")
+	void SetEquipped(bool bNewEquipped);
+
+	// Interaction gate for the BP trace / prompt: false while equipped or already picked up.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Pickup")
+	bool CanInteract() const { return !bEquipped && !bPickedUp; }
+
+	// Fired on every machine when bEquipped changes (BP may adjust collision / visuals).
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|Pickup")
+	void OnEquippedChanged(bool bNowEquipped);
+
 	// Server only. Looks for a UMDInventoryComponent on Interactor (or its controller / PlayerState / pawn),
 	// adds the item, and destroys the pickup on success.
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Pickup")
 	bool TryPickup(AActor* Interactor);
+
+private:
+	UFUNCTION()
+	void OnRep_Equipped();
 };

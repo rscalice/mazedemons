@@ -19,6 +19,12 @@
 #include "Net/UnrealNetwork.h"
 #include "Blueprint/UserWidget.h"
 #include "MDUISettings.h"
+#include "EnhancedInputComponent.h"
+#include "InputAction.h"
+#include "InputActionValue.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "TimerManager.h"
+#include "Framework/Application/SlateApplication.h"
 
 void AMDPlayerController::BeginPlay()
 {
@@ -37,6 +43,174 @@ void AMDPlayerController::BeginPlay()
 			HUDWidget->AddToViewport(0);
 		}
 	}
+}
+
+void AMDPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+
+	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(InputComponent))
+	{
+		if (QuickSlot1Action)
+		{
+			EIC->BindAction(QuickSlot1Action, ETriggerEvent::Started, this, &AMDPlayerController::OnQuickSlot1);
+		}
+		if (QuickSlot2Action)
+		{
+			EIC->BindAction(QuickSlot2Action, ETriggerEvent::Started, this, &AMDPlayerController::OnQuickSlot2);
+		}
+		if (PauseAction)
+		{
+			EIC->BindAction(PauseAction, ETriggerEvent::Started, this, &AMDPlayerController::OnPause);
+		}
+	}
+}
+
+void AMDPlayerController::OnQuickSlot1(const FInputActionValue& Value)
+{
+	UseQuickSlot(1);
+}
+
+void AMDPlayerController::OnQuickSlot2(const FInputActionValue& Value)
+{
+	UseQuickSlot(2);
+}
+
+void AMDPlayerController::OnPause(const FInputActionValue& Value)
+{
+	TogglePauseMenu();
+}
+
+void AMDPlayerController::UseQuickSlot(int32 Slot)
+{
+	UMDInventoryComponent* Inv = UMDGameplayStatics::GetInventory(GetPawn());
+	if (!Inv)
+	{
+		Inv = UMDGameplayStatics::GetInventory(this);
+	}
+	if (Inv)
+	{
+		Inv->RequestUseQuickSlot(Slot - 1);
+	}
+}
+
+void AMDPlayerController::AssignQuickSlot(int32 Slot, int32 InvIndex)
+{
+	UMDInventoryComponent* Inv = UMDGameplayStatics::GetInventory(GetPawn());
+	if (!Inv)
+	{
+		Inv = UMDGameplayStatics::GetInventory(this);
+	}
+	if (Inv)
+	{
+		Inv->RequestAssignQuickSlot(Slot - 1, InvIndex);
+	}
+}
+
+void AMDPlayerController::SetInteractFocus(AActor* NewFocus, FText Prompt)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+	if (!NewFocus)
+	{
+		Prompt = FText::GetEmpty();
+	}
+	if (InteractFocus.Get() == NewFocus && InteractPrompt.EqualTo(Prompt))
+	{
+		return;
+	}
+	InteractFocus = NewFocus;
+	InteractPrompt = Prompt;
+	OnInteractFocusChanged.Broadcast(NewFocus, Prompt);
+}
+
+bool AMDPlayerController::InputKey(const FInputKeyEventArgs& Params)
+{
+	if (IsLocalController() && (Params.Event == IE_Pressed || Params.Event == IE_Repeat))
+	{
+		const bool bGamepad = Params.Key.IsGamepadKey();
+		const bool bKeyboardMouse = !bGamepad && !Params.Key.IsTouch();
+		if ((bGamepad && !bUsingGamepad) || (bKeyboardMouse && bUsingGamepad))
+		{
+			bUsingGamepad = bGamepad;
+			OnInputDeviceChanged.Broadcast(bUsingGamepad);
+		}
+	}
+	return Super::InputKey(Params);
+}
+
+void AMDPlayerController::TogglePauseMenu()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+	if (bPauseMenuOpen)
+	{
+		if (PauseWidget)
+		{
+			PauseWidget->RemoveFromParent();
+		}
+		bPauseMenuOpen = false;
+		SetInputMode(FInputModeGameOnly());
+		SetShowMouseCursor(false);
+		return;
+	}
+	if (!PauseWidget)
+	{
+		const UMDUISettings* Settings = GetDefault<UMDUISettings>();
+		if (const TSubclassOf<UUserWidget> PauseClass = Settings ? Settings->PauseWidgetClass.LoadSynchronous() : nullptr)
+		{
+			PauseWidget = CreateWidget<UUserWidget>(this, PauseClass);
+		}
+	}
+	if (!PauseWidget)
+	{
+		return; // no pause widget configured yet; do nothing (never pauses the game)
+	}
+	PauseWidget->AddToViewport(100);
+	bPauseMenuOpen = true;
+	FInputModeGameAndUI Mode;
+	Mode.SetWidgetToFocus(PauseWidget->TakeWidget());
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	SetInputMode(Mode);
+	SetShowMouseCursor(true);
+}
+
+void AMDPlayerController::Client_ResetMovementState_Implementation()
+{
+	ApplyMovementReset();
+}
+
+void AMDPlayerController::ApplyMovementReset()
+{
+	ACharacter* Char = Cast<ACharacter>(GetPawn());
+	if (!Char)
+	{
+		// The new pawn may not have replicated yet; try once more next frame.
+		TWeakObjectPtr<AMDPlayerController> WeakThis(this);
+		GetWorldTimerManager().SetTimerForNextTick([WeakThis]()
+		{
+			if (WeakThis.IsValid() && Cast<ACharacter>(WeakThis->GetPawn()))
+			{
+				WeakThis->ApplyMovementReset();
+			}
+		});
+		return;
+	}
+	if (UCharacterMovementComponent* Move = Char->GetCharacterMovement())
+	{
+		if (const ACharacter* CDO = Char->GetClass()->GetDefaultObject<ACharacter>())
+		{
+			if (const UCharacterMovementComponent* DefaultMove = CDO->GetCharacterMovement())
+			{
+				Move->MaxWalkSpeed = DefaultMove->MaxWalkSpeed;
+			}
+		}
+	}
+	OnRespawnResetMovement(Char);
 }
 
 void AMDPlayerController::UseItem(int32 Index)
@@ -264,6 +438,7 @@ void AMDPlayerController::Respawn()
 		GameMode->RestartPlayer(this);
 	}
 	Client_OnRespawned();
+	Client_ResetMovementState();
 }
 
 void AMDPlayerController::Client_OnRespawned_Implementation()

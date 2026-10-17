@@ -21,11 +21,27 @@ void AMDPickupBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 	DOREPLIFETIME(AMDPickupBase, ItemRowName);
 	DOREPLIFETIME(AMDPickupBase, Quantity);
 	DOREPLIFETIME(AMDPickupBase, bPickedUp);
+	DOREPLIFETIME(AMDPickupBase, bEquipped);
+}
+
+void AMDPickupBase::SetEquipped(bool bNewEquipped)
+{
+	if (!HasAuthority() || bEquipped == bNewEquipped)
+	{
+		return;
+	}
+	bEquipped = bNewEquipped;
+	OnEquippedChanged(bEquipped); // listen host / standalone; clients get OnRep_Equipped
+}
+
+void AMDPickupBase::OnRep_Equipped()
+{
+	OnEquippedChanged(bEquipped);
 }
 
 bool AMDPickupBase::TryPickup(AActor* Interactor)
 {
-	if (!HasAuthority() || bPickedUp || !Interactor || ItemRowName.IsNone() || Quantity <= 0)
+	if (!HasAuthority() || bPickedUp || bEquipped || !Interactor || ItemRowName.IsNone() || Quantity <= 0)
 	{
 		return false;
 	}

@@ -12,6 +12,7 @@ MAZEDEMONS_API DECLARE_LOG_CATEGORY_EXTERN(LogMDInventory, Log, All);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDInventoryChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDEquipmentChanged);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDQuickSlotsChanged);
 
 // Server-authoritative inventory. Items/GoldAmount replicate to the owner only; Equipped replicates to everyone.
 // Item data (slot type, max stack) is read from ItemTable (DT_Items) by row name.
@@ -91,6 +92,33 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	static bool CanUseHeal(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt);
 
+	// ---- Quick slots (consumables only). Store item row names, not inventory indices. Owner-only replication. ----
+	static constexpr int32 NumQuickSlots = 2;
+
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Inventory")
+	FMDQuickSlotsChanged OnQuickSlotsChanged;
+
+	// Client entry points: direct call when authoritative, else the validated RPC. InventoryIndex INDEX_NONE clears the slot.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	void RequestAssignQuickSlot(int32 QuickIndex, int32 InventoryIndex);
+
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	void RequestUseQuickSlot(int32 QuickIndex);
+
+	// Item row assigned to the quick slot (NAME_None if unassigned / out of range).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	FName GetQuickSlotItem(int32 QuickIndex) const;
+
+	// Total quantity of the slot's item across all stacks (0 = assigned but empty).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	int32 GetQuickSlotCount(int32 QuickIndex) const;
+
+	// Pure rule: a row may be assigned only if it has a row in the consumable table.
+	static bool IsValidQuickAssignment(FName Row, const UDataTable* InConsumableTable);
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	const TArray<FName>& GetQuickSlots() const { return QuickSlots; }
+
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	const TArray<FMDItemStack>& GetItems() const { return Items; }
 
@@ -136,6 +164,19 @@ protected:
 	UFUNCTION(BlueprintNativeEvent, BlueprintPure, Category = "Maze Demons|Inventory")
 	int32 GetMaxStackForItem(FName ItemRowName) const;
 
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_AssignQuickSlot(int32 QuickIndex, int32 InventoryIndex);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_UseQuickSlot(int32 QuickIndex);
+
+	UFUNCTION()
+	void OnRep_QuickSlots();
+
+	// Item row names of the quick slots (size NumQuickSlots). Replicates to the owner only.
+	UPROPERTY(ReplicatedUsing = OnRep_QuickSlots, BlueprintReadOnly, Category = "Maze Demons|Inventory")
+	TArray<FName> QuickSlots;
+
 	UFUNCTION()
 	void OnRep_Items();
 
@@ -160,12 +201,20 @@ private:
 
 	// Lets the automation tests (Private/Tests/MDInventoryTests.cpp) reach protected/private members.
 	friend struct FMDInventoryTestAccess;
+	friend struct FMDQuickSlotTestAccess;
 	// Debug exec commands (ListItemRows) read GetSlotForItem.
 	friend class AMDPlayerController;
 
 	bool IsValidRow(FName Row) const;
 	void ApplyArmorReduction(uint8 Slot, FName Row);
-	void UseItem_Impl(int32 Index);
+	bool UseItem_Impl(int32 Index);
+	// Server logic (no authority check; callers are the authority paths). Tests call these directly.
+	bool AssignQuickSlot_Impl(int32 QuickIndex, int32 InventoryIndex);
+	bool UseQuickSlot_Impl(int32 QuickIndex);
+	// Index of the first stack of the slot's item, or INDEX_NONE (unassigned / out of stock).
+	int32 ResolveQuickSlotIndex(int32 QuickIndex) const;
+	// Clears a slot only if its row is no longer a consumable; empty consumables stay assigned.
+	void ValidateQuickSlots();
 	class UMDAbilitySystemComponent* ResolveASC() const;
 	const FMDConsumableRow* FindConsumable(FName Row) const;
 

@@ -35,6 +35,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	static void RequestPickup(AActor* Pickup, const APawn* Interactor);
 
+	// Player-facing item name: DT_ItemDisplay (UMDUISettings::ItemDisplayTable) DisplayName, else the row name split on
+	// CamelCase ("HealthPotion" -> "Health Potion").
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	static FText GetItemDisplayName(FName Row);
+
+	// Pure helper: inserts spaces at CamelCase boundaries and turns underscores into spaces.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	static FString SplitCamel(const FString& In);
+
 	// ---- Stamina (accepts a pawn, controller or PlayerState). Actors with no stamina component (AI) are never gated. ----
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
 	static UMDStaminaComponent* GetStaminaComponent(const AActor* Actor);

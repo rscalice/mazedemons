@@ -12,6 +12,8 @@
 #include "MDPlayerState.h"
 #include "MDPlayerController.h"
 #include "MDStaminaComponent.h"
+#include "MDUISettings.h"
+#include "Engine/DataTable.h"
 
 UMDInventoryComponent* UMDGameplayStatics::GetInventory(const AActor* Actor)
 {
@@ -43,6 +45,54 @@ UMDInventoryComponent* UMDGameplayStatics::GetInventory(const AActor* Actor)
 		}
 	}
 	return PS ? PS->FindComponentByClass<UMDInventoryComponent>() : nullptr;
+}
+
+FString UMDGameplayStatics::SplitCamel(const FString& In)
+{
+	FString Out;
+	Out.Reserve(In.Len() + 4);
+	for (int32 i = 0; i < In.Len(); ++i)
+	{
+		const TCHAR C = In[i];
+		if (C == TEXT('_'))
+		{
+			Out.AppendChar(TEXT(' '));
+			continue;
+		}
+		if (i > 0 && FChar::IsUpper(C))
+		{
+			const TCHAR Prev = In[i - 1];
+			const TCHAR Next = (i + 1 < In.Len()) ? In[i + 1] : TEXT('\0');
+			const bool bAfterLowerOrDigit = FChar::IsLower(Prev) || FChar::IsDigit(Prev);
+			const bool bAcronymEnd = FChar::IsUpper(Prev) && FChar::IsLower(Next);
+			if (bAfterLowerOrDigit || bAcronymEnd)
+			{
+				Out.AppendChar(TEXT(' '));
+			}
+		}
+		Out.AppendChar(C);
+	}
+	return Out;
+}
+
+FText UMDGameplayStatics::GetItemDisplayName(FName Row)
+{
+	if (Row.IsNone())
+	{
+		return FText::GetEmpty();
+	}
+	const UMDUISettings* Settings = GetDefault<UMDUISettings>();
+	if (const UDataTable* Table = Settings ? Settings->ItemDisplayTable.LoadSynchronous() : nullptr)
+	{
+		if (const FMDItemDisplayRow* Found = Table->FindRow<FMDItemDisplayRow>(Row, TEXT("GetItemDisplayName"), false))
+		{
+			if (!Found->DisplayName.IsEmpty())
+			{
+				return Found->DisplayName;
+			}
+		}
+	}
+	return FText::FromString(SplitCamel(Row.ToString()));
 }
 
 UMDAbilitySystemComponent* UMDGameplayStatics::GetMDAbilitySystemComponent(const AActor* Actor)
