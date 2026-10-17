@@ -17,6 +17,27 @@
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
+#include "Blueprint/UserWidget.h"
+#include "MDUISettings.h"
+
+void AMDPlayerController::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (!IsLocalController() || HUDWidget)
+	{
+		return;
+	}
+	const UMDUISettings* Settings = GetDefault<UMDUISettings>();
+	if (const TSubclassOf<UUserWidget> HUDClass = Settings ? Settings->HUDWidgetClass.LoadSynchronous() : nullptr)
+	{
+		HUDWidget = CreateWidget<UUserWidget>(this, HUDClass);
+		if (HUDWidget)
+		{
+			HUDWidget->AddToViewport(0);
+		}
+	}
+}
 
 #if !UE_BUILD_SHIPPING
 namespace

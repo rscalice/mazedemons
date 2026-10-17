@@ -40,6 +40,11 @@ public:
 	void Respawn();
 
 	virtual void OnPossess(APawn* InPawn) override;
+	virtual void BeginPlay() override;
+
+	// Local-only HUD instance (created from UMDUISettings::HUDWidgetClass).
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Maze Demons|UI")
+	TObjectPtr<class UUserWidget> HUDWidget;
 
 	// Max distance between the pawn and a pickup for a client pickup request to be honoured.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Inventory", meta = (ClampMin = "0"))
