@@ -39,6 +39,18 @@ void AMDPlayerController::BeginPlay()
 	}
 }
 
+void AMDPlayerController::UseItem(int32 Index)
+{
+	if (UMDInventoryComponent* Inv = UMDGameplayStatics::GetInventory(GetPawn()))
+	{
+		Inv->RequestUseItem(Index);
+	}
+	else if (UMDInventoryComponent* ControllerInv = UMDGameplayStatics::GetInventory(this))
+	{
+		ControllerInv->RequestUseItem(Index);
+	}
+}
+
 #if !UE_BUILD_SHIPPING
 namespace
 {

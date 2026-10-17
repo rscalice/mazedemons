@@ -75,6 +75,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	void RequestDestroy(int32 Index, int32 Quantity);
 
+	// Uses one unit of the consumable at Index (heals the owner). Server validates; no-op if it fails.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	void RequestUseItem(int32 Index);
+
+	// DT_Consumables (FMDConsumableRow by item row name). Loaded on demand.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Inventory")
+	TSoftObjectPtr<UDataTable> ConsumableTable = TSoftObjectPtr<UDataTable>(FSoftObjectPath(TEXT("/Game/Blueprints/Items/DT_Consumables.DT_Consumables")));
+
+	// True if the item row has a DT_Consumables row.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	bool IsConsumable(FName ItemRowName) const;
+
+	// Pure rule: a heal is accepted only for a living owner below max health once the cooldown has elapsed.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	static bool CanUseHeal(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt);
+
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	const TArray<FMDItemStack>& GetItems() const { return Items; }
 
@@ -96,6 +112,9 @@ protected:
 
 	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_DestroyItem(int32 Index, int32 Quantity);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_UseItem(int32 Index);
 
 	// Called on the server after an item is equipped. BP applies mesh/stats/abilities (and handles two-handed rules).
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|Inventory", meta = (DisplayName = "Apply Equipment"))
@@ -146,6 +165,12 @@ private:
 
 	bool IsValidRow(FName Row) const;
 	void ApplyArmorReduction(uint8 Slot, FName Row);
+	void UseItem_Impl(int32 Index);
+	class UMDAbilitySystemComponent* ResolveASC() const;
+	const FMDConsumableRow* FindConsumable(FName Row) const;
+
+	// Server world time (seconds) at which the next consumable may be used.
+	double ConsumableReadyAt = 0.0;
 	void EquipItem_Impl(int32 Index);
 	void UnequipSlot_Impl(uint8 Slot);
 	void DropItem_Impl(int32 Index, int32 Quantity);

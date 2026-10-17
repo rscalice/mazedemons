@@ -1,7 +1,24 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/DataTable.h"
 #include "MDInventoryTypes.generated.h"
+
+// Row of DT_Consumables (same row names as DT_Items). An item with a row here is usable (RequestUseItem) and never equippable.
+// Kept in C++ so consumables need no change to the Blueprint enum E_ItemTypes / struct S_ItemInfo.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDConsumableRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	// Health restored on use.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Consumable", meta = (ClampMin = "0"))
+	float HealAmount = 35.0f;
+
+	// Seconds before the owner can use any consumable again.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Consumable", meta = (ClampMin = "0"))
+	float CooldownSeconds = 1.0f;
+};
 
 // One stack in a player's inventory. ItemRowName is a row in /Game/Blueprints/Items/DT_Items.
 // DT_Items rows carry no per-instance data (no durability / rolled stats), so row name + quantity is enough.

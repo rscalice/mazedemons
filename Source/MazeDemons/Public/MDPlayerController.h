@@ -73,6 +73,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_GiveItem(FName RowName, int32 Qty);
 
+	// Console: uses the consumable at inventory Index (until the S5 quick slots exist).
+	UFUNCTION(Exec)
+	void UseItem(int32 Index);
+
 	// Debug (non-shipping): logs THIS machine's view of the local player's inventory (LogMDInventory, Warning).
 	UFUNCTION(Exec)
 	void DumpInventory();

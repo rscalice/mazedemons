@@ -80,9 +80,9 @@ bool UMDInventoryComponent::IsValidRow(FName Row) const
 
 uint8 UMDInventoryComponent::GetSlotForItem_Implementation(FName ItemRowName) const
 {
-	if (!ItemTable)
+	if (!ItemTable || IsConsumable(ItemRowName))
 	{
-		return InvalidSlot;
+		return InvalidSlot; // consumables are used, never equipped
 	}
 	const uint8* RowData = ItemTable->FindRowUnchecked(ItemRowName);
 	const FProperty* Prop = FindRowProperty(ItemTable->GetRowStruct(), TEXT("itemType"));
@@ -153,19 +153,12 @@ void UMDInventoryComponent::ReapplyAllEquipment()
 	OnEquipmentChanged.Broadcast();
 }
 
-void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
+UMDAbilitySystemComponent* UMDInventoryComponent::ResolveASC() const
 {
-	const FName SlotName = ArmorSlotName(Slot);
-	if (SlotName.IsNone() || !GetOwner() || !GetOwner()->HasAuthority())
-	{
-		return;
-	}
-
 	// The ASC lives on the PlayerState for players; an owner that is itself a PlayerState (or has its own ASC)
 	// is checked directly, otherwise go through the owner pawn's PlayerState.
 	UAbilitySystemComponent* BaseASC = nullptr;
-	const AActor* Owner = GetOwner();
-	if (const IAbilitySystemInterface* Iface = Cast<IAbilitySystemInterface>(Owner))
+	if (const IAbilitySystemInterface* Iface = Cast<IAbilitySystemInterface>(GetOwner()))
 	{
 		BaseASC = Iface->GetAbilitySystemComponent();
 	}
@@ -179,7 +172,85 @@ void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
 			}
 		}
 	}
-	UMDAbilitySystemComponent* ASC = Cast<UMDAbilitySystemComponent>(BaseASC);
+	return Cast<UMDAbilitySystemComponent>(BaseASC);
+}
+
+// ---- Consumables ----
+
+const FMDConsumableRow* UMDInventoryComponent::FindConsumable(FName Row) const
+{
+	if (Row.IsNone())
+	{
+		return nullptr;
+	}
+	const UDataTable* Table = ConsumableTable.LoadSynchronous();
+	return Table ? Table->FindRow<FMDConsumableRow>(Row, TEXT("FindConsumable"), false) : nullptr;
+}
+
+bool UMDInventoryComponent::IsConsumable(FName ItemRowName) const
+{
+	return FindConsumable(ItemRowName) != nullptr;
+}
+
+bool UMDInventoryComponent::CanUseHeal(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt)
+{
+	return !bDead && MaxHealth > 0.0f && Health < MaxHealth && Now >= ReadyAt;
+}
+
+void UMDInventoryComponent::RequestUseItem(int32 Index)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		UseItem_Impl(Index);
+	}
+	else
+	{
+		Server_UseItem(Index);
+	}
+}
+
+bool UMDInventoryComponent::Server_UseItem_Validate(int32 Index)
+{
+	return Index >= 0 && Index < 1024;
+}
+
+void UMDInventoryComponent::Server_UseItem_Implementation(int32 Index)
+{
+	UseItem_Impl(Index);
+}
+
+void UMDInventoryComponent::UseItem_Impl(int32 Index)
+{
+	if (!Items.IsValidIndex(Index))
+	{
+		return;
+	}
+	const FMDConsumableRow* Row = FindConsumable(Items[Index].ItemRowName);
+	UMDAbilitySystemComponent* ASC = ResolveASC();
+	const UWorld* World = GetWorld();
+	if (!Row || !ASC || !World)
+	{
+		return;
+	}
+	const double Now = World->GetTimeSeconds();
+	if (!CanUseHeal(ASC->GetHealth(), ASC->GetMaxHealth(), ASC->IsDead(), Now, ConsumableReadyAt))
+	{
+		return;
+	}
+	ConsumableReadyAt = Now + Row->CooldownSeconds;
+	ASC->ApplyHealing(Row->HealAmount);
+	RemoveItem(Index, 1);
+}
+
+void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
+{
+	const FName SlotName = ArmorSlotName(Slot);
+	if (SlotName.IsNone() || !GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	UMDAbilitySystemComponent* ASC = ResolveASC();
 	if (!ASC)
 	{
 		return;
