@@ -6,6 +6,7 @@
 #include "MDPlayerState.h"
 #include "MDInventoryComponent.h"
 #include "MDPickupBase.h"
+#include "MDInteractAbility.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
@@ -30,6 +31,12 @@ void AMDPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
+	if (IsLocalController())
+	{
+		GetWorldTimerManager().SetTimer(FocusTraceTimer, this, &AMDPlayerController::UpdateInteractFocus,
+			FMath::Max(0.02f, FocusTraceInterval), true);
+	}
+
 	if (!IsLocalController() || HUDWidget)
 	{
 		return;
@@ -42,6 +49,76 @@ void AMDPlayerController::BeginPlay()
 		{
 			HUDWidget->AddToViewport(0);
 		}
+	}
+}
+
+void AMDPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	GetWorldTimerManager().ClearTimer(FocusTraceTimer);
+	Super::EndPlay(EndPlayReason);
+}
+
+FText AMDPlayerController::BuildInteractPrompt(const FText& ItemName)
+{
+	if (ItemName.IsEmpty())
+	{
+		return NSLOCTEXT("MDInteract", "InteractPrompt", "Interact");
+	}
+	return FText::Format(NSLOCTEXT("MDInteract", "PickUpPrompt", "Pick up {0}"), ItemName);
+}
+
+bool AMDPlayerController::WouldFocusChange(const AActor* OldFocus, const FText& OldPrompt, const AActor* NewFocus, const FText& NewPrompt)
+{
+	if (!NewFocus)
+	{
+		return OldFocus != nullptr || !OldPrompt.IsEmpty();
+	}
+	return OldFocus != NewFocus || !OldPrompt.EqualTo(NewPrompt);
+}
+
+void AMDPlayerController::UpdateInteractFocus()
+{
+	AActor* Target = nullptr;
+	FText Prompt;
+
+	const APawn* LocalPawn = GetPawn();
+	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
+	const UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+	const bool bAlive = LocalPawn && !(ASC && ASC->IsDead());
+
+	if (bAlive && !bPauseMenuOpen)
+	{
+		float Range = 250.0f;
+		float Radius = 80.0f;
+		FName Tag = NAME_None;
+		if (InteractAbilityClass)
+		{
+			const UMDInteractAbility* Defaults = GetDefault<UMDInteractAbility>(InteractAbilityClass);
+			Range = Defaults->InteractRange;
+			Radius = Defaults->InteractRadius;
+			Tag = Defaults->RequiredActorTag;
+		}
+
+		AActor* Candidate = UMDInteractAbility::FindInteractTargetFor(LocalPawn, Range, Radius, Tag);
+		if (Candidate)
+		{
+			const AMDPickupBase* Pickup = Cast<AMDPickupBase>(Candidate);
+			if (!Pickup)
+			{
+				Target = Candidate;
+				Prompt = BuildInteractPrompt(FText::GetEmpty());
+			}
+			else if (Pickup->CanInteract())
+			{
+				Target = Candidate;
+				Prompt = BuildInteractPrompt(Pickup->ItemRowName.IsNone() ? FText::GetEmpty() : UMDGameplayStatics::GetItemDisplayName(Pickup->ItemRowName));
+			}
+		}
+	}
+
+	if (WouldFocusChange(InteractFocus.Get(), InteractPrompt, Target, Prompt))
+	{
+		SetInteractFocus(Target, Prompt);
 	}
 }
 

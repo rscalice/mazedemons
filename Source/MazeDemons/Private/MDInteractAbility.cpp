@@ -10,7 +10,11 @@ UMDInteractAbility::UMDInteractAbility()
 
 AActor* UMDInteractAbility::FindInteractTarget() const
 {
-	AActor* Avatar = GetAvatarActorFromActorInfo();
+	return FindInteractTargetFor(GetAvatarActorFromActorInfo(), InteractRange, InteractRadius, RequiredActorTag);
+}
+
+AActor* UMDInteractAbility::FindInteractTargetFor(const AActor* Avatar, float Range, float Radius, FName RequiredTag)
+{
 	UWorld* World = Avatar ? Avatar->GetWorld() : nullptr;
 	if (!World)
 	{
@@ -18,19 +22,19 @@ AActor* UMDInteractAbility::FindInteractTarget() const
 	}
 
 	const FVector Start = Avatar->GetActorLocation();
-	const FVector End = Start + Avatar->GetActorForwardVector() * InteractRange;
+	const FVector End = Start + Avatar->GetActorForwardVector() * Range;
 
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDInteract), false, Avatar);
 	TArray<FHitResult> Hits;
 	World->SweepMultiByChannel(Hits, Start, End, FQuat::Identity, ECC_Visibility,
-		FCollisionShape::MakeSphere(InteractRadius), Params);
+		FCollisionShape::MakeSphere(Radius), Params);
 
 	AActor* Best = nullptr;
 	float BestDistSq = TNumericLimits<float>::Max();
 	for (const FHitResult& Hit : Hits)
 	{
 		AActor* Candidate = Hit.GetActor();
-		if (!Candidate || (RequiredActorTag != NAME_None && !Candidate->ActorHasTag(RequiredActorTag)))
+		if (!Candidate || (RequiredTag != NAME_None && !Candidate->ActorHasTag(RequiredTag)))
 		{
 			continue;
 		}

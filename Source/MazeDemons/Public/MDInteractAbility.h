@@ -32,4 +32,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Interact")
 	AActor* FindInteractTarget() const;
+
+	// Shared target search (ability and the local focus trace both use it): closest tagged actor in front of Avatar.
+	static AActor* FindInteractTargetFor(const AActor* Avatar, float Range, float Radius, FName RequiredTag);
 };

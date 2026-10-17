@@ -45,9 +45,24 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Interaction")
 	AActor* GetInteractFocus() const { return InteractFocus.Get(); }
 
-	// Called by the BP_Player interaction trace every time it runs. Broadcasts only when focus or prompt changes.
+	// Called by the local focus trace (and callable from BP). Broadcasts only when focus or prompt changes.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Interaction")
 	void SetInteractFocus(AActor* NewFocus, FText Prompt);
+
+	// Optional: the interact ability BP (GA_PlayerInteract). Its InteractRange / InteractRadius / RequiredActorTag defaults
+	// drive the local focus trace so it matches what F will actually interact with. Unset = class defaults.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Interaction")
+	TSubclassOf<class UMDInteractAbility> InteractAbilityClass;
+
+	// Seconds between local focus traces.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Interaction", meta = (ClampMin = "0.02"))
+	float FocusTraceInterval = 0.1f;
+
+	// "Pick up <ItemName>", or "Interact" when ItemName is empty. Pure; used by the focus trace.
+	static FText BuildInteractPrompt(const FText& ItemName);
+
+	// True when focus (or its prompt) differs, i.e. SetInteractFocus would broadcast. Pure; used by tests.
+	static bool WouldFocusChange(const AActor* OldFocus, const FText& OldPrompt, const AActor* NewFocus, const FText& NewPrompt);
 
 	// ---- Input device (glyph switching) ----
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Input")
@@ -100,6 +115,7 @@ public:
 
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	// Local-only HUD instance (created from UMDUISettings::HUDWidgetClass).
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Maze Demons|UI")
@@ -176,6 +192,8 @@ private:
 	void OnQuickSlot2(const FInputActionValue& Value);
 	void OnPause(const FInputActionValue& Value);
 	void ApplyMovementReset();
+	void UpdateInteractFocus();
+	FTimerHandle FocusTraceTimer;
 
 	TWeakObjectPtr<AActor> InteractFocus;
 	FText InteractPrompt;
