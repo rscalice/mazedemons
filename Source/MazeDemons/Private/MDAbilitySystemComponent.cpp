@@ -151,6 +151,61 @@ void UMDAbilitySystemComponent::RemoveArmorPieceDamageReduction(FName ArmorSlot)
 	RecalculateDefense();
 }
 
+float UMDAbilitySystemComponent::ComputeAttackPower(float InBaseAttackPower, const TMap<FName, float>& WeaponBonuses)
+{
+	// A two-handed weapon occupies both hands, so its bonus replaces the one-handed slots.
+	static const FName TwoHanded(TEXT("TwoHanded"));
+	static const FName MainHand(TEXT("MainHand"));
+	static const FName OffHand(TEXT("OffHand"));
+	const bool bTwoHanded = WeaponBonuses.Contains(TwoHanded);
+
+	float Total = InBaseAttackPower;
+	for (const TPair<FName, float>& Bonus : WeaponBonuses)
+	{
+		if (bTwoHanded && (Bonus.Key == MainHand || Bonus.Key == OffHand))
+		{
+			continue;
+		}
+		Total += Bonus.Value;
+	}
+	return FMath::Max(Total, 0.0f);
+}
+
+void UMDAbilitySystemComponent::SetWeaponAttackBonus(FName WeaponSlot, float AttackPowerBonus)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || WeaponSlot.IsNone())
+	{
+		return;
+	}
+
+	EquippedWeaponAttackBonuses.Add(WeaponSlot, AttackPowerBonus);
+	RecalculateAttackPower();
+}
+
+void UMDAbilitySystemComponent::RemoveWeaponAttackBonus(FName WeaponSlot)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || WeaponSlot.IsNone())
+	{
+		return;
+	}
+
+	EquippedWeaponAttackBonuses.Remove(WeaponSlot);
+	RecalculateAttackPower();
+}
+
+void UMDAbilitySystemComponent::RecalculateAttackPower()
+{
+	if (UMDAttributeSet* Attrs = GetMazeDemonsAttributes())
+	{
+		Attrs->SetAttackPower(ComputeAttackPower(BaseAttackPower, EquippedWeaponAttackBonuses));
+	}
+}
+
+void UMDAbilitySystemComponent::OnRep_BaseStats()
+{
+	OnStatsChanged.Broadcast();
+}
+
 void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigator, AActor* DamageCauser)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority())
@@ -216,8 +271,10 @@ void UMDAbilitySystemComponent::InitializeStats(float NewMaxHealth, float NewAtt
 	BaseDefense = FMath::Clamp(NewBaseDefense, 0.0f, 90.0f);
 	Attrs->SetMaxHealth(FMath::Max(NewMaxHealth, 1.0f));
 	Attrs->SetHealth(Attrs->GetMaxHealth());
-	Attrs->SetAttackPower(FMath::Max(NewAttackPower, 0.0f));
+	BaseAttackPower = FMath::Max(NewAttackPower, 0.0f);
+	RecalculateAttackPower();
 	RecalculateDefense();
+	OnStatsChanged.Broadcast();
 }
 
 FGameplayAbilitySpecHandle UMDAbilitySystemComponent::GrantAbility(TSubclassOf<UGameplayAbility> AbilityClass, int32 Level)
@@ -269,11 +326,14 @@ void UMDAbilitySystemComponent::BindAttributeDelegates()
 		.AddUObject(this, &UMDAbilitySystemComponent::HandleStaminaChanged);
 	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetMaxStaminaAttribute())
 		.AddUObject(this, &UMDAbilitySystemComponent::HandleMaxStaminaChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetStaminaRegenRateAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandleStaminaRegenRateChanged);
 }
 
 void UMDAbilitySystemComponent::HandleHealthChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnHealthChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+	OnStatsChanged.Broadcast();
 
 	// Death state is server-authoritative; clients receive it through bIsDeadState (RepNotify).
 	if (GetOwner() && GetOwner()->HasAuthority())
@@ -302,31 +362,43 @@ void UMDAbilitySystemComponent::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(UMDAbilitySystemComponent, bIsDeadState);
+	DOREPLIFETIME_CONDITION(UMDAbilitySystemComponent, BaseDefense, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UMDAbilitySystemComponent, BaseAttackPower, COND_OwnerOnly);
 }
 
 void UMDAbilitySystemComponent::HandleMaxHealthChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnMaxHealthChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+	OnStatsChanged.Broadcast();
 }
 
 void UMDAbilitySystemComponent::HandleAttackPowerChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnAttackPowerChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+	OnStatsChanged.Broadcast();
 }
 
 void UMDAbilitySystemComponent::HandleDefenseChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnDefenseChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+	OnStatsChanged.Broadcast();
 }
 
 void UMDAbilitySystemComponent::HandleStaminaChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnStaminaChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+	OnStatsChanged.Broadcast();
+}
+
+void UMDAbilitySystemComponent::HandleStaminaRegenRateChanged(const FOnAttributeChangeData& ChangeData)
+{
+	OnStatsChanged.Broadcast();
 }
 
 void UMDAbilitySystemComponent::HandleMaxStaminaChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnMaxStaminaChanged.Broadcast(ChangeData.OldValue, ChangeData.NewValue);
+	OnStatsChanged.Broadcast();
 
 	// A lowered maximum pulls current stamina down with it (authority only; clients receive the result).
 	if (GetOwner() && GetOwner()->HasAuthority())

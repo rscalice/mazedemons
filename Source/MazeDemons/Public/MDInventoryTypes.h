@@ -20,6 +20,18 @@ struct MAZEDEMONS_API FMDConsumableRow : public FTableRowBase
 	float CooldownSeconds = 1.0f;
 };
 
+// Row of DT_ItemStats (same row names as DT_Items): C++-side combat stats for an item. Kept in C++ because S_ItemInfo cannot be
+// edited via tools. A missing table or row means "no bonus".
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDItemStatsRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	// Added to the wielder's Attack Power while this weapon is equipped.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
+	float AttackPowerBonus = 0.0f;
+};
+
 // Row of DT_ItemDisplay (same row names as DT_Items): player-facing text. Kept in C++ because S_ItemInfo cannot be edited via tools.
 USTRUCT(BlueprintType)
 struct MAZEDEMONS_API FMDItemDisplayRow : public FTableRowBase

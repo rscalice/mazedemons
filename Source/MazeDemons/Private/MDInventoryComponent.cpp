@@ -6,7 +6,9 @@
 #include "MDAbilitySystemComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
+#include "Misc/PackageName.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/UnrealType.h"
 
@@ -49,6 +51,45 @@ namespace
 		}
 		return nullptr;
 	}
+
+	// Reads a numeric / byte / enum column of a DT_Items row (matched by prefix). False if the table, row or column is missing.
+	bool ReadRowNumber(const UDataTable* Table, FName Row, const TCHAR* Prefix, double& OutValue)
+	{
+		if (!Table || Row.IsNone())
+		{
+			return false;
+		}
+		const uint8* RowData = Table->FindRowUnchecked(Row);
+		const FProperty* Prop = FindRowProperty(Table->GetRowStruct(), Prefix);
+		if (!RowData || !Prop)
+		{
+			return false;
+		}
+		const void* Ptr = Prop->ContainerPtrToValuePtr<void>(RowData);
+		if (const FEnumProperty* EnumProp = CastField<FEnumProperty>(Prop))
+		{
+			OutValue = static_cast<double>(EnumProp->GetUnderlyingProperty()->GetSignedIntPropertyValue(Ptr));
+			return true;
+		}
+		if (const FNumericProperty* Num = CastField<FNumericProperty>(Prop)) // includes FByteProperty
+		{
+			OutValue = Num->IsFloatingPoint() ? Num->GetFloatingPointPropertyValue(Ptr) : static_cast<double>(Num->GetSignedIntPropertyValue(Ptr));
+			return true;
+		}
+		return false;
+	}
+
+	// Weapon slot (E_ItemTypes value) -> name used by the ASC's attack bonus map. NAME_None = no attack bonus.
+	FName WeaponSlotName(uint8 Slot)
+	{
+		switch (Slot)
+		{
+		case 0: return FName("MainHand");
+		case 1: return FName("OffHand");
+		case 3: return FName("TwoHanded");
+		default: return NAME_None;
+		}
+	}
 }
 
 UMDInventoryComponent::UMDInventoryComponent()
@@ -66,6 +107,8 @@ void UMDInventoryComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, GoldAmount, COND_OwnerOnly);
 	DOREPLIFETIME(UMDInventoryComponent, Equipped);
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, QuickSlots, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UMDInventoryComponent, ConsumableReadyAtServer, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UMDInventoryComponent, ConsumableCooldownDuration, COND_OwnerOnly);
 }
 
 // ---- Row data ----
@@ -150,6 +193,7 @@ void UMDInventoryComponent::ReapplyAllEquipment()
 	for (const FMDEquippedSlot& Entry : Snapshot)
 	{
 		ApplyArmorReduction(Entry.Slot, Entry.ItemRowName);
+		ApplyWeaponBonus(Entry.Slot, Entry.ItemRowName);
 		K2_ApplyEquipment(Entry.Slot, Entry.ItemRowName);
 	}
 	OnEquipmentChanged.Broadcast();
@@ -194,6 +238,12 @@ bool UMDInventoryComponent::IsConsumable(FName ItemRowName) const
 	return FindConsumable(ItemRowName) != nullptr;
 }
 
+float UMDInventoryComponent::GetConsumableHeal(FName ItemRowName) const
+{
+	const FMDConsumableRow* Row = FindConsumable(ItemRowName);
+	return Row ? Row->HealAmount : 0.0f;
+}
+
 bool UMDInventoryComponent::CanUseHeal(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt)
 {
 	return !bDead && MaxHealth > 0.0f && Health < MaxHealth && Now >= ReadyAt;
@@ -234,12 +284,15 @@ bool UMDInventoryComponent::UseItem_Impl(int32 Index)
 	{
 		return false;
 	}
-	const double Now = World->GetTimeSeconds();
+	const double Now = GetServerNow(); // same clock the owning client reads the cooldown against
 	if (!CanUseHeal(ASC->GetHealth(), ASC->GetMaxHealth(), ASC->IsDead(), Now, ConsumableReadyAt))
 	{
 		return false;
 	}
 	ConsumableReadyAt = Now + Row->CooldownSeconds;
+	ConsumableReadyAtServer = static_cast<float>(ConsumableReadyAt);
+	ConsumableCooldownDuration = Row->CooldownSeconds;
+	OnQuickSlotsChanged.Broadcast(); // the server-side owner (listen server) has no OnRep
 	ASC->ApplyHealing(Row->HealAmount);
 	RemoveItem(Index, 1);
 	return true;
@@ -409,21 +462,7 @@ void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
 		return;
 	}
 
-	float Percent = 0.0f;
-	if (!Row.IsNone() && ItemTable)
-	{
-		const uint8* RowData = ItemTable->FindRowUnchecked(Row);
-		const FProperty* Prop = FindRowProperty(ItemTable->GetRowStruct(), TEXT("armorDamageReductionPercent"));
-		if (RowData && Prop)
-		{
-			const void* Ptr = Prop->ContainerPtrToValuePtr<void>(RowData);
-			if (const FNumericProperty* Num = CastField<FNumericProperty>(Prop))
-			{
-				Percent = Num->IsFloatingPoint() ? static_cast<float>(Num->GetFloatingPointPropertyValue(Ptr)) : static_cast<float>(Num->GetSignedIntPropertyValue(Ptr));
-			}
-		}
-	}
-
+	const float Percent = GetItemArmorReduction(Row);
 	if (Percent > 0.0f)
 	{
 		ASC->SetArmorPieceDamageReduction(SlotName, Percent);
@@ -432,6 +471,120 @@ void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
 	{
 		ASC->RemoveArmorPieceDamageReduction(SlotName);
 	}
+}
+
+void UMDInventoryComponent::ApplyWeaponBonus(uint8 Slot, FName Row)
+{
+	const FName SlotName = WeaponSlotName(Slot);
+	if (SlotName.IsNone() || !GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	UMDAbilitySystemComponent* ASC = ResolveASC();
+	if (!ASC)
+	{
+		return;
+	}
+
+	const float Bonus = GetItemAttackBonus(Row);
+	if (Bonus != 0.0f)
+	{
+		ASC->SetWeaponAttackBonus(SlotName, Bonus);
+	}
+	else
+	{
+		ASC->RemoveWeaponAttackBonus(SlotName);
+	}
+}
+
+// ---- Item reads ----
+
+EMDRarity UMDInventoryComponent::RarityFromByte(int32 Value)
+{
+	return (Value >= 0 && Value <= static_cast<int32>(EMDRarity::Legendary)) ? static_cast<EMDRarity>(Value) : EMDRarity::Common;
+}
+
+EMDRarity UMDInventoryComponent::GetItemRarity(FName ItemRowName) const
+{
+	double Value = 0.0;
+	if (!ReadRowNumber(ItemTable, ItemRowName, TEXT("rarity"), Value))
+	{
+		return EMDRarity::Common;
+	}
+	return RarityFromByte(static_cast<int32>(Value));
+}
+
+float UMDInventoryComponent::GetItemArmorReduction(FName ItemRowName) const
+{
+	double Value = 0.0;
+	if (!ReadRowNumber(ItemTable, ItemRowName, TEXT("armorDamageReductionPercent"), Value))
+	{
+		return 0.0f;
+	}
+	return FMath::Max(0.0f, static_cast<float>(Value));
+}
+
+const FMDItemStatsRow* UMDInventoryComponent::FindItemStats(FName Row) const
+{
+	if (Row.IsNone() || bItemStatsMissing)
+	{
+		return nullptr;
+	}
+	// DT_ItemStats is created later in the editor; do not trigger a failed load every call when it does not exist yet.
+	if (!ItemStatsTable.IsValid() && !FPackageName::DoesPackageExist(ItemStatsTable.ToSoftObjectPath().GetLongPackageName()))
+	{
+		bItemStatsMissing = true;
+		return nullptr;
+	}
+	const UDataTable* Table = ItemStatsTable.LoadSynchronous();
+	return Table ? Table->FindRow<FMDItemStatsRow>(Row, TEXT("FindItemStats"), false) : nullptr;
+}
+
+float UMDInventoryComponent::GetItemAttackBonus(FName ItemRowName) const
+{
+	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
+	return Stats ? Stats->AttackPowerBonus : 0.0f;
+}
+
+// ---- Consumable cooldown ----
+
+double UMDInventoryComponent::GetServerNow() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return 0.0;
+	}
+	if (const AGameStateBase* GS = World->GetGameState())
+	{
+		return GS->GetServerWorldTimeSeconds();
+	}
+	return World->GetTimeSeconds();
+}
+
+float UMDInventoryComponent::CooldownFraction(double Now, double ReadyAt, float Duration)
+{
+	if (Duration <= 0.0f)
+	{
+		return 0.0f;
+	}
+	return static_cast<float>(FMath::Clamp((ReadyAt - Now) / static_cast<double>(Duration), 0.0, 1.0));
+}
+
+float UMDInventoryComponent::GetConsumableCooldownRemaining() const
+{
+	return static_cast<float>(FMath::Max(0.0, static_cast<double>(ConsumableReadyAtServer) - GetServerNow()));
+}
+
+float UMDInventoryComponent::GetConsumableCooldownFraction() const
+{
+	return CooldownFraction(GetServerNow(), ConsumableReadyAtServer, ConsumableCooldownDuration);
+}
+
+void UMDInventoryComponent::OnRep_ConsumableCooldown()
+{
+	OnQuickSlotsChanged.Broadcast();
 }
 
 // ---- Authority API ----
@@ -669,6 +822,7 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 	OnInventoryChanged.Broadcast();
 	OnEquipmentChanged.Broadcast();
 	ApplyArmorReduction(Slot, NewRow);
+	ApplyWeaponBonus(Slot, NewRow);
 	K2_ApplyEquipment(Slot, NewRow);
 }
 
@@ -687,6 +841,7 @@ void UMDInventoryComponent::UnequipSlot_Impl(uint8 Slot)
 	Equipped.RemoveAt(EqIdx);
 	OnEquipmentChanged.Broadcast();
 	ApplyArmorReduction(Slot, NAME_None);
+	ApplyWeaponBonus(Slot, NAME_None);
 	K2_ClearEquipment(Slot);
 }
 

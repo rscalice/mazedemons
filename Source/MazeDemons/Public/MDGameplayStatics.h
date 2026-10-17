@@ -8,6 +8,44 @@ class UMDAbilitySystemComponent;
 class UMDInventoryComponent;
 class UMDStaminaComponent;
 class APawn;
+class APlayerState;
+
+// One row of the character stats screen. Texts are pre-formatted ("85 / 100", "12 /s", "16.9%") so UI only displays them.
+// With a compare row, New/NewText show the value after the swap and DeltaSign is +1 / -1 / 0 (0 = unchanged or no compare).
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDStatLine
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	FText Label;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	float Current = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	float New = 0.0f;
+
+	// Value is a percentage (Current / New are 0..100).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	bool bPercent = false;
+
+	// Value is shown as "value / Max" (health, stamina); Max is valid.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	bool bRatio = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	float Max = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	int32 DeltaSign = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	FText CurrentText;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	FText NewText;
+};
 
 namespace MDTeams
 {
@@ -43,6 +81,21 @@ public:
 	// Pure helper: inserts spaces at CamelCase boundaries and turns underscores into spaces.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	static FString SplitCamel(const FString& In);
+
+	// ---- Character stats screen ----
+	// Rows in order: Health, Stamina, Stamina regen, Attack power, Defense (base), Damage reduction (total).
+	// CompareRow = an item row to preview equipping / using (NAME_None = no compare). Works on clients (replicated data only).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
+	static TArray<FMDStatLine> GetCharacterStatLines(APlayerState* PS, FName CompareRow);
+
+	// Pure: total damage reduction % after replacing a piece (OldPiecePct, 0 if the slot is empty) with NewPiecePct.
+	// 1 - (1-c)(1-n)/(1-o), in percent, clamped to [0, 90].
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
+	static float SwapDamageReduction(float CurrentPct, float OldPiecePct, float NewPiecePct);
+
+	// Pure: health after using a heal, capped at max.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
+	static float HealthAfterHeal(float Health, float MaxHealth, float HealAmount);
 
 	// ---- Stamina (accepts a pawn, controller or PlayerState). Actors with no stamina component (AI) are never gated. ----
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")

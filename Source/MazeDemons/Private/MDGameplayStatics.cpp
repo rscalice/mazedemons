@@ -95,6 +95,130 @@ FText UMDGameplayStatics::GetItemDisplayName(FName Row)
 	return FText::FromString(SplitCamel(Row.ToString()));
 }
 
+#define LOCTEXT_NAMESPACE "MDStats"
+
+float UMDGameplayStatics::SwapDamageReduction(float CurrentPct, float OldPiecePct, float NewPiecePct)
+{
+	// Defense is 1 - product(1 - piece). Divide the old piece out, multiply the new one in.
+	const float OldFraction = FMath::Max(1.0f - OldPiecePct / 100.0f, 0.01f);
+	const float Remaining = (1.0f - CurrentPct / 100.0f) * (1.0f - NewPiecePct / 100.0f) / OldFraction;
+	return FMath::Clamp((1.0f - Remaining) * 100.0f, 0.0f, 90.0f);
+}
+
+float UMDGameplayStatics::HealthAfterHeal(float Health, float MaxHealth, float HealAmount)
+{
+	return FMath::Min(MaxHealth, Health + FMath::Max(HealAmount, 0.0f));
+}
+
+namespace
+{
+	int32 SignOfDelta(float Current, float New)
+	{
+		const float Delta = New - Current;
+		return Delta > 0.005f ? 1 : (Delta < -0.005f ? -1 : 0);
+	}
+
+	FMDStatLine MakeLine(const FText& Label, float Current, float New, bool bPercent, bool bRatio, float Max, float NewMax, const TCHAR* Suffix)
+	{
+		FMDStatLine Line;
+		Line.Label = Label;
+		Line.Current = Current;
+		Line.New = New;
+		Line.bPercent = bPercent;
+		Line.bRatio = bRatio;
+		Line.Max = Max;
+		Line.DeltaSign = SignOfDelta(Current, New);
+
+		auto Format = [&](float Value, float InMax) -> FText
+		{
+			if (bRatio)
+			{
+				return FText::FromString(FString::Printf(TEXT("%d / %d"), FMath::RoundToInt(Value), FMath::RoundToInt(InMax)));
+			}
+			if (bPercent)
+			{
+				return FText::FromString(FString::Printf(TEXT("%.1f%%"), Value));
+			}
+			return FText::FromString(FString::Printf(TEXT("%d%s"), FMath::RoundToInt(Value), Suffix));
+		};
+		Line.CurrentText = Format(Current, Max);
+		Line.NewText = Format(New, NewMax);
+		return Line;
+	}
+
+	const FMDEquippedSlot* FindEquipped(const TArray<FMDEquippedSlot>& Equipped, uint8 Slot)
+	{
+		return Equipped.FindByPredicate([Slot](const FMDEquippedSlot& E) { return E.Slot == Slot; });
+	}
+}
+
+TArray<FMDStatLine> UMDGameplayStatics::GetCharacterStatLines(APlayerState* PS, FName CompareRow)
+{
+	TArray<FMDStatLine> Lines;
+	const UMDAbilitySystemComponent* ASC = GetMDAbilitySystemComponent(PS);
+	if (!ASC)
+	{
+		return Lines;
+	}
+	const UMDInventoryComponent* Inv = GetInventory(PS);
+
+	const float Health = ASC->GetHealth();
+	const float MaxHealth = ASC->GetMaxHealth();
+	const float Stamina = ASC->GetStamina();
+	const float MaxStamina = ASC->GetMaxStamina();
+	const float Regen = ASC->GetStaminaRegenRate();
+	const float AttackPower = ASC->GetAttackPower();
+	const float BaseDefense = ASC->GetBaseDefense();
+	const float Defense = ASC->GetDefense();
+
+	float NewHealth = Health;
+	float NewAttackPower = AttackPower;
+	float NewDefense = Defense;
+
+	if (Inv && !CompareRow.IsNone())
+	{
+		if (Inv->IsConsumable(CompareRow))
+		{
+			NewHealth = HealthAfterHeal(Health, MaxHealth, Inv->GetConsumableHeal(CompareRow));
+		}
+		else
+		{
+			const uint8 Slot = Inv->GetItemEquipSlot(CompareRow);
+			const TArray<FMDEquippedSlot>& Equipped = Inv->GetEquipped();
+			if (Slot >= 4 && Slot <= 8)
+			{
+				const FMDEquippedSlot* Old = FindEquipped(Equipped, Slot);
+				const float OldPct = Old ? Inv->GetItemArmorReduction(Old->ItemRowName) : 0.0f;
+				NewDefense = SwapDamageReduction(Defense, OldPct, Inv->GetItemArmorReduction(CompareRow));
+			}
+			else if (Slot == 0 || Slot == 1 || Slot == 3)
+			{
+				auto BonusIn = [&](uint8 S) -> float
+				{
+					const FMDEquippedSlot* E = FindEquipped(Equipped, S);
+					return E ? Inv->GetItemAttackBonus(E->ItemRowName) : 0.0f;
+				};
+				// A two-handed weapon occupies both hands (it is the only bonus that counts while equipped), so it is what
+				// gets replaced; otherwise the bonus removed is the item in the same slot.
+				const bool bHasTwoHanded = FindEquipped(Equipped, 3) != nullptr;
+				const float HandsBonus = bHasTwoHanded ? BonusIn(3) : BonusIn(0) + BonusIn(1);
+				const float Removed = (Slot == 3 || bHasTwoHanded) ? HandsBonus : BonusIn(Slot);
+				NewAttackPower = FMath::Max(0.0f, AttackPower - Removed + Inv->GetItemAttackBonus(CompareRow));
+			}
+		}
+	}
+
+	Lines.Add(MakeLine(LOCTEXT("StatHealth", "Health"), Health, NewHealth, false, true, MaxHealth, MaxHealth, TEXT("")));
+	Lines.Add(MakeLine(LOCTEXT("StatStamina", "Stamina"), Stamina, Stamina, false, true, MaxStamina, MaxStamina, TEXT("")));
+	Lines.Add(MakeLine(LOCTEXT("StatStaminaRegen", "Stamina regen"), Regen, Regen, false, false, 0.0f, 0.0f, TEXT(" /s")));
+	Lines.Add(MakeLine(LOCTEXT("StatAttackPower", "Attack power"), AttackPower, NewAttackPower, false, false, 0.0f, 0.0f, TEXT("")));
+	Lines.Add(MakeLine(LOCTEXT("StatDefense", "Defense"), BaseDefense, BaseDefense, true, false, 0.0f, 0.0f, TEXT("")));
+	Lines.Add(MakeLine(LOCTEXT("StatDamageReduction", "Damage reduction"), Defense, NewDefense, true, false, 0.0f, 0.0f, TEXT("")));
+	return Lines;
+}
+
+#undef LOCTEXT_NAMESPACE
+
 UMDAbilitySystemComponent* UMDGameplayStatics::GetMDAbilitySystemComponent(const AActor* Actor)
 {
 	if (!Actor)
