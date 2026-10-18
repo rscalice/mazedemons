@@ -3,10 +3,16 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "MDInventoryTypes.h"
+#include "MDUITypes.h"
 #include "MDPlayerController.generated.h"
+
+class AMDStation;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDPickupNotified, FName, ItemRowName, int32, Quantity);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDUseRejected, EMDUseRejectReason, Reason, float, CooldownRemaining);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDToastNotified, FText, Message, EMDColor, Tone);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMDStationOpened, AMDStation*, Station);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDStationClosed);
 
 class UInputAction;
 struct FInputActionValue;
@@ -109,6 +115,30 @@ public:
 	// Authority only: tells the owning client why a consumable use was refused.
 	void NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
 
+	// Owning client: a generic HUD toast from the server (gold, repair / upgrade results, station rejections).
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|UI")
+	FMDToastNotified OnToastNotified;
+
+	// Authority only: shows Message as a toast on the owning client; Tone picks the accent colour.
+	void NotifyToast(const FText& Message, EMDColor Tone);
+
+	// ---- Stations (owning client only; the server just opens / the client closes by distance) ----
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Station")
+	FMDStationOpened OnStationOpened;
+
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Station")
+	FMDStationClosed OnStationClosed;
+
+	// Authority only: opens the station panel on the owning client.
+	void NotifyStationOpened(AMDStation* Station);
+
+	// Local: closes the panel state and fires OnStationClosed (also called when the player walks away or dies).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Station")
+	void CloseStation();
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Station")
+	AMDStation* GetOpenStation() const;
+
 	// Seconds between death and respawn.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Respawn", meta = (ClampMin = "0"))
 	float RespawnDelay = 5.0f;
@@ -168,6 +198,38 @@ public:
 	UFUNCTION(Exec)
 	void UseItem(int32 Index);
 
+	// Debug (non-shipping): adds gold to this player's inventory (server).
+	UFUNCTION(Exec)
+	void GiveGold(int32 Amount);
+
+	UFUNCTION(Server, Reliable)
+	void Server_GiveGold(int32 Amount);
+
+	// Debug (non-shipping): adds Upgrade Shards (same as GiveItem UpgradeShard).
+	UFUNCTION(Exec)
+	void GiveShards(int32 Qty = 1);
+
+	UFUNCTION(Server, Reliable)
+	void Server_GiveShards(int32 Qty);
+
+	// Debug (non-shipping): sets the durability of the item in an equipment slot (255 = all equipped), clamped to its max.
+	UFUNCTION(Exec)
+	void SetDurability(int32 Slot, int32 Value);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetDurability(uint8 Slot, int32 Value);
+
+	// Debug (non-shipping): sets a slot's upgrade level, clamped to 0..MaxUpgradeLevel.
+	UFUNCTION(Exec)
+	void SetUpgradeLevel(int32 Slot, int32 Level);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetUpgradeLevel(uint8 Slot, int32 Level);
+
+	// Debug (non-shipping): logs THIS machine's view of every equipped slot: durability, upgrade level, effective DR / AP.
+	UFUNCTION(Exec)
+	void DumpCondition();
+
 	// Debug (non-shipping): logs THIS machine's view of the local player's inventory (LogMDInventory, Warning).
 	UFUNCTION(Exec)
 	void DumpInventory();
@@ -195,6 +257,12 @@ protected:
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
 
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyToast(const FText& Message, EMDColor Tone);
+
+	UFUNCTION(Client, Reliable)
+	void Client_OpenStation(AMDStation* Station);
+
 	// Owning client: drops leftover sprint state after a respawn (MaxWalkSpeed back to default + OnRespawnResetMovement).
 	UFUNCTION(Client, Reliable)
 	void Client_ResetMovementState();
@@ -206,6 +274,12 @@ private:
 	void ApplyMovementReset();
 	void UpdateInteractFocus();
 	FTimerHandle FocusTraceTimer;
+
+	void OpenStationLocal(AMDStation* Station);
+	void WatchStation();
+	TWeakObjectPtr<AMDStation> OpenStation;
+	bool bStationOpen = false;
+	FTimerHandle StationWatchTimer;
 
 	TWeakObjectPtr<AActor> InteractFocus;
 	FText InteractPrompt;

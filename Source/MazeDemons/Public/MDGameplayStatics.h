@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "MDUITypes.h"
 #include "MDGameplayStatics.generated.h"
 
 class UMDAbilitySystemComponent;
@@ -9,6 +10,7 @@ class UMDInventoryComponent;
 class UMDStaminaComponent;
 class APawn;
 class APlayerState;
+class AController;
 
 // One row of the character stats screen. Texts are pre-formatted ("85 / 100", "12 /s", "16.9%") so UI only displays them.
 // With a compare row, New/NewText show the value after the swap and DeltaSign is +1 / -1 / 0 (0 = unchanged or no compare).
@@ -96,6 +98,16 @@ public:
 	// Pure: health after using a heal, capped at max.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
 	static float HealthAfterHeal(float Health, float MaxHealth, float HealAmount);
+
+	// Pure: colour token for a durability bar. >= 50% Success, 25..49% Warning, below 25% Danger. Fraction is clamped to [0,1].
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
+	static EMDColor DurabilityColor(float Fraction);
+
+	// ---- Gold ----
+	// Server only. Splits Gold evenly among the players within KillGoldRadius of Victim (dead players' corpses count); the
+	// remainder goes to Killer if it is one of them, else to the nearest. Each recipient gets AddGold + a "+N Gold" toast.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Gold")
+	static void AwardKillGold(const AActor* Victim, const AController* Killer, int32 Gold);
 
 	// ---- Stamina (accepts a pawn, controller or PlayerState). Actors with no stamina component (AI) are never gated. ----
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")

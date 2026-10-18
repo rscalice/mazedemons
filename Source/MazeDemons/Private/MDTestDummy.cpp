@@ -224,6 +224,14 @@ void AMDTestDummy::HandleHealthChanged(float OldValue, float NewValue)
 		UE_LOG(LogTemp, Log, TEXT("TestDummy %s: %s"), *GetName(), *Text);
 	}
 
+	if (NewValue <= 0.0f && OldValue > 0.0f && HasAuthority() && KillGold > 0)
+	{
+		AActor* LastInstigator = AbilitySystem->GetLastDamageInstigator();
+		const APawn* KillerPawn = Cast<APawn>(LastInstigator);
+		const AController* Killer = KillerPawn ? KillerPawn->GetController() : Cast<AController>(LastInstigator);
+		UMDGameplayStatics::AwardKillGold(this, Killer, KillGold);
+	}
+
 	if (NewValue <= 0.0f && OldValue > 0.0f && RespawnDelay >= 0.0f && HasAuthority())
 	{
 		GetWorldTimerManager().SetTimer(ResetTimer, this, &AMDTestDummy::ResetDummy, FMath::Max(RespawnDelay, 0.01f), false);

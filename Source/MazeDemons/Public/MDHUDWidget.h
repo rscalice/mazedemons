@@ -86,6 +86,10 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
 	void OnUseRejectedToast(const FText& Message);
 
+	// Generic server toast (gold, repair / upgrade results, station rejections). Tone picks the accent colour.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnToast(const FText& Message, EMDColor Tone);
+
 private:
 	void TryBind();
 	void Unbind();
@@ -104,6 +108,8 @@ private:
 	void HandlePickupNotified(FName ItemRowName, int32 Quantity);
 	UFUNCTION()
 	void HandleUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
+	UFUNCTION()
+	void HandleToast(FText Message, EMDColor Tone);
 
 	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
 	TWeakObjectPtr<UMDStaminaComponent> BoundStamina;
