@@ -111,7 +111,7 @@ struct MAZEDEMONS_API FMDEconomyTuning
 {
 	GENERATED_BODY()
 
-	// Gold / Shards to go from level N to N+1 (index N). Length defines nothing; MaxUpgradeLevel does.
+	// Gold and Shards to go from level N to N+1 (index N). MaxUpgradeLevel decides how many entries are used.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrade")
 	TArray<int32> UpgradeGold = { 50, 100, 200 };
 
