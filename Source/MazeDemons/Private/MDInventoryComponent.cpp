@@ -4,7 +4,11 @@
 #include "Engine/DataTable.h"
 #include "GameFramework/PlayerState.h"
 #include "MDAbilitySystemComponent.h"
+#include "MDGameplayStatics.h"
+#include "MDGameSettings.h"
 #include "MDPlayerController.h"
+#include "MDStation.h"
+#include "MDStatCalculator.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/GameStateBase.h"
@@ -80,6 +84,13 @@ namespace
 		return false;
 	}
 
+	bool IsArmorSlot(uint8 Slot) { return Slot >= MDItemType::Helmet && Slot <= MDItemType::Boots; }
+	// Armor and the shield wear when their owner takes damage.
+	bool WearsWhenHit(uint8 Slot) { return Slot == MDItemType::Shield || IsArmorSlot(Slot); }
+	// Slots a station can upgrade: the main weapon slots and armor (not the off hand, not the shield).
+	bool IsUpgradeSlot(uint8 Slot) { return Slot == MDItemType::MainHand || Slot == MDItemType::TwoHanded || IsArmorSlot(Slot); }
+	constexpr uint8 AllEquippedSlots = 255;
+
 	// Weapon slot (E_ItemTypes value) -> name used by the ASC's attack bonus map. NAME_None = no attack bonus.
 	FName WeaponSlotName(uint8 Slot)
 	{
@@ -107,6 +118,8 @@ void UMDInventoryComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, Items, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, GoldAmount, COND_OwnerOnly);
 	DOREPLIFETIME(UMDInventoryComponent, Equipped);
+	DOREPLIFETIME_CONDITION(UMDInventoryComponent, EquippedCondition, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UMDInventoryComponent, SlotUpgrades, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, QuickSlots, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, ConsumableReadyAtServer, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UMDInventoryComponent, ConsumableCooldownDuration, COND_OwnerOnly);
@@ -150,6 +163,10 @@ uint8 UMDInventoryComponent::GetSlotForItem_Implementation(FName ItemRowName) co
 
 int32 UMDInventoryComponent::GetMaxStackForItem_Implementation(FName ItemRowName) const
 {
+	if (GetItemMaxDurability(ItemRowName) > 0)
+	{
+		return 1; // every instance carries its own durability
+	}
 	if (!ItemTable)
 	{
 		return 1;
@@ -516,7 +533,9 @@ void UMDInventoryComponent::ApplyArmorReduction(uint8 Slot, FName Row)
 		return;
 	}
 
-	const float Percent = GetItemArmorReduction(Row);
+	// Effective reduction: row DR plus the slot's upgrade bonus, scaled by the equipped item's condition.
+	const float Percent = Row.IsNone() ? 0.0f : UMDStatCalculator::EffectivePieceDR(GetItemArmorReduction(Row),
+		GetSlotUpgradeLevel(Slot), GetSlotConditionMultiplier(Slot), UMDGameSettings::GetEconomy());
 	if (Percent > 0.0f)
 	{
 		ASC->SetArmorPieceDamageReduction(SlotName, Percent);
@@ -550,6 +569,7 @@ void UMDInventoryComponent::ApplyWeaponBonus(uint8 Slot, FName Row)
 	{
 		ASC->RemoveWeaponAttackBonus(SlotName);
 	}
+	PushWeaponModifiers();
 }
 
 // ---- Item reads ----
@@ -599,6 +619,24 @@ float UMDInventoryComponent::GetItemAttackBonus(FName ItemRowName) const
 {
 	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
 	return Stats ? Stats->AttackPowerBonus : 0.0f;
+}
+
+int32 UMDInventoryComponent::GetItemMaxDurability(FName ItemRowName) const
+{
+	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
+	return Stats ? FMath::Max(0, Stats->MaxDurability) : 0;
+}
+
+int32 UMDInventoryComponent::GetItemValue(FName ItemRowName) const
+{
+	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
+	return Stats ? FMath::Max(0, Stats->ItemValue) : 0;
+}
+
+bool UMDInventoryComponent::IsItemUpgradeable(FName ItemRowName) const
+{
+	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
+	return Stats && Stats->bUpgradeable;
 }
 
 // ---- Consumable cooldown ----
@@ -668,6 +706,12 @@ bool UMDInventoryComponent::AddItem(FName ItemRowName, int32 Quantity)
 	{
 		return false;
 	}
+	// Gold rows are currency, not items: they go straight to the gold counter.
+	if (GetSlotForItem(ItemRowName) == GoldSlot)
+	{
+		AddGold(Quantity);
+		return true;
+	}
 	// All-or-nothing: refuse if the whole quantity does not fit.
 	if (!HasRoomForItem(ItemRowName, Quantity))
 	{
@@ -695,11 +739,35 @@ bool UMDInventoryComponent::AddItem(FName ItemRowName, int32 Quantity)
 		FMDItemStack& NewStack = Items.AddDefaulted_GetRef();
 		NewStack.ItemRowName = ItemRowName;
 		NewStack.Quantity = FMath::Min(MaxStack, Remaining);
+		NewStack.Durability = static_cast<int16>(ResolveDurabilityForRow(ItemRowName, MD_NoDurability));
 		Remaining -= NewStack.Quantity;
 	}
 
 	OnInventoryChanged.Broadcast();
 	OnQuickSlotsChanged.Broadcast(); // counts changed
+	return true;
+}
+
+bool UMDInventoryComponent::AddItemInstance(const FMDItemStack& Instance)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Instance.Quantity <= 0 || !IsValidRow(Instance.ItemRowName))
+	{
+		return false;
+	}
+	if (GetItemMaxDurability(Instance.ItemRowName) <= 0)
+	{
+		return AddItem(Instance.ItemRowName, Instance.Quantity); // nothing instance-specific to keep
+	}
+	if (Instance.Quantity != 1 || !HasRoomForItem(Instance.ItemRowName, 1))
+	{
+		return false; // durable items are single-unit stacks
+	}
+	FMDItemStack& NewStack = Items.AddDefaulted_GetRef();
+	NewStack.ItemRowName = Instance.ItemRowName;
+	NewStack.Quantity = 1;
+	NewStack.Durability = static_cast<int16>(ResolveDurabilityForRow(Instance.ItemRowName, Instance.Durability));
+	OnInventoryChanged.Broadcast();
+	OnQuickSlotsChanged.Broadcast();
 	return true;
 }
 
@@ -728,6 +796,59 @@ void UMDInventoryComponent::AddGold(int32 Amount)
 	}
 	GoldAmount = FMath::Max(0, GoldAmount + Amount);
 	OnInventoryChanged.Broadcast();
+}
+
+bool UMDInventoryComponent::SpendGold(int32 Amount)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Amount < 0 || GoldAmount < Amount)
+	{
+		return false;
+	}
+	if (Amount > 0)
+	{
+		GoldAmount -= Amount;
+		OnInventoryChanged.Broadcast();
+	}
+	return true;
+}
+
+bool UMDInventoryComponent::RemoveItemByRow(FName Row, int32 Qty)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Row.IsNone() || Qty <= 0)
+	{
+		return false;
+	}
+	int32 Total = 0;
+	for (const FMDItemStack& Stack : Items)
+	{
+		if (Stack.ItemRowName == Row)
+		{
+			Total += Stack.Quantity;
+		}
+	}
+	if (Total < Qty)
+	{
+		return false;
+	}
+	int32 Remaining = Qty;
+	for (int32 i = Items.Num() - 1; i >= 0 && Remaining > 0; --i)
+	{
+		if (Items[i].ItemRowName != Row)
+		{
+			continue;
+		}
+		const int32 Taken = FMath::Min(Items[i].Quantity, Remaining);
+		Items[i].Quantity -= Taken;
+		Remaining -= Taken;
+		if (Items[i].Quantity <= 0)
+		{
+			Items.RemoveAt(i);
+		}
+	}
+	ValidateQuickSlots();
+	OnInventoryChanged.Broadcast();
+	OnQuickSlotsChanged.Broadcast();
+	return true;
 }
 
 // ---- Requests ----
@@ -839,8 +960,14 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 		return;
 	}
 
+	BindToASC(); // idempotent; guarantees armor wear is wired for whoever equips
+
 	FMDEquippedSlot* Existing = Equipped.FindByPredicate([Slot](const FMDEquippedSlot& E) { return E.Slot == Slot; });
 	const FName PreviousRow = Existing ? Existing->ItemRowName : NAME_None;
+	// Condition travels with the item: read both before either moves.
+	const int32 NewDurability = ResolveDurabilityForRow(NewRow, Items[Index].Durability);
+	const int32 PreviousDurability = PreviousRow.IsNone() ? static_cast<int32>(MD_NoDurability)
+		: ResolveDurabilityForRow(PreviousRow, GetConditionDurability(Slot));
 
 	// Take one unit out of the stack.
 	const bool bStackEmptied = Items[Index].Quantity <= 1;
@@ -868,9 +995,14 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 		NewEntry.ItemRowName = NewRow;
 	}
 
+	SetConditionDurability(Slot, NewDurability);
 	if (!PreviousRow.IsNone())
 	{
-		AddItem(PreviousRow, 1); // room guaranteed above
+		FMDItemStack Previous;
+		Previous.ItemRowName = PreviousRow;
+		Previous.Quantity = 1;
+		Previous.Durability = static_cast<int16>(PreviousDurability);
+		AddItemInstance(Previous); // room guaranteed above
 	}
 
 	OnInventoryChanged.Broadcast();
@@ -888,11 +1020,16 @@ void UMDInventoryComponent::UnequipSlot_Impl(uint8 Slot)
 		return;
 	}
 	const FName Row = Equipped[EqIdx].ItemRowName;
-	if (!AddItem(Row, 1))
+	FMDItemStack Returned;
+	Returned.ItemRowName = Row;
+	Returned.Quantity = 1;
+	Returned.Durability = static_cast<int16>(ResolveDurabilityForRow(Row, GetConditionDurability(Slot)));
+	if (!AddItemInstance(Returned))
 	{
 		return; // inventory full, keep it equipped
 	}
 	Equipped.RemoveAt(EqIdx);
+	SetConditionDurability(Slot, MD_NoDurability);
 	OnEquipmentChanged.Broadcast();
 	ApplyArmorReduction(Slot, NAME_None);
 	ApplyWeaponBonus(Slot, NAME_None);
@@ -933,6 +1070,585 @@ void UMDInventoryComponent::DropItem_Impl(int32 Index, int32 Quantity)
 	}
 }
 
+// ---- Durability / upgrades ----
+
+#define LOCTEXT_NAMESPACE "MDStation"
+
+const FMDEquippedSlot* UMDInventoryComponent::FindEquippedSlot(uint8 Slot) const
+{
+	return Equipped.FindByPredicate([Slot](const FMDEquippedSlot& E) { return E.Slot == Slot; });
+}
+
+int32 UMDInventoryComponent::ResolveDurabilityForRow(FName Row, int32 StoredDurability) const
+{
+	const int32 Max = GetItemMaxDurability(Row);
+	if (Max <= 0)
+	{
+		return MD_NoDurability;
+	}
+	return StoredDurability < 0 ? Max : FMath::Min(StoredDurability, Max);
+}
+
+int32 UMDInventoryComponent::GetConditionDurability(uint8 Slot) const
+{
+	const FMDSlotCondition* Entry = EquippedCondition.FindByPredicate([Slot](const FMDSlotCondition& C) { return C.Slot == Slot; });
+	return Entry ? static_cast<int32>(Entry->Durability) : static_cast<int32>(MD_NoDurability);
+}
+
+void UMDInventoryComponent::SetConditionDurability(uint8 Slot, int32 Durability)
+{
+	const int32 Index = EquippedCondition.IndexOfByPredicate([Slot](const FMDSlotCondition& C) { return C.Slot == Slot; });
+	if (Durability < 0)
+	{
+		if (Index != INDEX_NONE)
+		{
+			EquippedCondition.RemoveAt(Index);
+		}
+		return;
+	}
+	FMDSlotCondition& Entry = Index != INDEX_NONE ? EquippedCondition[Index] : EquippedCondition.AddDefaulted_GetRef();
+	Entry.Slot = Slot;
+	Entry.Durability = static_cast<int16>(FMath::Min(Durability, static_cast<int32>(MAX_int16)));
+}
+
+int32 UMDInventoryComponent::GetEquippedMaxDurability(uint8 Slot) const
+{
+	const FMDEquippedSlot* Entry = FindEquippedSlot(Slot);
+	return Entry ? GetItemMaxDurability(Entry->ItemRowName) : 0;
+}
+
+int32 UMDInventoryComponent::GetSlotUpgradeLevel(uint8 Slot) const
+{
+	const FMDSlotUpgrade* Entry = SlotUpgrades.FindByPredicate([Slot](const FMDSlotUpgrade& U) { return U.Slot == Slot; });
+	return Entry ? Entry->Level : 0;
+}
+
+void UMDInventoryComponent::SetSlotUpgradeLevel(uint8 Slot, int32 Level)
+{
+	const int32 Clamped = FMath::Clamp(Level, 0, 255);
+	const int32 Index = SlotUpgrades.IndexOfByPredicate([Slot](const FMDSlotUpgrade& U) { return U.Slot == Slot; });
+	if (Clamped == 0)
+	{
+		if (Index != INDEX_NONE)
+		{
+			SlotUpgrades.RemoveAt(Index);
+		}
+		return;
+	}
+	FMDSlotUpgrade& Entry = Index != INDEX_NONE ? SlotUpgrades[Index] : SlotUpgrades.AddDefaulted_GetRef();
+	Entry.Slot = Slot;
+	Entry.Level = static_cast<uint8>(Clamped);
+}
+
+void UMDInventoryComponent::GetSlotDurability(uint8 Slot, int32& Cur, int32& Max) const
+{
+	Max = GetEquippedMaxDurability(Slot);
+	Cur = 0;
+	if (Max > 0)
+	{
+		const int32 Stored = GetConditionDurability(Slot);
+		Cur = Stored < 0 ? Max : FMath::Min(Stored, Max);
+	}
+}
+
+void UMDInventoryComponent::GetItemDurability(int32 BagIndex, int32& Cur, int32& Max) const
+{
+	Cur = 0;
+	Max = 0;
+	if (Items.IsValidIndex(BagIndex))
+	{
+		Max = GetItemMaxDurability(Items[BagIndex].ItemRowName);
+		if (Max > 0)
+		{
+			Cur = Items[BagIndex].Durability < 0 ? Max : FMath::Min<int32>(Items[BagIndex].Durability, Max);
+		}
+	}
+}
+
+float UMDInventoryComponent::GetSlotConditionMultiplier(uint8 Slot) const
+{
+	int32 Cur = 0;
+	int32 Max = 0;
+	GetSlotDurability(Slot, Cur, Max);
+	return UMDStatCalculator::ConditionMultiplier(Cur, Max, UMDGameSettings::GetEconomy());
+}
+
+int32 UMDInventoryComponent::GetShardCount() const
+{
+	const FName ShardRow = UMDGameSettings::GetEconomy().ShardRow;
+	int32 Total = 0;
+	for (const FMDItemStack& Stack : Items)
+	{
+		if (Stack.ItemRowName == ShardRow)
+		{
+			Total += Stack.Quantity;
+		}
+	}
+	return Total;
+}
+
+uint8 UMDInventoryComponent::GetPrimaryWeaponSlot() const
+{
+	if (FindEquippedSlot(MDItemType::TwoHanded))
+	{
+		return MDItemType::TwoHanded;
+	}
+	return FindEquippedSlot(MDItemType::MainHand) ? MDItemType::MainHand : InvalidSlot;
+}
+
+void UMDInventoryComponent::PushWeaponModifiers()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	if (UMDAbilitySystemComponent* ASC = ResolveASC())
+	{
+		const uint8 Weapon = GetPrimaryWeaponSlot();
+		ASC->SetWeaponModifiers(Weapon == InvalidSlot ? 0 : GetSlotUpgradeLevel(Weapon),
+			Weapon == InvalidSlot ? 1.0f : GetSlotConditionMultiplier(Weapon));
+	}
+}
+
+void UMDInventoryComponent::RefreshEquippedStats()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	const TArray<FMDEquippedSlot> Snapshot = Equipped;
+	for (const FMDEquippedSlot& Entry : Snapshot)
+	{
+		ApplyArmorReduction(Entry.Slot, Entry.ItemRowName);
+	}
+	PushWeaponModifiers();
+}
+
+void UMDInventoryComponent::BindToASC()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	UMDAbilitySystemComponent* ASC = ResolveASC();
+	if (!ASC || BoundASC.Get() == ASC)
+	{
+		return;
+	}
+	if (UMDAbilitySystemComponent* Old = BoundASC.Get())
+	{
+		Old->OnDamageApplied.RemoveAll(this);
+	}
+	ASC->OnDamageApplied.AddUObject(this, &UMDInventoryComponent::HandleDamageApplied);
+	BoundASC = ASC;
+}
+
+void UMDInventoryComponent::HandleDamageApplied(AActor* Instigator, float Applied)
+{
+	// A lethal hit is covered by the death penalty; do not also wear the armor of a corpse.
+	const UMDAbilitySystemComponent* ASC = BoundASC.Get();
+	if (ASC && ASC->IsDead())
+	{
+		return;
+	}
+	ApplyArmorWear();
+}
+
+void UMDInventoryComponent::ApplyArmorWear()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	bool bWorn = false;
+	bool bEffectChanged = false;
+	for (FMDSlotCondition& Condition : EquippedCondition)
+	{
+		const int32 Max = WearsWhenHit(Condition.Slot) ? GetEquippedMaxDurability(Condition.Slot) : 0;
+		if (Max <= 0 || Condition.Durability <= 0)
+		{
+			continue;
+		}
+		const float Before = UMDStatCalculator::ConditionMultiplier(Condition.Durability, Max, Tuning);
+		Condition.Durability = static_cast<int16>(UMDStatCalculator::DurabilityAfterHit(Condition.Durability));
+		bWorn = true;
+		// The shield has no stat yet, so only armor pieces need a recompute when a threshold is crossed.
+		bEffectChanged |= Condition.Slot != MDItemType::Shield && UMDStatCalculator::ConditionMultiplier(Condition.Durability, Max, Tuning) != Before;
+	}
+	if (bEffectChanged)
+	{
+		RefreshEquippedStats();
+	}
+	if (bWorn)
+	{
+		OnInventoryChanged.Broadcast(); // the server-side owner (listen server) has no OnRep
+	}
+}
+
+void UMDInventoryComponent::ApplyWeaponWear()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	const uint8 Weapon = GetPrimaryWeaponSlot();
+	const int32 Max = Weapon == InvalidSlot ? 0 : GetEquippedMaxDurability(Weapon);
+	FMDSlotCondition* Condition = Max > 0 ? EquippedCondition.FindByPredicate([Weapon](const FMDSlotCondition& C) { return C.Slot == Weapon; }) : nullptr;
+	if (!Condition || Condition->Durability <= 0)
+	{
+		return;
+	}
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	const float Before = UMDStatCalculator::ConditionMultiplier(Condition->Durability, Max, Tuning);
+	Condition->Durability = static_cast<int16>(UMDStatCalculator::DurabilityAfterHit(Condition->Durability));
+	if (UMDStatCalculator::ConditionMultiplier(Condition->Durability, Max, Tuning) != Before)
+	{
+		PushWeaponModifiers();
+	}
+	OnInventoryChanged.Broadcast();
+}
+
+void UMDInventoryComponent::NotifyHitLanded(AActor* Instigator, const AActor* Victim)
+{
+	if (!Instigator || Instigator == Victim)
+	{
+		return; // environment damage and self damage never wear the weapon
+	}
+	if (UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(Instigator))
+	{
+		Inventory->ApplyWeaponWear();
+	}
+}
+
+void UMDInventoryComponent::ApplyDeathPenalty()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	bool bChanged = false;
+	for (FMDSlotCondition& Condition : EquippedCondition)
+	{
+		const int32 Max = GetEquippedMaxDurability(Condition.Slot);
+		if (Max <= 0 || Condition.Durability < 0)
+		{
+			continue;
+		}
+		const int32 NewDurability = UMDStatCalculator::DurabilityAfterDeath(Condition.Durability, Max, Tuning);
+		if (NewDurability != Condition.Durability)
+		{
+			Condition.Durability = static_cast<int16>(NewDurability);
+			bChanged = true;
+		}
+	}
+	if (bChanged)
+	{
+		RefreshEquippedStats();
+		OnInventoryChanged.Broadcast();
+	}
+}
+
+// ---- Stations ----
+
+FText UMDInventoryComponent::GetStationRejectText(EMDStationReject Reason, int32 Needed, int32 Have)
+{
+	switch (Reason)
+	{
+	case EMDStationReject::NoStation:
+		return LOCTEXT("RejectNoStation", "No station in reach");
+	case EMDStationReject::OutOfRange:
+		return LOCTEXT("RejectOutOfRange", "Too far from station");
+	case EMDStationReject::Dead:
+		return LOCTEXT("RejectDead", "Cannot use while dead");
+	case EMDStationReject::EmptySlot:
+		return LOCTEXT("RejectEmptySlot", "Nothing equipped there");
+	case EMDStationReject::NotUpgradeable:
+		return LOCTEXT("RejectNotUpgradeable", "Cannot upgrade this item");
+	case EMDStationReject::MaxLevel:
+		return LOCTEXT("RejectMaxLevel", "Max level");
+	case EMDStationReject::FullDurability:
+		return LOCTEXT("RejectFullDurability", "Already at full durability");
+	case EMDStationReject::NotEnoughGold:
+		return FText::Format(LOCTEXT("RejectNotEnoughGold", "Not enough gold (need {0})"), FText::AsNumber(Needed));
+	case EMDStationReject::NotEnoughShards:
+		return FText::Format(LOCTEXT("RejectNotEnoughShards", "Not enough Shards ({0}/{1})"), FText::AsNumber(Have), FText::AsNumber(Needed));
+	default:
+		return FText::GetEmpty();
+	}
+}
+
+EMDStationReject UMDInventoryComponent::CheckStationAccess(const AActor* Station, uint8 ServiceFlag) const
+{
+	const AMDStation* StationActor = Cast<AMDStation>(Station);
+	if (!StationActor || (StationActor->Services & ServiceFlag) == 0)
+	{
+		return EMDStationReject::NoStation;
+	}
+	const UMDAbilitySystemComponent* ASC = ResolveASC();
+	if (ASC && ASC->IsDead())
+	{
+		return EMDStationReject::Dead;
+	}
+	// Players act through their pawn; a bare actor owner (tests, AI) is its own body.
+	const AActor* Body = GetOwnerPawn();
+	if (!Body)
+	{
+		Body = GetOwner();
+	}
+	if (!Body || !AMDStation::IsWithinRange(Body->GetActorLocation(), StationActor->GetActorLocation(), UMDGameSettings::GetEconomy().StationRange))
+	{
+		return EMDStationReject::OutOfRange;
+	}
+	return EMDStationReject::None;
+}
+
+EMDStationReject UMDInventoryComponent::GetRepairReject(const AActor* Station, uint8 Slot, int32& OutCost) const
+{
+	OutCost = 0;
+	const EMDStationReject Access = CheckStationAccess(Station, static_cast<uint8>(EMDStationService::Repair));
+	if (Access != EMDStationReject::None)
+	{
+		return Access;
+	}
+
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	bool bAnyDurable = false;
+	bool bAnyMissing = false;
+	for (const FMDEquippedSlot& Entry : Equipped)
+	{
+		if (Slot != AllEquippedSlots && Entry.Slot != Slot)
+		{
+			continue;
+		}
+		int32 Cur = 0;
+		int32 Max = 0;
+		GetSlotDurability(Entry.Slot, Cur, Max);
+		if (Max <= 0)
+		{
+			continue;
+		}
+		bAnyDurable = true;
+		if (Cur < Max)
+		{
+			bAnyMissing = true;
+			OutCost += UMDStatCalculator::RepairCost(Max - Cur, GetItemValue(Entry.ItemRowName), GetSlotUpgradeLevel(Entry.Slot), Tuning);
+		}
+	}
+	if (Slot != AllEquippedSlots && !FindEquippedSlot(Slot))
+	{
+		return EMDStationReject::EmptySlot;
+	}
+	if (!bAnyDurable && Slot == AllEquippedSlots)
+	{
+		return EMDStationReject::EmptySlot;
+	}
+	if (!bAnyMissing)
+	{
+		return EMDStationReject::FullDurability;
+	}
+	return GoldAmount < OutCost ? EMDStationReject::NotEnoughGold : EMDStationReject::None;
+}
+
+EMDStationReject UMDInventoryComponent::GetUpgradeReject(const AActor* Station, uint8 Slot, int32& OutGold, int32& OutShards) const
+{
+	OutGold = 0;
+	OutShards = 0;
+	const EMDStationReject Access = CheckStationAccess(Station, static_cast<uint8>(EMDStationService::Upgrade));
+	if (Access != EMDStationReject::None)
+	{
+		return Access;
+	}
+	const FMDEquippedSlot* Entry = Slot < MDItemType::NumEquipSlots ? FindEquippedSlot(Slot) : nullptr;
+	if (!Entry)
+	{
+		return EMDStationReject::EmptySlot;
+	}
+	if (!IsUpgradeSlot(Slot) || !IsItemUpgradeable(Entry->ItemRowName))
+	{
+		return EMDStationReject::NotUpgradeable;
+	}
+	if (!UMDStatCalculator::GetUpgradeCost(GetSlotUpgradeLevel(Slot), UMDGameSettings::GetEconomy(), OutGold, OutShards))
+	{
+		return EMDStationReject::MaxLevel;
+	}
+	if (GoldAmount < OutGold)
+	{
+		return EMDStationReject::NotEnoughGold;
+	}
+	return GetShardCount() < OutShards ? EMDStationReject::NotEnoughShards : EMDStationReject::None;
+}
+
+void UMDInventoryComponent::SendToast(const FText& Message, EMDColor Tone) const
+{
+	if (const APawn* Pawn = GetOwnerPawn())
+	{
+		if (AMDPlayerController* PC = Cast<AMDPlayerController>(Pawn->GetController()))
+		{
+			PC->NotifyToast(Message, Tone);
+		}
+	}
+}
+
+void UMDInventoryComponent::RequestRepair(AActor* Station, uint8 Slot)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		Repair_Impl(Station, Slot);
+	}
+	else
+	{
+		Server_Repair(Station, Slot);
+	}
+}
+
+void UMDInventoryComponent::RequestUpgrade(AActor* Station, uint8 Slot)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		Upgrade_Impl(Station, Slot);
+	}
+	else
+	{
+		Server_Upgrade(Station, Slot);
+	}
+}
+
+bool UMDInventoryComponent::Server_Repair_Validate(AActor* Station, uint8 Slot)
+{
+	return Slot < MDItemType::NumEquipSlots || Slot == AllEquippedSlots;
+}
+
+void UMDInventoryComponent::Server_Repair_Implementation(AActor* Station, uint8 Slot)
+{
+	Repair_Impl(Station, Slot);
+}
+
+bool UMDInventoryComponent::Server_Upgrade_Validate(AActor* Station, uint8 Slot)
+{
+	return Slot < MDItemType::NumEquipSlots;
+}
+
+void UMDInventoryComponent::Server_Upgrade_Implementation(AActor* Station, uint8 Slot)
+{
+	Upgrade_Impl(Station, Slot);
+}
+
+bool UMDInventoryComponent::Repair_Impl(AActor* Station, uint8 Slot)
+{
+	int32 Cost = 0;
+	const EMDStationReject Reject = GetRepairReject(Station, Slot, Cost);
+	if (Reject != EMDStationReject::None)
+	{
+		SendToast(GetStationRejectText(Reject, Cost, GoldAmount), EMDColor::Warning);
+		return false;
+	}
+	if (!SpendGold(Cost))
+	{
+		return false;
+	}
+
+	FText Subject = LOCTEXT("RepairAllSubject", "All gear");
+	for (const FMDEquippedSlot& Entry : Equipped)
+	{
+		if (Slot != AllEquippedSlots && Entry.Slot != Slot)
+		{
+			continue;
+		}
+		const int32 Max = GetItemMaxDurability(Entry.ItemRowName);
+		if (Max > 0)
+		{
+			SetConditionDurability(Entry.Slot, Max);
+			if (Slot != AllEquippedSlots)
+			{
+				Subject = UMDGameplayStatics::GetItemDisplayName(Entry.ItemRowName);
+			}
+		}
+	}
+	RefreshEquippedStats();
+	OnInventoryChanged.Broadcast();
+	SendToast(FText::Format(LOCTEXT("RepairDone", "{0} repaired (-{1} gold)"), Subject, FText::AsNumber(Cost)), EMDColor::Success);
+	return true;
+}
+
+bool UMDInventoryComponent::Upgrade_Impl(AActor* Station, uint8 Slot)
+{
+	int32 Gold = 0;
+	int32 Shards = 0;
+	const EMDStationReject Reject = GetUpgradeReject(Station, Slot, Gold, Shards);
+	if (Reject != EMDStationReject::None)
+	{
+		const bool bShards = Reject == EMDStationReject::NotEnoughShards;
+		SendToast(GetStationRejectText(Reject, bShards ? Shards : Gold, bShards ? GetShardCount() : GoldAmount), EMDColor::Warning);
+		return false;
+	}
+	const FMDEquippedSlot* Entry = FindEquippedSlot(Slot); // GetUpgradeReject guarantees it exists
+	if (!Entry)
+	{
+		return false;
+	}
+	const FName Row = Entry->ItemRowName;
+	const int32 Max = GetItemMaxDurability(Row);
+	const FName ShardRow = UMDGameSettings::GetEconomy().ShardRow;
+
+	if (!SpendGold(Gold))
+	{
+		return false;
+	}
+	if (Shards > 0 && !RemoveItemByRow(ShardRow, Shards))
+	{
+		AddGold(Gold); // cannot happen after GetUpgradeReject, but never keep the gold of a failed upgrade
+		return false;
+	}
+
+	const int32 NewLevel = GetSlotUpgradeLevel(Slot) + 1;
+	SetSlotUpgradeLevel(Slot, NewLevel);
+	if (Max > 0)
+	{
+		SetConditionDurability(Slot, Max); // an upgrade also restores the item
+	}
+	RefreshEquippedStats();
+	OnInventoryChanged.Broadcast();
+	SendToast(FText::Format(LOCTEXT("UpgradeDone", "{0} upgraded to +{1}"), UMDGameplayStatics::GetItemDisplayName(Row), FText::AsNumber(NewLevel)), EMDColor::Upgrade);
+	return true;
+}
+
+void UMDInventoryComponent::DebugSetDurability(uint8 Slot, int32 Value)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	for (const FMDEquippedSlot& Entry : Equipped)
+	{
+		if (Slot != AllEquippedSlots && Entry.Slot != Slot)
+		{
+			continue;
+		}
+		const int32 Max = GetItemMaxDurability(Entry.ItemRowName);
+		if (Max > 0)
+		{
+			SetConditionDurability(Entry.Slot, FMath::Clamp(Value, 0, Max));
+		}
+	}
+	RefreshEquippedStats();
+	OnInventoryChanged.Broadcast();
+}
+
+void UMDInventoryComponent::DebugSetUpgradeLevel(uint8 Slot, int32 Level)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Slot >= MDItemType::NumEquipSlots)
+	{
+		return;
+	}
+	SetSlotUpgradeLevel(Slot, FMath::Clamp(Level, 0, UMDGameSettings::GetEconomy().MaxUpgradeLevel));
+	RefreshEquippedStats();
+	OnInventoryChanged.Broadcast();
+}
+
+#undef LOCTEXT_NAMESPACE
+
 // ---- OnReps ----
 
 void UMDInventoryComponent::OnRep_Items()
@@ -942,6 +1658,16 @@ void UMDInventoryComponent::OnRep_Items()
 }
 
 void UMDInventoryComponent::OnRep_Gold()
+{
+	OnInventoryChanged.Broadcast();
+}
+
+void UMDInventoryComponent::OnRep_Condition()
+{
+	OnInventoryChanged.Broadcast();
+}
+
+void UMDInventoryComponent::OnRep_SlotUpgrades()
 {
 	OnInventoryChanged.Broadcast();
 }
