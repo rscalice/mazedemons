@@ -4,6 +4,7 @@
 #include "Engine/DataTable.h"
 #include "GameFramework/PlayerState.h"
 #include "MDAbilitySystemComponent.h"
+#include "MDPlayerController.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/GameStateBase.h"
@@ -249,6 +250,52 @@ bool UMDInventoryComponent::CanUseHeal(float Health, float MaxHealth, bool bDead
 	return !bDead && MaxHealth > 0.0f && Health < MaxHealth && Now >= ReadyAt;
 }
 
+EMDUseRejectReason UMDInventoryComponent::GetUseRejectReason(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt)
+{
+	if (bDead)
+	{
+		return EMDUseRejectReason::Dead;
+	}
+	if (Now < ReadyAt)
+	{
+		return EMDUseRejectReason::OnCooldown;
+	}
+	if (!(MaxHealth > 0.0f) || Health >= MaxHealth)
+	{
+		return EMDUseRejectReason::HealthFull;
+	}
+	return EMDUseRejectReason::None;
+}
+
+FText UMDInventoryComponent::GetUseRejectText(EMDUseRejectReason Reason, float CooldownRemaining)
+{
+	switch (Reason)
+	{
+	case EMDUseRejectReason::HealthFull:
+		return NSLOCTEXT("MDInventory", "UseRejectHealthFull", "Health is full");
+	case EMDUseRejectReason::OnCooldown:
+		return FText::Format(NSLOCTEXT("MDInventory", "UseRejectCooldown", "Potion on cooldown ({0}s)"),
+			FText::AsNumber(FMath::Max(1, FMath::CeilToInt(CooldownRemaining))));
+	case EMDUseRejectReason::Dead:
+		return NSLOCTEXT("MDInventory", "UseRejectDead", "Cannot use while dead");
+	case EMDUseRejectReason::EmptySlot:
+		return NSLOCTEXT("MDInventory", "UseRejectEmptySlot", "Nothing in slot");
+	default:
+		return FText::GetEmpty();
+	}
+}
+
+void UMDInventoryComponent::NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining) const
+{
+	if (const APawn* Pawn = GetOwnerPawn())
+	{
+		if (AMDPlayerController* PC = Cast<AMDPlayerController>(Pawn->GetController()))
+		{
+			PC->NotifyUseRejected(Reason, CooldownRemaining);
+		}
+	}
+}
+
 void UMDInventoryComponent::RequestUseItem(int32 Index)
 {
 	if (GetOwner() && GetOwner()->HasAuthority())
@@ -287,6 +334,8 @@ bool UMDInventoryComponent::UseItem_Impl(int32 Index)
 	const double Now = GetServerNow(); // same clock the owning client reads the cooldown against
 	if (!CanUseHeal(ASC->GetHealth(), ASC->GetMaxHealth(), ASC->IsDead(), Now, ConsumableReadyAt))
 	{
+		NotifyUseRejected(GetUseRejectReason(ASC->GetHealth(), ASC->GetMaxHealth(), ASC->IsDead(), Now, ConsumableReadyAt),
+			static_cast<float>(FMath::Max(0.0, ConsumableReadyAt - Now)));
 		return false;
 	}
 	ConsumableReadyAt = Now + Row->CooldownSeconds;
@@ -422,7 +471,12 @@ bool UMDInventoryComponent::AssignQuickSlot_Impl(int32 QuickIndex, int32 Invento
 bool UMDInventoryComponent::UseQuickSlot_Impl(int32 QuickIndex)
 {
 	const int32 Index = ResolveQuickSlotIndex(QuickIndex);
-	return Index != INDEX_NONE && UseItem_Impl(Index); // keeps CanUseHeal + cooldown
+	if (Index == INDEX_NONE)
+	{
+		NotifyUseRejected(EMDUseRejectReason::EmptySlot, 0.0f);
+		return false;
+	}
+	return UseItem_Impl(Index); // keeps CanUseHeal + cooldown
 }
 
 void UMDInventoryComponent::ValidateQuickSlots()

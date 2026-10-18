@@ -131,6 +131,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	static bool CanUseHeal(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt);
 
+	// Pure rule: why CanUseHeal would refuse (None when it would accept). Priority: Dead, OnCooldown, HealthFull.
+	static EMDUseRejectReason GetUseRejectReason(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt);
+
+	// Pure: player-facing toast text for a rejection (LOCTEXT). CooldownRemaining is rounded up to whole seconds.
+	static FText GetUseRejectText(EMDUseRejectReason Reason, float CooldownRemaining);
+
 	// ---- Quick slots (consumables only). Store item row names, not inventory indices. Owner-only replication. ----
 	static constexpr int32 NumQuickSlots = 2;
 
@@ -263,6 +269,8 @@ private:
 	// Current server clock: GameState server time when available, else world time.
 	double GetServerNow() const;
 	bool UseItem_Impl(int32 Index);
+	// Authority: tells the owning client why a use was refused (toast). No-op without a controller.
+	void NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining) const;
 	// Server logic (no authority check; callers are the authority paths). Tests call these directly.
 	bool AssignQuickSlot_Impl(int32 QuickIndex, int32 InventoryIndex);
 	bool UseQuickSlot_Impl(int32 QuickIndex);

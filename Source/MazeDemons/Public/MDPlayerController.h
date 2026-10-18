@@ -2,9 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "MDInventoryTypes.h"
 #include "MDPlayerController.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDPickupNotified, FName, ItemRowName, int32, Quantity);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDUseRejected, EMDUseRejectReason, Reason, float, CooldownRemaining);
 
 class UInputAction;
 struct FInputActionValue;
@@ -100,6 +102,13 @@ public:
 	// Authority only: tells the owning client a pickup succeeded.
 	void NotifyPickup(FName ItemRowName, int32 Quantity);
 
+	// Owning client: the server refused a consumable use (HUD toast).
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Inventory")
+	FMDUseRejected OnUseRejected;
+
+	// Authority only: tells the owning client why a consumable use was refused.
+	void NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
+
 	// Seconds between death and respawn.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Respawn", meta = (ClampMin = "0"))
 	float RespawnDelay = 5.0f;
@@ -182,6 +191,9 @@ protected:
 
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyPickup(FName ItemRowName, int32 Quantity);
+
+	UFUNCTION(Client, Reliable)
+	void Client_NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
 
 	// Owning client: drops leftover sprint state after a respawn (MaxWalkSpeed back to default + OnRespawnResetMovement).
 	UFUNCTION(Client, Reliable)

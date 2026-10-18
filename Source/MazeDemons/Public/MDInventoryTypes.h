@@ -4,6 +4,17 @@
 #include "Engine/DataTable.h"
 #include "MDInventoryTypes.generated.h"
 
+// Why a consumable use was refused (server decides, owning client shows a toast).
+UENUM(BlueprintType)
+enum class EMDUseRejectReason : uint8
+{
+	None,
+	HealthFull,
+	OnCooldown,
+	Dead,
+	EmptySlot
+};
+
 // Row of DT_Consumables (same row names as DT_Items). An item with a row here is usable (RequestUseItem) and never equippable.
 // Kept in C++ so consumables need no change to the Blueprint enum E_ItemTypes / struct S_ItemInfo.
 USTRUCT(BlueprintType)

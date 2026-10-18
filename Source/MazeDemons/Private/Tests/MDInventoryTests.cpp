@@ -991,4 +991,36 @@ bool FMDInvArmorViaPlayerStateTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---- Consumable rejection reasons ----
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDInvUseRejectReasonTest, "MazeDemons.Inventory.Consumable.RejectReason", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDInvUseRejectReasonTest::RunTest(const FString& Parameters)
+{
+	using Inv = UMDInventoryComponent;
+	TestTrue(TEXT("full health"), Inv::GetUseRejectReason(100.0f, 100.0f, false, 10.0, 0.0) == EMDUseRejectReason::HealthFull);
+	TestTrue(TEXT("hurt and ready accepts"), Inv::GetUseRejectReason(50.0f, 100.0f, false, 10.0, 0.0) == EMDUseRejectReason::None);
+	TestTrue(TEXT("hurt but cooling down"), Inv::GetUseRejectReason(50.0f, 100.0f, false, 10.0, 12.5) == EMDUseRejectReason::OnCooldown);
+	TestTrue(TEXT("dead wins over cooldown"), Inv::GetUseRejectReason(0.0f, 100.0f, true, 10.0, 12.5) == EMDUseRejectReason::Dead);
+	TestTrue(TEXT("cooldown wins over full health"), Inv::GetUseRejectReason(100.0f, 100.0f, false, 10.0, 12.5) == EMDUseRejectReason::OnCooldown);
+	TestTrue(TEXT("no max health counts as full"), Inv::GetUseRejectReason(0.0f, 0.0f, false, 10.0, 0.0) == EMDUseRejectReason::HealthFull);
+
+	// The reason must agree with CanUseHeal for every input.
+	TestEqual(TEXT("None iff CanUseHeal (accept)"), Inv::GetUseRejectReason(50.0f, 100.0f, false, 10.0, 0.0) == EMDUseRejectReason::None, Inv::CanUseHeal(50.0f, 100.0f, false, 10.0, 0.0));
+	TestEqual(TEXT("None iff CanUseHeal (reject)"), Inv::GetUseRejectReason(100.0f, 100.0f, false, 10.0, 0.0) == EMDUseRejectReason::None, Inv::CanUseHeal(100.0f, 100.0f, false, 10.0, 0.0));
+
+	TestTrue(TEXT("cooldown text rounds seconds up"), Inv::GetUseRejectText(EMDUseRejectReason::OnCooldown, 2.1f).ToString().Contains(TEXT("3")));
+	TestTrue(TEXT("empty slot has text"), !Inv::GetUseRejectText(EMDUseRejectReason::EmptySlot, 0.0f).IsEmpty());
+	TestTrue(TEXT("None has no text"), Inv::GetUseRejectText(EMDUseRejectReason::None, 0.0f).IsEmpty());
+
+	// Using an empty quick slot is a safe no-op (the EmptySlot notice is skipped when the owner has no controller).
+	FMDInvFixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	Fx.Inv->RequestUseQuickSlot(0);
+	TestEqual(TEXT("empty quick slot changes nothing"), Fx.Inv->GetItems().Num(), 0);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
