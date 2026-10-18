@@ -47,7 +47,7 @@ struct FMDUpgradeTestAccess
 
 namespace
 {
-	const FName TestChest(TEXT("TestChest"));
+	const FName UpgTestChestRow(TEXT("TestChest"));
 	const FName TestShield(TEXT("TestShield"));
 	const FName TestSword(TEXT("TestSword"));
 	const FName TestClaymore(TEXT("TestClaymore"));
@@ -87,7 +87,7 @@ namespace
 			Stats = NewObject<UDataTable>(GetTransientPackage());
 			Stats->RowStruct = FMDItemStatsRow::StaticStruct();
 			Stats->AddToRoot();
-			Stats->AddRow(TestChest, MakeStats(40, 100, true));
+			Stats->AddRow(UpgTestChestRow, MakeStats(40, 100, true));
 			Stats->AddRow(TestShield, MakeStats(30, 100, false));
 			Stats->AddRow(TestSword, MakeStats(40, 100, true));
 			Stats->AddRow(TestClaymore, MakeStats(60, 100, true));
@@ -403,7 +403,7 @@ bool FMDUpgradeRejectsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("empty slot"), Inv->GetUpgradeReject(Station, Chest, Gold, Shards), EMDStationReject::EmptySlot);
 	TestEqual(TEXT("invalid slot"), Inv->GetUpgradeReject(Station, 255, Gold, Shards), EMDStationReject::EmptySlot);
 
-	FMDUpgradeTestAccess::SetEquipped(Inv, Chest, TestChest, 62);
+	FMDUpgradeTestAccess::SetEquipped(Inv, Chest, UpgTestChestRow, 62);
 	FMDUpgradeTestAccess::SetEquipped(Inv, MDItemType::Shield, TestShield, 100);
 	FMDUpgradeTestAccess::SetEquipped(Inv, MDItemType::OffHand, TestAxe, 100);
 
@@ -477,7 +477,7 @@ bool FMDRepairRejectsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("repair all with nothing equipped"), Inv->GetRepairReject(Station, 255, Cost), EMDStationReject::EmptySlot);
 	TestEqual(TEXT("repair an empty slot"), Inv->GetRepairReject(Station, Chest, Cost), EMDStationReject::EmptySlot);
 
-	FMDUpgradeTestAccess::SetEquipped(Inv, Chest, TestChest, 100);
+	FMDUpgradeTestAccess::SetEquipped(Inv, Chest, UpgTestChestRow, 100);
 	FMDUpgradeTestAccess::SetEquipped(Inv, Hand, TestSword, 100);
 	TestEqual(TEXT("full durability"), Inv->GetRepairReject(Station, Chest, Cost), EMDStationReject::FullDurability);
 	TestEqual(TEXT("repair all at full durability"), Inv->GetRepairReject(Station, 255, Cost), EMDStationReject::FullDurability);
@@ -531,7 +531,7 @@ bool FMDWearTargetsTest::RunTest(const FString& Parameters)
 	AActor* Wearer = Fx.Owners[0];
 	AActor* Dummy = Fx.World->SpawnActor<AActor>();
 
-	FMDUpgradeTestAccess::SetEquipped(Inv, MDItemType::Chest, TestChest, 50);
+	FMDUpgradeTestAccess::SetEquipped(Inv, MDItemType::Chest, UpgTestChestRow, 50);
 	FMDUpgradeTestAccess::SetEquipped(Inv, MDItemType::Shield, TestShield, 50);
 	FMDUpgradeTestAccess::SetEquipped(Inv, MDItemType::MainHand, TestSword, 50);
 

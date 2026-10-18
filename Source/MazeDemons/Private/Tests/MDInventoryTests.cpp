@@ -233,7 +233,7 @@ bool FMDInvAddStackingTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const FName Row = Fx.FindRow([&Fx](FName R) { return Fx.StackOf(R) >= 2; });
+	const FName Row = Fx.FindRow([&Fx](FName R) { return Fx.StackOf(R) >= 2 && Fx.SlotOf(R) != TestGoldSlot; }); // gold rows go to the gold counter, not Items
 	if (Row.IsNone())
 	{
 		AddWarning(TEXT("No DT_Items row with maxStack >= 2; skipping stacking test"));
@@ -362,7 +362,7 @@ bool FMDInvRemoveTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const FName Row = Fx.FindRow([&Fx](FName R) { return Fx.StackOf(R) >= 2; });
+	const FName Row = Fx.FindRow([&Fx](FName R) { return Fx.StackOf(R) >= 2 && Fx.SlotOf(R) != TestGoldSlot; }); // gold rows go to the gold counter, not Items
 	if (Row.IsNone())
 	{
 		AddWarning(TEXT("No DT_Items row with maxStack >= 2; skipping remove test"));

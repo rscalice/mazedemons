@@ -10,6 +10,7 @@ class UBoxComponent;
 UENUM(BlueprintType, meta = (Bitflags, UseEnumValuesAsMaskValuesInEditor = "true"))
 enum class EMDStationService : uint8
 {
+	None = 0 UMETA(Hidden),
 	Repair = 1 << 0,
 	Upgrade = 1 << 1,
 	Respec = 1 << 2
