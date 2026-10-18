@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "MDInventoryTypes.h"
+#include "MDUITypes.h"
 #include "MDInventoryComponent.generated.h"
 
 class APawn;
@@ -84,13 +85,57 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Inventory")
 	TSoftObjectPtr<UDataTable> ConsumableTable = TSoftObjectPtr<UDataTable>(FSoftObjectPath(TEXT("/Game/Blueprints/Items/DT_Consumables.DT_Consumables")));
 
+	// DT_ItemStats (FMDItemStatsRow by item row name). Optional: a missing table means no bonuses.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Inventory")
+	TSoftObjectPtr<UDataTable> ItemStatsTable = TSoftObjectPtr<UDataTable>(FSoftObjectPath(TEXT("/Game/Blueprints/Items/DT_ItemStats.DT_ItemStats")));
+
 	// True if the item row has a DT_Consumables row.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	bool IsConsumable(FName ItemRowName) const;
 
+	// Health restored by a consumable row (0 if it is not one).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetConsumableHeal(FName ItemRowName) const;
+
+	// Equip slot (E_ItemTypes value) for a row, or 255 if not equippable. Public wrapper for UI / stat comparison.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	uint8 GetItemEquipSlot(FName ItemRowName) const { return GetSlotForItem(ItemRowName); }
+
+	// ---- Item reads (DT_Items column Rarity_*, ArmorDamageReductionPercent_*; DT_ItemStats) ----
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	EMDRarity GetItemRarity(FName ItemRowName) const;
+
+	// Damage reduction percent of an armor row (0 if none).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetItemArmorReduction(FName ItemRowName) const;
+
+	// Attack power bonus of a weapon row from DT_ItemStats (0 if the table or row is missing).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetItemAttackBonus(FName ItemRowName) const;
+
+	// Pure rule: maps the Blueprint enum byte to a rarity; anything outside 0..4 is Common.
+	static EMDRarity RarityFromByte(int32 Value);
+
+	// ---- Consumable cooldown (readable on the owning client) ----
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetConsumableCooldownRemaining() const;
+
+	// 1 = just used, 0 = ready.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetConsumableCooldownFraction() const;
+
+	// Pure rule: fraction of the cooldown still remaining in [0,1]; 0 when Duration <= 0.
+	static float CooldownFraction(double Now, double ReadyAt, float Duration);
+
 	// Pure rule: a heal is accepted only for a living owner below max health once the cooldown has elapsed.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	static bool CanUseHeal(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt);
+
+	// Pure rule: why CanUseHeal would refuse (None when it would accept). Priority: Dead, OnCooldown, HealthFull.
+	static EMDUseRejectReason GetUseRejectReason(float Health, float MaxHealth, bool bDead, double Now, double ReadyAt);
+
+	// Pure: player-facing toast text for a rejection (LOCTEXT). CooldownRemaining is rounded up to whole seconds.
+	static FText GetUseRejectText(EMDUseRejectReason Reason, float CooldownRemaining);
 
 	// ---- Quick slots (consumables only). Store item row names, not inventory indices. Owner-only replication. ----
 	static constexpr int32 NumQuickSlots = 2;
@@ -177,6 +222,17 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_QuickSlots, BlueprintReadOnly, Category = "Maze Demons|Inventory")
 	TArray<FName> QuickSlots;
 
+	// Server clock (AGameStateBase::GetServerWorldTimeSeconds) at which the next consumable may be used, and the length of
+	// the cooldown just started. Owner-only so the client HUD can draw the quick slot sweep.
+	UPROPERTY(ReplicatedUsing = OnRep_ConsumableCooldown)
+	float ConsumableReadyAtServer = 0.0f;
+
+	UPROPERTY(Replicated)
+	float ConsumableCooldownDuration = 0.0f;
+
+	UFUNCTION()
+	void OnRep_ConsumableCooldown();
+
 	UFUNCTION()
 	void OnRep_Items();
 
@@ -207,7 +263,14 @@ private:
 
 	bool IsValidRow(FName Row) const;
 	void ApplyArmorReduction(uint8 Slot, FName Row);
+	// Slots 0 MainHand, 1 OffHand, 3 TwoHanded feed the ASC's weapon attack-power bonuses; other slots are ignored.
+	void ApplyWeaponBonus(uint8 Slot, FName Row);
+	const FMDItemStatsRow* FindItemStats(FName Row) const;
+	// Current server clock: GameState server time when available, else world time.
+	double GetServerNow() const;
 	bool UseItem_Impl(int32 Index);
+	// Authority: tells the owning client why a use was refused (toast). No-op without a controller.
+	void NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining) const;
 	// Server logic (no authority check; callers are the authority paths). Tests call these directly.
 	bool AssignQuickSlot_Impl(int32 QuickIndex, int32 InventoryIndex);
 	bool UseQuickSlot_Impl(int32 QuickIndex);
@@ -220,6 +283,9 @@ private:
 
 	// Server world time (seconds) at which the next consumable may be used.
 	double ConsumableReadyAt = 0.0;
+
+	// Set once DT_ItemStats is known not to exist, so pure reads do not hit the disk again.
+	mutable bool bItemStatsMissing = false;
 	void EquipItem_Impl(int32 Index);
 	void UnequipSlot_Impl(uint8 Slot);
 	void DropItem_Impl(int32 Index, int32 Quantity);

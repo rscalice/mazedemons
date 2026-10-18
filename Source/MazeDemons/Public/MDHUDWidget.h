@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MDInventoryTypes.h"
 #include "MDUIWidgets.h"
 #include "MDHUDWidget.generated.h"
 
@@ -81,6 +82,10 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
 	void OnPickupToast(FName ItemRowName, int32 Quantity);
 
+	// The server refused a consumable use; Message is the localized reason (shown as a text toast).
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnUseRejectedToast(const FText& Message);
+
 private:
 	void TryBind();
 	void Unbind();
@@ -97,6 +102,8 @@ private:
 	void HandleExhaustedChanged(bool bNowExhausted);
 	UFUNCTION()
 	void HandlePickupNotified(FName ItemRowName, int32 Quantity);
+	UFUNCTION()
+	void HandleUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
 
 	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
 	TWeakObjectPtr<UMDStaminaComponent> BoundStamina;

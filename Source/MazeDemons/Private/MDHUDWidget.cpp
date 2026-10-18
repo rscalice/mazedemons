@@ -43,6 +43,7 @@ void UMDHUDWidget::Unbind()
 	if (AMDPlayerController* PC = BoundController.Get())
 	{
 		PC->OnPickupNotified.RemoveDynamic(this, &UMDHUDWidget::HandlePickupNotified);
+		PC->OnUseRejected.RemoveDynamic(this, &UMDHUDWidget::HandleUseRejected);
 	}
 	BoundASC.Reset();
 	BoundStamina.Reset();
@@ -79,6 +80,7 @@ void UMDHUDWidget::TryBind()
 		bExhausted = Comp->IsExhausted();
 	}
 	PC->OnPickupNotified.AddUniqueDynamic(this, &UMDHUDWidget::HandlePickupNotified);
+	PC->OnUseRejected.AddUniqueDynamic(this, &UMDHUDWidget::HandleUseRejected);
 
 	// Seed the cache so the first frame is correct even if no attribute change follows.
 	Health = ASC->GetHealth();
@@ -188,4 +190,13 @@ void UMDHUDWidget::HandleExhaustedChanged(bool bNowExhausted)
 void UMDHUDWidget::HandlePickupNotified(FName ItemRowName, int32 Quantity)
 {
 	OnPickupToast(ItemRowName, Quantity);
+}
+
+void UMDHUDWidget::HandleUseRejected(EMDUseRejectReason Reason, float CooldownRemaining)
+{
+	const FText Message = UMDInventoryComponent::GetUseRejectText(Reason, CooldownRemaining);
+	if (!Message.IsEmpty())
+	{
+		OnUseRejectedToast(Message);
+	}
 }

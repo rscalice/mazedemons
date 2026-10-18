@@ -15,6 +15,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/PackageName.h"
 
 // Friend of UMDInventoryComponent (see header): reaches Items / QuickSlots and the *_Impl functions without a world.
 struct FMDQuickSlotTestAccess
@@ -149,6 +150,32 @@ bool FMDItemRowValidationTest::RunTest(const FString& Parameters)
 		AddWarning(TEXT("DT_Items not loadable; row validation skipped"));
 		return true;
 	}
+	// Every weapon row (MainHand 0, OffHand 1, TwoHanded 3) should have a DT_ItemStats row. DT_ItemStats is created in the
+	// editor later, so this only warns.
+	{
+		UMDInventoryComponent* Probe = NewObject<UMDInventoryComponent>(GetTransientPackage());
+		Probe->ItemTable = const_cast<UDataTable*>(Items);
+		const UDataTable* Stats = FPackageName::DoesPackageExist(Probe->ItemStatsTable.ToSoftObjectPath().GetLongPackageName())
+			? Probe->ItemStatsTable.LoadSynchronous() : nullptr;
+		for (const FName Row : Items->GetRowNames())
+		{
+			const uint8 Slot = Probe->GetItemEquipSlot(Row);
+			if (Slot != 0 && Slot != 1 && Slot != 3)
+			{
+				continue;
+			}
+			if (!Stats)
+			{
+				AddWarning(TEXT("DT_ItemStats not found; weapon attack bonuses are 0 until it is created (row struct FMDItemStatsRow)"));
+				break;
+			}
+			if (!Stats->FindRow<FMDItemStatsRow>(Row, TEXT("RowValidation"), false))
+			{
+				AddWarning(FString::Printf(TEXT("DT_ItemStats is missing weapon row '%s'"), *Row.ToString()));
+			}
+		}
+	}
+
 	const UMDUISettings* Settings = GetDefault<UMDUISettings>();
 	const UDataTable* Display = Settings ? Settings->ItemDisplayTable.LoadSynchronous() : nullptr;
 	if (!Display)

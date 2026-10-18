@@ -10,6 +10,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDAttributeValueChanged, float, Ol
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDDeathSignature);
 
+// Fires after any attribute or base-stat change (health, stamina, attack power, defense, replicated base values).
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDStatsChanged);
+
 UCLASS(ClassGroup = (Gameplay), meta = (BlueprintSpawnableComponent))
 class MAZEDEMONS_API UMDAbilitySystemComponent : public UAbilitySystemComponent
 {
@@ -38,6 +41,24 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void RemoveArmorPieceDamageReduction(FName ArmorSlot);
+
+	// Defense before armor (the base damage-reduction %). Replicated to the owner so the stats screen works on clients.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetBaseDefense() const { return BaseDefense; }
+
+	// Attack power before weapon bonuses. Replicated to the owner.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetBaseAttackPower() const { return BaseAttackPower; }
+
+	// Server-only. Weapon slot names: "MainHand", "OffHand", "TwoHanded". Recalculates the AttackPower attribute.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
+	void SetWeaponAttackBonus(FName WeaponSlot, float AttackPowerBonus);
+
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
+	void RemoveWeaponAttackBonus(FName WeaponSlot);
+
+	// Pure rule: Base + sum of weapon bonuses (never negative). A "TwoHanded" bonus replaces the "MainHand" and "OffHand" ones.
+	static float ComputeAttackPower(float InBaseAttackPower, const TMap<FName, float>& WeaponBonuses);
 
 	// Applies raw damage through GAS; Defense mitigation is applied by the attribute set.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
@@ -103,6 +124,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|GAS")
 	FMDAttributeValueChanged OnMaxStaminaChanged;
 
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|GAS")
+	FMDStatsChanged OnStatsChanged;
+
 	virtual void InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -119,6 +143,10 @@ private:
 	bool bDelegatesBound = false;
 
 	void RecalculateDefense();
+	void RecalculateAttackPower();
+
+	UFUNCTION()
+	void OnRep_BaseStats();
 
 	void HandleHealthChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleMaxHealthChanged(const FOnAttributeChangeData& ChangeData);
@@ -126,11 +154,19 @@ private:
 	void HandleDefenseChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleStaminaChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleMaxStaminaChanged(const FOnAttributeChangeData& ChangeData);
+	void HandleStaminaRegenRateChanged(const FOnAttributeChangeData& ChangeData);
 
 	UPROPERTY()
 	TObjectPtr<UMDAttributeSet> MazeDemonsAttributes;
 
 	TMap<FName, float> EquippedArmorDamageReductions;
 
+	TMap<FName, float> EquippedWeaponAttackBonuses;
+
+	// Owner-only replicated so clients can show base vs. total on the character stats screen.
+	UPROPERTY(ReplicatedUsing = OnRep_BaseStats)
 	float BaseDefense = 0.0f;
+
+	UPROPERTY(ReplicatedUsing = OnRep_BaseStats)
+	float BaseAttackPower = 0.0f;
 };

@@ -145,11 +145,19 @@ void AMDPlayerController::SetupInputComponent()
 
 void AMDPlayerController::OnQuickSlot1(const FInputActionValue& Value)
 {
+	if (bShowMouseCursor)
+	{
+		return; // a menu is open (matches BP_Player's IsMenuOpen gate)
+	}
 	UseQuickSlot(1);
 }
 
 void AMDPlayerController::OnQuickSlot2(const FInputActionValue& Value)
 {
+	if (bShowMouseCursor)
+	{
+		return; // a menu is open (matches BP_Player's IsMenuOpen gate)
+	}
 	UseQuickSlot(2);
 }
 
@@ -410,6 +418,27 @@ void AMDPlayerController::NotifyPickup(FName ItemRowName, int32 Quantity)
 void AMDPlayerController::Client_NotifyPickup_Implementation(FName ItemRowName, int32 Quantity)
 {
 	OnPickupNotified.Broadcast(ItemRowName, Quantity);
+}
+
+void AMDPlayerController::NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining)
+{
+	if (!HasAuthority() || Reason == EMDUseRejectReason::None)
+	{
+		return;
+	}
+	if (IsLocalController())
+	{
+		OnUseRejected.Broadcast(Reason, CooldownRemaining); // listen-server host: no RPC hop
+	}
+	else
+	{
+		Client_NotifyUseRejected(Reason, CooldownRemaining);
+	}
+}
+
+void AMDPlayerController::Client_NotifyUseRejected_Implementation(EMDUseRejectReason Reason, float CooldownRemaining)
+{
+	OnUseRejected.Broadcast(Reason, CooldownRemaining);
 }
 
 bool AMDPlayerController::FindRespawnTransform(FTransform& OutTransform) const

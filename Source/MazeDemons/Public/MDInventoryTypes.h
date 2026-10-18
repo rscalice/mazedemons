@@ -4,6 +4,17 @@
 #include "Engine/DataTable.h"
 #include "MDInventoryTypes.generated.h"
 
+// Why a consumable use was refused (server decides, owning client shows a toast).
+UENUM(BlueprintType)
+enum class EMDUseRejectReason : uint8
+{
+	None,
+	HealthFull,
+	OnCooldown,
+	Dead,
+	EmptySlot
+};
+
 // Row of DT_Consumables (same row names as DT_Items). An item with a row here is usable (RequestUseItem) and never equippable.
 // Kept in C++ so consumables need no change to the Blueprint enum E_ItemTypes / struct S_ItemInfo.
 USTRUCT(BlueprintType)
@@ -18,6 +29,18 @@ struct MAZEDEMONS_API FMDConsumableRow : public FTableRowBase
 	// Seconds before the owner can use any consumable again.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Consumable", meta = (ClampMin = "0"))
 	float CooldownSeconds = 1.0f;
+};
+
+// Row of DT_ItemStats (same row names as DT_Items): C++-side combat stats for an item. Kept in C++ because S_ItemInfo cannot be
+// edited via tools. A missing table or row means "no bonus".
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDItemStatsRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	// Added to the wielder's Attack Power while this weapon is equipped.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
+	float AttackPowerBonus = 0.0f;
 };
 
 // Row of DT_ItemDisplay (same row names as DT_Items): player-facing text. Kept in C++ because S_ItemInfo cannot be edited via tools.
