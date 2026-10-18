@@ -39,6 +39,17 @@ float UMDStatCalculator::EffectiveAttackPower(float Base, const TMap<FName, floa
 	return UMDAbilitySystemComponent::ComputeAttackPower(Base, WeaponBonuses) * UpgradeScale * WeaponCondMult;
 }
 
+float UMDStatCalculator::EffectiveWeaponAttackPower(float Base, float WeaponBonus, int32 WeaponUpgradeLevel, float WeaponCondMult,
+	const FMDEconomyTuning& Tuning)
+{
+	TMap<FName, float> Bonuses;
+	if (WeaponBonus != 0.0f)
+	{
+		Bonuses.Add(FName("MainHand"), WeaponBonus);
+	}
+	return EffectiveAttackPower(Base, Bonuses, WeaponUpgradeLevel, WeaponCondMult, Tuning);
+}
+
 int32 UMDStatCalculator::RepairCost(int32 Missing, int32 ItemValue, int32 UpgradeLevel, const FMDEconomyTuning& Tuning)
 {
 	if (Missing <= 0 || ItemValue <= 0)

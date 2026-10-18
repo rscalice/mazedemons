@@ -4,6 +4,7 @@
 #include "Engine/DataTable.h"
 #include "GameFramework/PlayerState.h"
 #include "MDAbilitySystemComponent.h"
+#include "MDBalanceData.h"
 #include "MDGameplayStatics.h"
 #include "MDGameSettings.h"
 #include "MDPlayerController.h"
@@ -1171,6 +1172,36 @@ float UMDInventoryComponent::GetSlotConditionMultiplier(uint8 Slot) const
 	int32 Max = 0;
 	GetSlotDurability(Slot, Cur, Max);
 	return UMDStatCalculator::ConditionMultiplier(Cur, Max, UMDGameSettings::GetEconomy());
+}
+
+float UMDInventoryComponent::GetSlotEffectiveStat(uint8 Slot, int32 LevelOverride, bool bAssumeFullDurability) const
+{
+	const FMDEquippedSlot* Entry = FindEquippedSlot(Slot);
+	if (!Entry)
+	{
+		return 0.0f;
+	}
+
+	const FMDEconomyTuning Tuning = UMDGameSettings::GetEconomy();
+	const bool bArmor = !ArmorSlotName(Slot).IsNone();
+	const bool bWeapon = !WeaponSlotName(Slot).IsNone();
+	if (!bArmor && !bWeapon)
+	{
+		return 0.0f;
+	}
+
+	const int32 Level = LevelOverride >= 0 ? LevelOverride : GetSlotUpgradeLevel(Slot);
+	const float CondMult = bAssumeFullDurability ? 1.0f : GetSlotConditionMultiplier(Slot);
+	if (bArmor)
+	{
+		return UMDStatCalculator::EffectivePieceDR(GetItemArmorReduction(Entry->ItemRowName), Level, CondMult, Tuning);
+	}
+
+	// Off-hand weapons get no upgrade percent (the main weapon is TwoHanded else MainHand).
+	const UMDBalanceData* Balance = UMDGameSettings::GetBalanceData();
+	const float Base = Balance ? Balance->StartingAttackPower : GetDefault<UMDBalanceData>()->StartingAttackPower;
+	return UMDStatCalculator::EffectiveWeaponAttackPower(Base, GetItemAttackBonus(Entry->ItemRowName),
+		Slot == MDItemType::OffHand ? 0 : Level, CondMult, Tuning);
 }
 
 int32 UMDInventoryComponent::GetShardCount() const

@@ -152,6 +152,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	float GetSlotConditionMultiplier(uint8 Slot) const;
 
+	// Effective stat of the item equipped in Slot, for current -> next displays without maths in Blueprint: damage reduction
+	// percent for armor slots (4-8), AttackPower (base + weapon) for weapon slots (0, 1, 3), 0 for an empty slot or Shield.
+	// LevelOverride -1 = the slot's current upgrade level, otherwise that level; bAssumeFullDurability ignores wear.
+	// The weapon base is DA_BalanceReference StartingAttackPower (client-safe), so it can differ from the live attribute only
+	// if the attribute was changed at runtime.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetSlotEffectiveStat(uint8 Slot, int32 LevelOverride, bool bAssumeFullDurability) const;
+
 	// Total Upgrade Shards (FMDEconomyTuning ShardRow) in the bag.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	int32 GetShardCount() const;

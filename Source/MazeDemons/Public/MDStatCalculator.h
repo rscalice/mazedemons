@@ -30,6 +30,12 @@ public:
 	static float EffectiveAttackPower(float Base, const TMap<FName, float>& WeaponBonuses, int32 WeaponUpgradeLevel,
 		float WeaponCondMult, const FMDEconomyTuning& Tuning);
 
+	// Blueprint-friendly form of EffectiveAttackPower for a single weapon: (Base + WeaponBonus) * (1 + WeaponAPPctPerLevel * level)
+	// * WeaponCondMult. (The TMap overload above stays C++ only; UHT does not allow overloaded UFUNCTION names.)
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
+	static float EffectiveWeaponAttackPower(float Base, float WeaponBonus, int32 WeaponUpgradeLevel, float WeaponCondMult,
+		const FMDEconomyTuning& Tuning);
+
 	// ceil(Missing * ItemValue * RepairRate * (1 + RepairUpgradeScale * level)); 0 when nothing is missing.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
 	static int32 RepairCost(int32 Missing, int32 ItemValue, int32 UpgradeLevel, const FMDEconomyTuning& Tuning);

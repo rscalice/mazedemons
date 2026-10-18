@@ -37,3 +37,8 @@ const FMDEconomyTuning& UMDGameSettings::GetEconomy()
 	const UMDBalanceData* Data = GetBalanceData();
 	return Data ? Data->Economy : Defaults;
 }
+
+FMDEconomyTuning UMDGameSettings::GetEconomyTuning()
+{
+	return GetEconomy();
+}

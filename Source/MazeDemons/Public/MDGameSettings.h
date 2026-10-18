@@ -25,4 +25,8 @@ public:
 
 	// Economy tuning from the balance asset, else a default-constructed FMDEconomyTuning (BALANCE.md values).
 	static const FMDEconomyTuning& GetEconomy();
+
+	// Blueprint access to the same tuning, returned by value (a copy of the asset values, or the built-in defaults).
+	UFUNCTION(BlueprintPure, Category = "MazeDemons|Economy")
+	static FMDEconomyTuning GetEconomyTuning();
 };
