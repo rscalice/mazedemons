@@ -13,6 +13,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDDeathSignature);
 // Fires after any attribute or base-stat change (health, stamina, attack power, defense, replicated base values).
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDStatsChanged);
 
+// Server only: damage actually reduced Health by Applied (> 0). Instigator may be null (environment).
+DECLARE_MULTICAST_DELEGATE_TwoParams(FMDDamageAppliedNative, AActor* /*Instigator*/, float /*Applied*/);
+
 UCLASS(ClassGroup = (Gameplay), meta = (BlueprintSpawnableComponent))
 class MAZEDEMONS_API UMDAbilitySystemComponent : public UAbilitySystemComponent
 {
@@ -56,6 +59,21 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void RemoveWeaponAttackBonus(FName WeaponSlot);
+
+	// Upper bound of the Defense attribute (damage reduction %). 90 for enemies and dummies; AMDPlayerState lowers it to the
+	// player cap from the balance data.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze Demons|GAS", meta = (ClampMin = "0", ClampMax = "90"))
+	float DefenseCap = 90.0f;
+
+	// Server-only. Upgrade level and condition multiplier of the weapon in use (TwoHanded, else MainHand). Recalculates
+	// the AttackPower attribute: ComputeAttackPower * (1 + upgrade %) * condition.
+	void SetWeaponModifiers(int32 UpgradeLevel, float CondMult);
+
+	// Server only; fires after ApplyDamage reduced Health. Wear and kill credit hang off this.
+	FMDDamageAppliedNative OnDamageApplied;
+
+	// Who dealt the most recent damage that reached Health (server only; may be null or stale after the pawn is destroyed).
+	AActor* GetLastDamageInstigator() const { return LastDamageInstigator.Get(); }
 
 	// Pure rule: Base + sum of weapon bonuses (never negative). A "TwoHanded" bonus replaces the "MainHand" and "OffHand" ones.
 	static float ComputeAttackPower(float InBaseAttackPower, const TMap<FName, float>& WeaponBonuses);
@@ -162,6 +180,10 @@ private:
 	TMap<FName, float> EquippedArmorDamageReductions;
 
 	TMap<FName, float> EquippedWeaponAttackBonuses;
+
+	int32 WeaponUpgradeLevel = 0;
+	float WeaponCondMult = 1.0f;
+	TWeakObjectPtr<AActor> LastDamageInstigator;
 
 	// Owner-only replicated so clients can show base vs. total on the character stats screen.
 	UPROPERTY(ReplicatedUsing = OnRep_BaseStats)

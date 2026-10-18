@@ -2,6 +2,8 @@
 
 #include "MDAbilitySystemComponent.h"
 #include "MDAttributeSet.h"
+#include "MDBalanceData.h"
+#include "MDGameSettings.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
 #include "MDStaminaComponent.h"
@@ -60,6 +62,11 @@ void AMDPlayerState::HandleDeath()
 	if (HasAuthority())
 	{
 		DeadPawn = GetPawn();
+		// Durability penalty for every equipped item (once per death: the ASC fires OnDeath a single time).
+		if (UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(GetPawn()))
+		{
+			Inventory->ApplyDeathPenalty();
+		}
 	}
 	RagdollPawn(GetPawn());
 }
@@ -233,7 +240,16 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 		if (!bStatsInitialized)
 		{
 			bStatsInitialized = true;
-			AbilitySystem->InitializeStats(StartingMaxHealth, StartingAttackPower, StartingBaseDefense);
+			AbilitySystem->DefenseCap = UMDGameSettings::GetEconomy().PlayerDRCap;
+			// DA_BalanceReference is the source of truth; the Starting* properties stay as the fallback until it exists.
+			if (const UMDBalanceData* Balance = UMDGameSettings::GetBalanceData())
+			{
+				AbilitySystem->InitializeStats(Balance->StartingMaxHealth, Balance->StartingAttackPower, Balance->StartingBaseDefense);
+			}
+			else
+			{
+				AbilitySystem->InitializeStats(StartingMaxHealth, StartingAttackPower, StartingBaseDefense);
+			}
 			if (StaminaComponent)
 			{
 				AbilitySystem->InitializeStamina(StaminaComponent->StartingMaxStamina, StaminaComponent->RegenPerSec);
@@ -258,6 +274,7 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 		// The new avatar re-receives the persisted equipment (visuals via BP hooks, armor reductions).
 		if (UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(NewPawn))
 		{
+			Inventory->BindToASC();
 			Inventory->ReapplyAllEquipment();
 		}
 	}
