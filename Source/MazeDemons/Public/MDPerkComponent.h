@@ -23,6 +23,8 @@ class MAZEDEMONS_API UMDPerkComponent : public UActorComponent
 	GENERATED_BODY()
 
 public:
+	friend struct FMDPerkTestAccess;
+
 	UMDPerkComponent();
 
 	// The perk component for a PlayerState, pawn or controller (or an actor that hosts one itself).

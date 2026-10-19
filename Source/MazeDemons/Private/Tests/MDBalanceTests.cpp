@@ -1,0 +1,331 @@
+#include "CoreMinimal.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+#include "MDBalanceModel.h"
+#include "MDPerkCatalog.h"
+#include "MDPerkTypes.h"
+#include "MDStatCalculator.h"
+
+#include "HAL/FileManager.h"
+#include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+
+// Pure balance-model tests (BALANCE section 10). No world, no actors, no assets.
+
+namespace
+{
+	// BALANCE section 8 ceilings, as multiples of a bare character. Exceeding one is reported as a warning with the offending
+	// build: the model is a first-order stand-in for BALANCE.md's own spreadsheet, so a miss is a balance finding, not a bug.
+	constexpr float MDBalCeilEHPPerks = 1.35f;
+	constexpr float MDBalCeilDPSPerks = 1.35f;
+	constexpr float MDBalCeilEHPGear = 2.0f;
+	constexpr float MDBalCeilDPSGear = 1.6f;
+	constexpr float MDBalCeilSprintUptime = 0.75f;
+
+	// "With upgrades and gear": a mid-game kit expressed as extra damage reduction % and an attack power multiplier.
+	constexpr float MDBalGearDR = 20.0f;
+	constexpr float MDBalGearAP = 1.3f;
+
+	struct FMDBalBuild
+	{
+		TArray<uint8> Ranks;
+		int32 Points = 0;
+		int32 PathsUsed = 0;
+		FMDPerkModifiers Mods;
+		FMDBuildMetrics Perks;  // perks alone
+		FMDBuildMetrics Geared; // perks + upgrades and gear
+	};
+
+	const UMDPerkTree& BalTree()
+	{
+		return *GetDefault<UMDPerkTree>();
+	}
+
+	// Every legal build with at most MaxPoints points. Legality is the real commit rule (ValidateCommit), checked per path
+	// (prerequisites and the per-path cap are per path), then paths are combined under the total budget.
+	void BalEnumerateBuilds(int32 MaxPoints, TFunctionRef<void(const TArray<uint8>&, int32)> Visit)
+	{
+		const UMDPerkTree& Tree = BalTree();
+		TArray<uint8> Zeros;
+		Zeros.Init(0, MD_NumPerkNodes);
+
+		struct FPathCombo { uint8 Ranks[MD_NodesPerPerkPath]; int32 Points; };
+		TArray<FPathCombo> Combos[4];
+		for (int32 Path = 0; Path < 4; ++Path)
+		{
+			const int32 First = Path * MD_NodesPerPerkPath;
+			for (int32 A = 0; A <= Tree.Nodes[First + 0].MaxRank; ++A)
+			for (int32 B = 0; B <= Tree.Nodes[First + 1].MaxRank; ++B)
+			for (int32 C = 0; C <= Tree.Nodes[First + 2].MaxRank; ++C)
+			for (int32 D = 0; D <= Tree.Nodes[First + 3].MaxRank; ++D)
+			{
+				TArray<uint8> Desired = Zeros;
+				Desired[First + 0] = static_cast<uint8>(A);
+				Desired[First + 1] = static_cast<uint8>(B);
+				Desired[First + 2] = static_cast<uint8>(C);
+				Desired[First + 3] = static_cast<uint8>(D);
+				if (UMDPerkCatalog::ValidateCommit(Zeros, Desired, 1000, 1000.0, false, Tree) != EMDPerkReject::None)
+				{
+					continue;
+				}
+				FPathCombo Combo;
+				Combo.Ranks[0] = static_cast<uint8>(A);
+				Combo.Ranks[1] = static_cast<uint8>(B);
+				Combo.Ranks[2] = static_cast<uint8>(C);
+				Combo.Ranks[3] = static_cast<uint8>(D);
+				Combo.Points = A + B + C + D;
+				Combos[Path].Add(Combo);
+			}
+		}
+
+		TArray<uint8> Build = Zeros;
+		for (const FPathCombo& P0 : Combos[0])
+		for (const FPathCombo& P1 : Combos[1])
+		{
+			if (P0.Points + P1.Points > MaxPoints)
+			{
+				continue;
+			}
+			for (const FPathCombo& P2 : Combos[2])
+			{
+				if (P0.Points + P1.Points + P2.Points > MaxPoints)
+				{
+					continue;
+				}
+				for (const FPathCombo& P3 : Combos[3])
+				{
+					const int32 Total = P0.Points + P1.Points + P2.Points + P3.Points;
+					if (Total > MaxPoints)
+					{
+						continue;
+					}
+					for (int32 i = 0; i < MD_NodesPerPerkPath; ++i)
+					{
+						Build[0 * MD_NodesPerPerkPath + i] = P0.Ranks[i];
+						Build[1 * MD_NodesPerPerkPath + i] = P1.Ranks[i];
+						Build[2 * MD_NodesPerPerkPath + i] = P2.Ranks[i];
+						Build[3 * MD_NodesPerPerkPath + i] = P3.Ranks[i];
+					}
+					Visit(Build, Total);
+				}
+			}
+		}
+	}
+
+	FString BalDescribe(const TArray<uint8>& Ranks)
+	{
+		FString Out;
+		for (int32 i = 0; i < Ranks.Num() && i < BalTree().Nodes.Num(); ++i)
+		{
+			if (Ranks[i] > 0)
+			{
+				Out += FString::Printf(TEXT("%s%s %d"), Out.IsEmpty() ? TEXT("") : TEXT(", "), *BalTree().Nodes[i].Id.ToString(), static_cast<int32>(Ranks[i]));
+			}
+		}
+		return Out.IsEmpty() ? FString(TEXT("(no perks)")) : Out;
+	}
+
+	FMDBuildMetrics BalMetrics(const FMDPerkModifiers& Mods, float ExtraDR = 0.0f, float ExtraAP = 1.0f)
+	{
+		return UMDBalanceModel::Evaluate(Mods, FMDBalanceBase(), FMDBalanceReference(), FMDPerkTuning(), ExtraDR, ExtraAP);
+	}
+
+	// All builds with the full-run budget, metrics included.
+	void BalCollect(TArray<FMDBalBuild>& Out)
+	{
+		const FMDBalanceReference Ref;
+		BalEnumerateBuilds(Ref.FullRunPoints, [&Out](const TArray<uint8>& Ranks, int32 Points)
+		{
+			FMDBalBuild& Build = Out.AddDefaulted_GetRef();
+			Build.Ranks = Ranks;
+			Build.Points = Points;
+			for (int32 Path = 0; Path < 4; ++Path)
+			{
+				Build.PathsUsed += UMDPerkCatalog::PointsInPath(Ranks, static_cast<EMDPerkPath>(Path + 1)) > 0 ? 1 : 0;
+			}
+			UMDPerkCatalog::ComputeModifiers(Ranks, BalTree(), Build.Mods);
+			Build.Perks = BalMetrics(Build.Mods);
+			Build.Geared = BalMetrics(Build.Mods, MDBalGearDR, MDBalGearAP);
+		});
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDBalanceExhaustiveBuildsTest, "MazeDemons.Balance.ExhaustiveBuilds", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDBalanceExhaustiveBuildsTest::RunTest(const FString& Parameters)
+{
+	TArray<FMDBalBuild> Builds;
+	BalCollect(Builds);
+	if (!TestTrue(TEXT("there are legal builds"), Builds.Num() > 1))
+	{
+		return false;
+	}
+
+	// The empty build is in the set and is the baseline.
+	const FMDBuildMetrics Baseline = BalMetrics(FMDPerkModifiers());
+	const FMDBuildMetrics BaselineGear = BalMetrics(FMDPerkModifiers(), MDBalGearDR, MDBalGearAP);
+	TestNearlyEqual(TEXT("baseline effective HP vs werewolf"), Baseline.EffectiveHPWerewolf, 100.0f, 0.01f);
+	TestNearlyEqual(TEXT("baseline DPS"), Baseline.DPS, 10.0f, 0.01f);
+
+	// No legal build exceeds the budget or a per-path cap, and none is worse than a bare character.
+	const FMDPerkCaps Caps;
+	const FMDBalanceReference Ref;
+	int32 MaxPointsSeen = 0;
+	const FMDBalBuild* WorstEHP = nullptr;
+	const FMDBalBuild* WorstDPS = nullptr;
+	const FMDBalBuild* WorstUptime = nullptr;
+	const FMDBalBuild* WorstEHPGear = nullptr;
+	const FMDBalBuild* WorstDPSGear = nullptr;
+	for (const FMDBalBuild& Build : Builds)
+	{
+		MaxPointsSeen = FMath::Max(MaxPointsSeen, Build.Points);
+		for (int32 Path = 1; Path <= 4; ++Path)
+		{
+			if (UMDPerkCatalog::PointsInPath(Build.Ranks, static_cast<EMDPerkPath>(Path)) > Caps.PathPointCap)
+			{
+				AddError(FString::Printf(TEXT("build exceeds the path cap: %s"), *BalDescribe(Build.Ranks)));
+			}
+		}
+		if (Build.Perks.EffectiveHPWerewolf < Baseline.EffectiveHPWerewolf - 0.01f || Build.Perks.DPS < Baseline.DPS - 0.01f)
+		{
+			AddError(FString::Printf(TEXT("build is weaker than a bare character: %s"), *BalDescribe(Build.Ranks)));
+		}
+		if (!FMath::IsFinite(Build.Perks.EffectiveHPWerewolf) || !FMath::IsFinite(Build.Perks.EffectiveHPBoss) || !FMath::IsFinite(Build.Perks.DPS))
+		{
+			AddError(FString::Printf(TEXT("non-finite metrics: %s"), *BalDescribe(Build.Ranks)));
+		}
+
+		if (!WorstEHP || Build.Perks.EffectiveHPWerewolf > WorstEHP->Perks.EffectiveHPWerewolf) { WorstEHP = &Build; }
+		if (!WorstDPS || Build.Perks.DPS > WorstDPS->Perks.DPS) { WorstDPS = &Build; }
+		if (!WorstUptime || Build.Perks.SprintUptime > WorstUptime->Perks.SprintUptime) { WorstUptime = &Build; }
+		if (!WorstEHPGear || Build.Geared.EffectiveHPWerewolf > WorstEHPGear->Geared.EffectiveHPWerewolf) { WorstEHPGear = &Build; }
+		if (!WorstDPSGear || Build.Geared.DPS > WorstDPSGear->Geared.DPS) { WorstDPSGear = &Build; }
+	}
+	TestEqual(TEXT("the budget is spent in full by some build"), MaxPointsSeen, Ref.FullRunPoints);
+
+	// BALANCE section 8 ceilings. Reported as warnings (see the constants above) with the offending build.
+	auto Ceiling = [this](const TCHAR* What, float Value, float Ceil, const FMDBalBuild* Build)
+	{
+		if (Build && Value > Ceil)
+		{
+			AddWarning(FString::Printf(TEXT("BALANCE ceiling exceeded: %s %.3f > %.3f by build: %s"), What, Value, Ceil, *BalDescribe(Build->Ranks)));
+		}
+	};
+	Ceiling(TEXT("effective HP, perks alone"), WorstEHP->Perks.EffectiveHPWerewolf / Baseline.EffectiveHPWerewolf, MDBalCeilEHPPerks, WorstEHP);
+	Ceiling(TEXT("DPS, perks alone"), WorstDPS->Perks.DPS / Baseline.DPS, MDBalCeilDPSPerks, WorstDPS);
+	Ceiling(TEXT("sprint uptime"), WorstUptime->Perks.SprintUptime, MDBalCeilSprintUptime, WorstUptime);
+	Ceiling(TEXT("effective HP, with upgrades and gear"), WorstEHPGear->Geared.EffectiveHPWerewolf / Baseline.EffectiveHPWerewolf, MDBalCeilEHPGear, WorstEHPGear);
+	Ceiling(TEXT("DPS, with upgrades and gear"), WorstDPSGear->Geared.DPS / Baseline.DPS, MDBalCeilDPSGear, WorstDPSGear);
+	(void)BaselineGear;
+
+	// Saved/Balance/perk_builds.csv: one row per build.
+	FString Csv = TEXT("points,paths");
+	for (const FMDPerkNode& Node : BalTree().Nodes)
+	{
+		Csv += TEXT(",") + Node.Id.ToString();
+	}
+	Csv += TEXT(",ehp_werewolf,ehp_boss,dps,sprint_uptime,ttk_werewolf,ttk_boss,ehp_werewolf_geared,dps_geared\n");
+	for (const FMDBalBuild& Build : Builds)
+	{
+		Csv += FString::Printf(TEXT("%d,%d"), Build.Points, Build.PathsUsed);
+		for (const uint8 Rank : Build.Ranks)
+		{
+			Csv += FString::Printf(TEXT(",%d"), static_cast<int32>(Rank));
+		}
+		Csv += FString::Printf(TEXT(",%.3f,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f\n"), Build.Perks.EffectiveHPWerewolf, Build.Perks.EffectiveHPBoss,
+			Build.Perks.DPS, Build.Perks.SprintUptime, Build.Perks.TTKWerewolf, Build.Perks.TTKBoss, Build.Geared.EffectiveHPWerewolf, Build.Geared.DPS);
+	}
+	const FString Dir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Balance"));
+	IFileManager::Get().MakeDirectory(*Dir, true);
+	if (!FFileHelper::SaveStringToFile(Csv, *FPaths::Combine(Dir, TEXT("perk_builds.csv"))))
+	{
+		AddWarning(TEXT("could not write Saved/Balance/perk_builds.csv"));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDBalanceSprintUptimeTest, "MazeDemons.Balance.SprintUptimeFinite", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDBalanceSprintUptimeTest::RunTest(const FString& Parameters)
+{
+	// Bare character: sprint 100 / 15 = 6.67 s, recover 1 + 0.3 * 100 / 20 = 2.5 s.
+	TestNearlyEqual(TEXT("baseline uptime"), BalMetrics(FMDPerkModifiers()).SprintUptime, 0.7273f, 0.001f);
+
+	TestEqual(TEXT("no drain, no model"), UMDBalanceModel::SprintUptime(100.0f, 20.0f, 1.0f, 0.0f, 0.3f), 0.0f);
+	TestEqual(TEXT("no regen, no model"), UMDBalanceModel::SprintUptime(100.0f, 0.0f, 1.0f, 15.0f, 0.3f), 0.0f);
+	TestEqual(TEXT("no stamina, no model"), UMDBalanceModel::SprintUptime(0.0f, 20.0f, 1.0f, 15.0f, 0.3f), 0.0f);
+
+	TArray<FMDBalBuild> Builds;
+	BalCollect(Builds);
+	for (const FMDBalBuild& Build : Builds)
+	{
+		const float Uptime = Build.Perks.SprintUptime;
+		if (!FMath::IsFinite(Uptime) || Uptime <= 0.0f || Uptime >= 1.0f)
+		{
+			AddError(FString::Printf(TEXT("sprint uptime %.4f is not in (0, 1) for build: %s"), Uptime, *BalDescribe(Build.Ranks)));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDBalanceTTKTest, "MazeDemons.Balance.TTKFiniteVsReference", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDBalanceTTKTest::RunTest(const FString& Parameters)
+{
+	const FMDBalanceReference Ref;
+	const FMDBuildMetrics Baseline = BalMetrics(FMDPerkModifiers());
+	TestNearlyEqual(TEXT("baseline werewolf TTK = 120 / 10"), Baseline.TTKWerewolf, 12.0f, 0.01f);
+	TestNearlyEqual(TEXT("baseline boss TTK = 1500 / 10"), Baseline.TTKBoss, 150.0f, 0.01f);
+	TestEqual(TEXT("no damage never kills"), UMDBalanceModel::TimeToKill(Ref.WerewolfHealth, 0.0f), MAX_FLT);
+
+	TArray<FMDBalBuild> Builds;
+	BalCollect(Builds);
+	for (const FMDBalBuild& Build : Builds)
+	{
+		const FMDBuildMetrics& M = Build.Perks;
+		const bool bOk = FMath::IsFinite(M.TTKWerewolf) && FMath::IsFinite(M.TTKBoss) && M.TTKWerewolf > 0.0f && M.TTKBoss > 0.0f
+			&& M.TTKWerewolf < 1000.0f && M.TTKBoss < 10000.0f
+			&& M.TTKWerewolf <= Baseline.TTKWerewolf + 0.01f && M.TTKBoss <= Baseline.TTKBoss + 0.01f;
+		if (!bOk)
+		{
+			AddError(FString::Printf(TEXT("time to kill is not finite / not better than a bare character for build: %s"), *BalDescribe(Build.Ranks)));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDBalancePureVsMixedTest, "MazeDemons.Balance.PureBranchVsMixed", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDBalancePureVsMixedTest::RunTest(const FString& Parameters)
+{
+	TArray<FMDBalBuild> Builds;
+	BalCollect(Builds);
+
+	float BestPureEHP = 0.0f, BestMixedEHP = 0.0f;
+	float BestPureDPS = 0.0f, BestMixedDPS = 0.0f;
+	int32 PureCount = 0;
+	int32 MixedCount = 0;
+	for (const FMDBalBuild& Build : Builds)
+	{
+		if (Build.PathsUsed <= 1)
+		{
+			++PureCount;
+			BestPureEHP = FMath::Max(BestPureEHP, Build.Perks.EffectiveHPWerewolf);
+			BestPureDPS = FMath::Max(BestPureDPS, Build.Perks.DPS);
+		}
+		else
+		{
+			++MixedCount;
+			BestMixedEHP = FMath::Max(BestMixedEHP, Build.Perks.EffectiveHPWerewolf);
+			BestMixedDPS = FMath::Max(BestMixedDPS, Build.Perks.DPS);
+		}
+	}
+	TestTrue(TEXT("there are pure-branch builds"), PureCount > 0);
+	TestTrue(TEXT("there are mixed builds"), MixedCount > 0);
+
+	// A pure branch is capped at 5 points, a mixed build spends all 8: the best mixed build is at least as good in each metric
+	// (no pure branch dominates every mixed build).
+	TestTrue(TEXT("best mixed effective HP >= best pure branch"), BestMixedEHP >= BestPureEHP - 0.01f);
+	TestTrue(TEXT("best mixed DPS >= best pure branch"), BestMixedDPS >= BestPureDPS - 0.01f);
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS
