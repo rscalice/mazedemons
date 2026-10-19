@@ -474,6 +474,27 @@ void AMDPlayerController::NotifyToast(const FText& Message, EMDColor Tone)
 	}
 }
 
+void AMDPlayerController::NotifyCrit(float FinalDamage)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (IsLocalController())
+	{
+		OnCritNotified(FinalDamage); // listen-server host: no RPC hop
+	}
+	else
+	{
+		Client_NotifyCrit(FinalDamage);
+	}
+}
+
+void AMDPlayerController::Client_NotifyCrit_Implementation(float FinalDamage)
+{
+	OnCritNotified(FinalDamage);
+}
+
 void AMDPlayerController::Client_NotifyToast_Implementation(const FText& Message, EMDColor Tone)
 {
 	OnToastNotified.Broadcast(Message, Tone);
@@ -694,8 +715,8 @@ void AMDPlayerController::Server_KillPlayer_Implementation()
 	UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
 	if (ASC && !ASC->IsDead())
 	{
-		// Instigator == avatar pawn, so the team/friendly-fire gate in CanDamage lets self-damage through.
-		ASC->ApplyDamage(1.0e9f, GetPawn(), GetPawn());
+		// Goes straight to 0 Health: a lethal hit through ApplyDamage would be stopped by Bulwark or Second Wind.
+		ASC->DebugKill(GetPawn());
 	}
 #endif
 }
@@ -714,7 +735,7 @@ void AMDPlayerController::Server_DamageSelf_Implementation(float Amount)
 	UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
 	if (ASC && !ASC->IsDead() && Amount > 0.0f)
 	{
-		ASC->ApplyDamage(FMath::Min(Amount, 10000.0f), GetPawn(), GetPawn());
+		ASC->ApplyDamage(FMath::Min(Amount, 10000.0f), GetPawn(), GetPawn(), false); // self-damage never crits
 	}
 #endif
 }

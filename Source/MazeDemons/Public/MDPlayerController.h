@@ -122,6 +122,13 @@ public:
 	// Authority only: shows Message as a toast on the owning client; Tone picks the accent colour.
 	void NotifyToast(const FText& Message, EMDColor Tone);
 
+	// Authority only: a critical hit by this player's pawn landed (U3 crit feedback hook, no UI yet).
+	void NotifyCrit(float FinalDamage);
+
+	// Owning client: implement in Blueprint for crit feedback (floating number, sound). Unbound in U3.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|Combat")
+	void OnCritNotified(float FinalDamage);
+
 	// ---- Stations (owning client only; the server just opens / the client closes by distance) ----
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Station")
 	FMDStationOpened OnStationOpened;
@@ -256,6 +263,9 @@ protected:
 
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
+
+	UFUNCTION(Client, Unreliable)
+	void Client_NotifyCrit(float FinalDamage);
 
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyToast(const FText& Message, EMDColor Tone);
