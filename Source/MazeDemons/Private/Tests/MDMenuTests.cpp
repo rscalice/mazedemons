@@ -1,3 +1,4 @@
+#include <limits>
 #include "CoreMinimal.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -68,8 +69,8 @@ bool FMDRunStatsAccumulateTest::RunTest(const FString& Parameters)
 {
 	TestEqual(TEXT("adds"), FMDPlayerRunStats::AddAmount(10.0f, 2.5f), 12.5f);
 	TestEqual(TEXT("negative delta adds nothing"), FMDPlayerRunStats::AddAmount(10.0f, -4.0f), 10.0f);
-	TestEqual(TEXT("NaN delta adds nothing"), FMDPlayerRunStats::AddAmount(10.0f, TNumericLimits<float>::QuietNaN()), 10.0f);
-	TestEqual(TEXT("infinite delta adds nothing"), FMDPlayerRunStats::AddAmount(10.0f, TNumericLimits<float>::Infinity()), 10.0f);
+	TestEqual(TEXT("NaN delta adds nothing"), FMDPlayerRunStats::AddAmount(10.0f, std::numeric_limits<float>::quiet_NaN()), 10.0f);
+	TestEqual(TEXT("infinite delta adds nothing"), FMDPlayerRunStats::AddAmount(10.0f, std::numeric_limits<float>::infinity()), 10.0f);
 	TestEqual(TEXT("negative current clamps to 0"), FMDPlayerRunStats::AddAmount(-5.0f, 0.0f), 0.0f);
 	TestEqual(TEXT("clamps at the cap"), FMDPlayerRunStats::AddAmount(FMDPlayerRunStats::MaxAmount - 1.0f, 1.0e9f), FMDPlayerRunStats::MaxAmount);
 
