@@ -8,6 +8,7 @@
 #include "MDUITypes.h"
 #include "MDPerkComponent.generated.h"
 
+class AMDGameState;
 class AMDPlayerState;
 class UMDAbilitySystemComponent;
 class UMDStaminaComponent;
@@ -58,6 +59,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
 	int32 GetRank(int32 Node) const;
+
+	// A copy of the owned ranks (length MD_NumPerkNodes, index (Path - 1) * 4 + (Tier - 1)).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
+	TArray<uint8> GetOwnedRanks() const;
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
 	int32 GetPathPoints(EMDPerkPath Path) const;
@@ -111,6 +116,7 @@ public:
 	void DebugReset();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 protected:
@@ -122,6 +128,10 @@ protected:
 
 	UFUNCTION()
 	void OnRep_Perks();
+
+	// AMDGameState::OnRunProgressChanged: zones / souls moved, so points earned may have risen.
+	UFUNCTION()
+	void HandleRunProgressChanged();
 
 	// Bound to the ASC's OnHealthChanged: Stalwart flips on / off as health crosses the threshold.
 	UFUNCTION()
@@ -145,11 +155,22 @@ private:
 	void TickRegen();
 	void BindToASC();
 
+	// Binds to the game state's run progress (local machine only; retried by a timer until the game state exists).
+	void TryBindProgress();
+
+	// Local owner only: when points earned rose since the last check, shows the "Perk point gained" toast.
+	void CheckPointsGained();
+
 	// Last modifier set pushed by ApplyToASC (server).
 	FMDPerkModifiers AppliedMods;
 	FActiveGameplayEffectHandle PerkEffectHandle;
 	bool bStalwartActive = false;
 	bool bBoundToASC = false;
+
+	// Points earned at the last check (-1 = not seen yet). Local only, never replicated.
+	int32 LastKnownEarned = -1;
+	TWeakObjectPtr<AMDGameState> BoundGameState;
+	FTimerHandle ProgressBindTimer;
 
 	FRandomStream CritStream;
 	bool bCritSeeded = false;

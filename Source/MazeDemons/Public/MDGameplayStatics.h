@@ -118,6 +118,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
 	static TArray<FMDStatLine> GetCharacterStatLines(APlayerState* PS, FName CompareRow);
 
+	// ---- Perks ----
+	// Unspent perk points of a PlayerState (earned minus spent), 0 when it has no perk component. Owner-only data: on a
+	// remote player's PlayerState this is just what that machine can see.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
+	static int32 GetPerkPointsAvailable(APlayerState* PS);
+
 	// ---- Character panel: active effects (works on clients from replicated data) ----
 	// Order: Perks (one line per ranked node), Upgrades, Condition debuffs, Exhausted. Status effects join with V1. A fresh
 	// character with nothing equipped and no perks returns no lines.

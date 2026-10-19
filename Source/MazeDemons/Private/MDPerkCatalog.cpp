@@ -244,6 +244,150 @@ EMDPerkReject UMDPerkCatalog::ValidateCommitEx(const TArray<uint8>& Current, con
 	return EMDPerkReject::None;
 }
 
+// ---- Pending model ----
+
+TArray<uint8> UMDPerkCatalog::MergeRanks(const TArray<uint8>& Owned, const TArray<uint8>& Pending, const UMDPerkTree& Tree)
+{
+	TArray<uint8> Out;
+	Out.Init(0, MD_NumPerkNodes);
+	for (int32 i = 0; i < MD_NumPerkNodes; ++i)
+	{
+		const int32 O = Owned.IsValidIndex(i) ? static_cast<int32>(Owned[i]) : 0;
+		const int32 P = Pending.IsValidIndex(i) ? static_cast<int32>(Pending[i]) : 0;
+		const int32 Max = Tree.Nodes.IsValidIndex(i) ? Tree.Nodes[i].MaxRank : 0;
+		Out[i] = static_cast<uint8>(FMath::Clamp(O + P, 0, FMath::Max(Max, 0)));
+	}
+	return Out;
+}
+
+EMDPerkNodeState UMDPerkCatalog::GetNodeState(int32 Node, const TArray<uint8>& Owned, const TArray<uint8>& Pending, const UMDPerkTree& Tree)
+{
+	if (Node < 0 || Node >= MD_NumPerkNodes || Tree.Nodes.Num() != MD_NumPerkNodes || Owned.Num() != MD_NumPerkNodes || Pending.Num() != MD_NumPerkNodes)
+	{
+		return EMDPerkNodeState::None;
+	}
+	const TArray<uint8> Desired = MergeRanks(Owned, Pending, Tree);
+	const FMDPerkNode& N = Tree.Nodes[Node];
+	const int32 Rank = Desired[Node];
+	if (Rank > 0 && Pending[Node] > 0)
+	{
+		return EMDPerkNodeState::Pending;
+	}
+	if (Rank >= N.MaxRank)
+	{
+		return EMDPerkNodeState::Maxed;
+	}
+	if (Rank > 0)
+	{
+		return EMDPerkNodeState::Owned;
+	}
+	const int32 InPath = PointsInPath(Desired, N.Path);
+	if (InPath < N.RequiresPathPoints)
+	{
+		return EMDPerkNodeState::Locked;
+	}
+	if (InPath >= Tree.Caps.PathPointCap)
+	{
+		return EMDPerkNodeState::BranchCapped;
+	}
+	return EMDPerkNodeState::Available;
+}
+
+EMDPerkReject UMDPerkCatalog::GetAddRankReject(const TArray<uint8>& Owned, const TArray<uint8>& Pending, int32 Node, int32 PointsEarned,
+	const UMDPerkTree& Tree, const FMDPerkTuning& Tuning, int32& OutArg, EMDPerkPath& OutPath)
+{
+	OutArg = 0;
+	OutPath = EMDPerkPath::None;
+	if (Node < 0 || Node >= MD_NumPerkNodes || Tree.Nodes.Num() != MD_NumPerkNodes || Owned.Num() != MD_NumPerkNodes)
+	{
+		return EMDPerkReject::InvalidRanks;
+	}
+	TArray<uint8> Trial = MergeRanks(Owned, Pending, Tree);
+	if (Trial[Node] >= Tree.Nodes[Node].MaxRank)
+	{
+		return EMDPerkReject::InvalidRanks;
+	}
+	++Trial[Node];
+	return ValidateCommitEx(Owned, Trial, PointsEarned, 1.0e9, false, Tree, Tuning, OutArg, OutPath);
+}
+
+void UMDPerkCatalog::SanitizePending(const TArray<uint8>& Owned, TArray<uint8>& Pending, int32 PointsEarned, const UMDPerkTree& Tree,
+	const FMDPerkTuning& Tuning)
+{
+	Pending.SetNumZeroed(MD_NumPerkNodes);
+	if (Owned.Num() != MD_NumPerkNodes || Tree.Nodes.Num() != MD_NumPerkNodes)
+	{
+		Pending.Init(0, MD_NumPerkNodes);
+		return;
+	}
+	for (int32 i = 0; i < MD_NumPerkNodes; ++i)
+	{
+		const int32 Room = FMath::Max(0, Tree.Nodes[i].MaxRank - static_cast<int32>(Owned[i]));
+		Pending[i] = static_cast<uint8>(FMath::Min<int32>(Pending[i], Room));
+	}
+
+	auto HighestPending = [&Pending](int32 First, int32 Last)
+	{
+		for (int32 i = Last; i >= First; --i)
+		{
+			if (Pending[i] > 0)
+			{
+				return i;
+			}
+		}
+		return static_cast<int32>(INDEX_NONE);
+	};
+
+	for (int32 Guard = 0; Guard < 64; ++Guard)
+	{
+		const TArray<uint8> Desired = MergeRanks(Owned, Pending, Tree);
+		const EMDPerkReject Reject = ValidateCommit(Owned, Desired, PointsEarned, 1.0e9, false, Tree, Tuning);
+		if (Reject == EMDPerkReject::None)
+		{
+			return;
+		}
+
+		int32 Drop = INDEX_NONE;
+		if (Reject == EMDPerkReject::PathLocked)
+		{
+			for (int32 i = 0; i < MD_NumPerkNodes && Drop == INDEX_NONE; ++i)
+			{
+				const FMDPerkNode& N = Tree.Nodes[i];
+				if (Desired[i] > 0 && PointsInPath(Desired, N.Path) - Desired[i] < N.RequiresPathPoints)
+				{
+					// The offender itself when it has pending ranks, otherwise the last pending rank of its path.
+					Drop = Pending[i] > 0 ? i : HighestPending(PerkPathFirstNode(N.Path), PerkPathFirstNode(N.Path) + MD_NodesPerPerkPath - 1);
+				}
+			}
+		}
+		else if (Reject == EMDPerkReject::PathCap)
+		{
+			for (int32 PathIndex = 1; PathIndex <= 4 && Drop == INDEX_NONE; ++PathIndex)
+			{
+				if (PointsInPath(Desired, static_cast<EMDPerkPath>(PathIndex)) > Tree.Caps.PathPointCap)
+				{
+					const int32 First = PerkPathFirstNode(static_cast<EMDPerkPath>(PathIndex));
+					Drop = HighestPending(First, First + MD_NodesPerPerkPath - 1);
+				}
+			}
+		}
+		if (Drop == INDEX_NONE)
+		{
+			Drop = HighestPending(0, MD_NumPerkNodes - 1);
+		}
+		if (Drop == INDEX_NONE)
+		{
+			return; // nothing pending left to drop
+		}
+		--Pending[Drop];
+	}
+}
+
+float UMDPerkCatalog::GetSpendLockSeconds(double TimeSinceDamage, const FMDPerkTuning& Tuning)
+{
+	return static_cast<float>(FMath::Max(0.0, static_cast<double>(Tuning.SpendDelay) - TimeSinceDamage));
+}
+
 // ---- Modifiers ----
 
 void UMDPerkCatalog::ComputeModifiers(const TArray<uint8>& Ranks, const UMDPerkTree& Tree, FMDPerkModifiers& Out, const FMDPerkTuning& Tuning)
@@ -413,6 +557,30 @@ FText UMDPerkCatalog::GetPerkRejectText(EMDPerkReject Reject, int32 Arg, EMDPerk
 	default:
 		return FText::GetEmpty();
 	}
+}
+
+FText UMDPerkCatalog::GetNodeDescription(const FMDPerkNode& Node, int32 Rank)
+{
+	float Scale = 1.0f;
+	switch (Node.Effect)
+	{
+	case EMDPerkEffect::AttackPowerPct:
+	case EMDPerkEffect::CritChance:
+	case EMDPerkEffect::CritDamage:
+	case EMDPerkEffect::ExecutionerPct:
+	case EMDPerkEffect::PotionHealPct:
+	case EMDPerkEffect::StaminaRegenPct:
+	case EMDPerkEffect::StaminaCostPct:
+		Scale = 100.0f;
+		break;
+	default: break;
+	}
+	const float Value = Node.ValuePerRank * Scale;
+	const float Total = Value * static_cast<float>(FMath::Clamp(Rank, 1, FMath::Max(Node.MaxRank, 1)));
+	FFormatNamedArguments Args;
+	Args.Add(TEXT("Value"), PerkNum(Value));
+	Args.Add(TEXT("Total"), PerkNum(Total));
+	return FText::Format(Node.Description, Args);
 }
 
 FText UMDPerkCatalog::GetEffectDetailText(const FMDPerkNode& Node, int32 Rank)

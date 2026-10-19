@@ -3,6 +3,7 @@
 #include "MDAbilitySystemComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "MDPerkComponent.h"
 #include "MDPlayerController.h"
 #include "MDPlayerState.h"
 #include "MDStaminaComponent.h"
@@ -40,6 +41,10 @@ void UMDHUDWidget::Unbind()
 	{
 		Comp->OnExhaustedChanged.RemoveDynamic(this, &UMDHUDWidget::HandleExhaustedChanged);
 	}
+	if (UMDPerkComponent* Perks = BoundPerks.Get())
+	{
+		Perks->OnPerksChanged.RemoveDynamic(this, &UMDHUDWidget::HandlePerksChanged);
+	}
 	if (AMDPlayerController* PC = BoundController.Get())
 	{
 		PC->OnPickupNotified.RemoveDynamic(this, &UMDHUDWidget::HandlePickupNotified);
@@ -49,6 +54,7 @@ void UMDHUDWidget::Unbind()
 	BoundASC.Reset();
 	BoundStamina.Reset();
 	BoundController.Reset();
+	BoundPerks.Reset();
 	bBound = false;
 }
 
@@ -80,6 +86,12 @@ void UMDHUDWidget::TryBind()
 		Comp->OnExhaustedChanged.AddUniqueDynamic(this, &UMDHUDWidget::HandleExhaustedChanged);
 		bExhausted = Comp->IsExhausted();
 	}
+	BoundPerks = PS->PerkComponent;
+	if (UMDPerkComponent* Perks = BoundPerks.Get())
+	{
+		Perks->OnPerksChanged.AddUniqueDynamic(this, &UMDHUDWidget::HandlePerksChanged);
+		PerkPointsAvailable = Perks->GetPointsAvailable();
+	}
 	PC->OnPickupNotified.AddUniqueDynamic(this, &UMDHUDWidget::HandlePickupNotified);
 	PC->OnUseRejected.AddUniqueDynamic(this, &UMDHUDWidget::HandleUseRejected);
 	PC->OnToastNotified.AddUniqueDynamic(this, &UMDHUDWidget::HandleToast);
@@ -96,6 +108,7 @@ void UMDHUDWidget::TryBind()
 	OnHealthUpdated(GetHealthPercent(), 0.0f);
 	OnStaminaUpdated(GetStaminaPercent(), bExhausted);
 	OnDeathStateChanged(bDead);
+	OnPerkPointsChanged(PerkPointsAvailable);
 }
 
 void UMDHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -187,6 +200,17 @@ void UMDHUDWidget::HandleExhaustedChanged(bool bNowExhausted)
 {
 	bExhausted = bNowExhausted;
 	OnStaminaUpdated(GetStaminaPercent(), bExhausted);
+}
+
+void UMDHUDWidget::HandlePerksChanged()
+{
+	const UMDPerkComponent* Perks = BoundPerks.Get();
+	const int32 Available = Perks ? Perks->GetPointsAvailable() : 0;
+	if (Available != PerkPointsAvailable)
+	{
+		PerkPointsAvailable = Available;
+		OnPerkPointsChanged(Available);
+	}
 }
 
 void UMDHUDWidget::HandlePickupNotified(FName ItemRowName, int32 Quantity)

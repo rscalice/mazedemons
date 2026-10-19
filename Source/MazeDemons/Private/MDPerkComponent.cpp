@@ -74,13 +74,71 @@ void UMDPerkComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 	DOREPLIFETIME_CONDITION(UMDPerkComponent, bSecondWindUsed, COND_OwnerOnly);
 }
 
+void UMDPerkComponent::BeginPlay()
+{
+	Super::BeginPlay();
+	LastKnownEarned = GetPointsEarned();
+	TryBindProgress();
+}
+
+void UMDPerkComponent::TryBindProgress()
+{
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer || BoundGameState.IsValid())
+	{
+		return;
+	}
+	AMDGameState* State = World->GetGameState<AMDGameState>();
+	if (!State)
+	{
+		if (!World->GetTimerManager().IsTimerActive(ProgressBindTimer))
+		{
+			World->GetTimerManager().SetTimer(ProgressBindTimer, this, &UMDPerkComponent::TryBindProgress, 0.5f, true);
+		}
+		return;
+	}
+	World->GetTimerManager().ClearTimer(ProgressBindTimer);
+	BoundGameState = State;
+	State->OnRunProgressChanged.AddUniqueDynamic(this, &UMDPerkComponent::HandleRunProgressChanged);
+	LastKnownEarned = GetPointsEarned(); // join state is not a gain
+}
+
+void UMDPerkComponent::CheckPointsGained()
+{
+	const int32 Earned = GetPointsEarned();
+	const int32 Previous = LastKnownEarned;
+	LastKnownEarned = Earned;
+	if (Previous < 0 || Earned <= Previous)
+	{
+		return;
+	}
+	const AMDPlayerState* PS = GetPlayerState();
+	AMDPlayerController* PC = PS ? Cast<AMDPlayerController>(PS->GetPlayerController()) : nullptr;
+	if (PC && PC->IsLocalController())
+	{
+		PC->OnToastNotified.Broadcast(LOCTEXT("PerkPointGained", "Perk point gained"), EMDColor::Accent);
+	}
+}
+
+void UMDPerkComponent::HandleRunProgressChanged()
+{
+	CheckPointsGained();
+	OnPerksChanged.Broadcast(); // points available moved: the panel and the HUD badge re-read
+}
+
 void UMDPerkComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (AMDGameState* State = BoundGameState.Get())
+	{
+		State->OnRunProgressChanged.RemoveDynamic(this, &UMDPerkComponent::HandleRunProgressChanged);
+	}
+	BoundGameState.Reset();
 	if (UWorld* World = GetWorld())
 	{
 		FTimerManager& Timers = World->GetTimerManager();
 		Timers.ClearTimer(RegenTimer);
 		Timers.ClearTimer(SecondWindTimer);
+		Timers.ClearTimer(ProgressBindTimer);
 	}
 	Super::EndPlay(EndPlayReason);
 }
@@ -164,6 +222,11 @@ int32 UMDPerkComponent::GetRank(int32 Node) const
 	return Ranks.IsValidIndex(Node) ? static_cast<int32>(Ranks[Node]) : 0;
 }
 
+TArray<uint8> UMDPerkComponent::GetOwnedRanks() const
+{
+	return Ranks;
+}
+
 int32 UMDPerkComponent::GetPathPoints(EMDPerkPath Path) const
 {
 	return UMDPerkCatalog::PointsInPath(Ranks, Path);
@@ -219,6 +282,7 @@ EMDPerkReject UMDPerkComponent::GetRespecReject(const AActor* Station) const
 
 void UMDPerkComponent::OnRep_Perks()
 {
+	CheckPointsGained(); // DebugBonusPoints is owner-only and arrives here
 	OnPerksChanged.Broadcast();
 }
 
@@ -580,6 +644,7 @@ void UMDPerkComponent::DebugAddPoints(int32 Delta)
 		return;
 	}
 	DebugBonusPoints = FMath::Clamp(DebugBonusPoints + Delta, 0, 1000);
+	CheckPointsGained(); // listen-server host
 	OnPerksChanged.Broadcast();
 }
 

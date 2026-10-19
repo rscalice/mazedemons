@@ -860,4 +860,190 @@ bool FMDEffectLinesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDPerkNodeStatesTest, "MazeDemons.Perk.NodeStates", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDPerkNodeStatesTest::RunTest(const FString& Parameters)
+{
+	const UMDPerkTree& Tree = PerkTestTree();
+	const TArray<uint8> Zeros = PerkTestZeros();
+	auto State = [&Tree](int32 Node, const TArray<uint8>& Owned, const TArray<uint8>& Pending)
+	{
+		return UMDPerkCatalog::GetNodeState(Node, Owned, Pending, Tree);
+	};
+
+	// Fresh character: tier 1 nodes are available, tier 2 and the capstone are locked.
+	TestEqual(TEXT("Hardened available"), State(0, Zeros, Zeros), EMDPerkNodeState::Available);
+	TestEqual(TEXT("Thick Hide available"), State(1, Zeros, Zeros), EMDPerkNodeState::Available);
+	TestEqual(TEXT("Stalwart locked"), State(2, Zeros, Zeros), EMDPerkNodeState::Locked);
+	TestEqual(TEXT("Bulwark locked"), State(3, Zeros, Zeros), EMDPerkNodeState::Locked);
+	TestEqual(TEXT("other path's tier 1 available"), State(4, Zeros, Zeros), EMDPerkNodeState::Available);
+
+	// Pending ranks count toward prerequisites and show as Pending.
+	TArray<uint8> Pending = Zeros;
+	Pending[0] = 1;
+	TestEqual(TEXT("pending rank shows Pending"), State(0, Zeros, Pending), EMDPerkNodeState::Pending);
+	TestEqual(TEXT("1 point is not enough for Stalwart"), State(2, Zeros, Pending), EMDPerkNodeState::Locked);
+	Pending[0] = 2;
+	TestEqual(TEXT("maxed pending is still Pending until confirmed"), State(0, Zeros, Pending), EMDPerkNodeState::Pending);
+	TestEqual(TEXT("2 pending points unlock Stalwart"), State(2, Zeros, Pending), EMDPerkNodeState::Available);
+	TestEqual(TEXT("not enough for Bulwark"), State(3, Zeros, Pending), EMDPerkNodeState::Locked);
+
+	// Owned ranks.
+	TArray<uint8> Owned = Zeros;
+	Owned[0] = 1;
+	TestEqual(TEXT("rank 1 of 2 is Owned"), State(0, Owned, Zeros), EMDPerkNodeState::Owned);
+	Owned[0] = 2;
+	TestEqual(TEXT("rank 2 of 2 is Maxed"), State(0, Owned, Zeros), EMDPerkNodeState::Maxed);
+	Pending = Zeros;
+	Pending[1] = 1;
+	TestEqual(TEXT("owned plus pending on another node"), State(1, Owned, Pending), EMDPerkNodeState::Pending);
+	TestEqual(TEXT("neighbour unchanged"), State(0, Owned, Pending), EMDPerkNodeState::Maxed);
+
+	// Path cap: 5 points in Defense leave the untouched capstone Branch capped, and an owned node below max stays Owned.
+	Owned = Zeros;
+	Owned[0] = 2;
+	Owned[1] = 2;
+	Pending = Zeros;
+	Pending[2] = 1;
+	TestEqual(TEXT("capstone with the path full"), State(3, Owned, Pending), EMDPerkNodeState::BranchCapped);
+	TestEqual(TEXT("Stalwart pending"), State(2, Owned, Pending), EMDPerkNodeState::Pending);
+	TestEqual(TEXT("capstone is only Available below the cap"), State(3, Owned, Zeros), EMDPerkNodeState::Available);
+
+	// Bad input.
+	TestEqual(TEXT("negative node"), State(-1, Zeros, Zeros), EMDPerkNodeState::None);
+	TestEqual(TEXT("node past the end"), State(MD_NumPerkNodes, Zeros, Zeros), EMDPerkNodeState::None);
+	TestEqual(TEXT("short owned array"), State(0, TArray<uint8>(), Zeros), EMDPerkNodeState::None);
+	TestEqual(TEXT("short pending array"), State(0, Zeros, TArray<uint8>()), EMDPerkNodeState::None);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDPerkPendingRulesTest, "MazeDemons.Perk.PendingRules", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDPerkPendingRulesTest::RunTest(const FString& Parameters)
+{
+	const UMDPerkTree& Tree = PerkTestTree();
+	const FMDPerkTuning Tuning;
+	const TArray<uint8> Zeros = PerkTestZeros();
+	int32 Arg = 0;
+	EMDPerkPath Path = EMDPerkPath::None;
+
+	// MergeRanks clamps to MaxRank and tolerates short arrays.
+	TArray<uint8> Owned = Zeros;
+	Owned[0] = 2;
+	TArray<uint8> Pending = Zeros;
+	Pending[0] = 2;
+	Pending[1] = 1;
+	const TArray<uint8> Merged = UMDPerkCatalog::MergeRanks(Owned, Pending, Tree);
+	TestEqual(TEXT("merge clamps to max rank"), static_cast<int32>(Merged[0]), 2);
+	TestEqual(TEXT("merge adds pending"), static_cast<int32>(Merged[1]), 1);
+	TestEqual(TEXT("merge of empty arrays has full length"), UMDPerkCatalog::MergeRanks(TArray<uint8>(), TArray<uint8>(), Tree).Num(), MD_NumPerkNodes);
+
+	// GetAddRankReject: the reasons the panel shows.
+	TestEqual(TEXT("a free tier 1 rank is fine"), UMDPerkCatalog::GetAddRankReject(Zeros, Zeros, 0, 1, Tree, Tuning, Arg, Path), EMDPerkReject::None);
+	TestEqual(TEXT("no points"), UMDPerkCatalog::GetAddRankReject(Zeros, Zeros, 0, 0, Tree, Tuning, Arg, Path), EMDPerkReject::NoPoints);
+	TestEqual(TEXT("tier 2 is locked"), UMDPerkCatalog::GetAddRankReject(Zeros, Zeros, 2, 8, Tree, Tuning, Arg, Path), EMDPerkReject::PathLocked);
+	TestEqual(TEXT("locked asks for 2 points"), Arg, 2);
+	TestEqual(TEXT("locked names the path"), Path, EMDPerkPath::Defense);
+	TestEqual(TEXT("rank past max"), UMDPerkCatalog::GetAddRankReject(Owned, Pending, 0, 8, Tree, Tuning, Arg, Path), EMDPerkReject::InvalidRanks);
+	TestEqual(TEXT("bad node"), UMDPerkCatalog::GetAddRankReject(Zeros, Zeros, 99, 8, Tree, Tuning, Arg, Path), EMDPerkReject::InvalidRanks);
+	TArray<uint8> Full = Zeros;
+	Full[0] = 2;
+	Full[1] = 2;
+	Full[2] = 1;
+	TestEqual(TEXT("sixth point in a path"), UMDPerkCatalog::GetAddRankReject(Full, Zeros, 2, 8, Tree, Tuning, Arg, Path), EMDPerkReject::PathCap);
+	TestEqual(TEXT("path cap value"), Arg, 5);
+	TestEqual(TEXT("combat does not block adding"), UMDPerkCatalog::GetAddRankReject(Zeros, Zeros, 0, 1, Tree, Tuning, Arg, Path), EMDPerkReject::None);
+
+	// SanitizePending: removing a prerequisite drops what depended on it.
+	Pending = Zeros;
+	Pending[0] = 1; // Hardened lost one of its two pending ranks
+	Pending[2] = 2; // Stalwart still pending
+	UMDPerkCatalog::SanitizePending(Zeros, Pending, 8, Tree, Tuning);
+	TestEqual(TEXT("Hardened stays"), static_cast<int32>(Pending[0]), 1);
+	TestEqual(TEXT("Stalwart dropped"), static_cast<int32>(Pending[2]), 0);
+
+	// ... fewer points than pending ranks: the highest node goes first.
+	Pending = Zeros;
+	Pending[0] = 2;
+	Pending[1] = 2;
+	UMDPerkCatalog::SanitizePending(Zeros, Pending, 2, Tree, Tuning);
+	TestEqual(TEXT("Hardened kept"), static_cast<int32>(Pending[0]), 2);
+	TestEqual(TEXT("Thick Hide dropped"), static_cast<int32>(Pending[1]), 0);
+
+	// ... pending beyond the room left by the owned ranks, and a malformed array.
+	Owned = Zeros;
+	Owned[0] = 2;
+	Pending = Zeros;
+	Pending[0] = 2;
+	UMDPerkCatalog::SanitizePending(Owned, Pending, 8, Tree, Tuning);
+	TestEqual(TEXT("owned rank leaves no room"), static_cast<int32>(Pending[0]), 0);
+	Pending.Reset();
+	UMDPerkCatalog::SanitizePending(Zeros, Pending, 8, Tree, Tuning);
+	TestEqual(TEXT("short pending array is repaired"), Pending.Num(), MD_NumPerkNodes);
+
+	// ... a legal pending set is left alone.
+	Pending = Zeros;
+	Pending[0] = 2;
+	Pending[2] = 1;
+	Pending[4] = 1;
+	const TArray<uint8> Before = Pending;
+	UMDPerkCatalog::SanitizePending(Zeros, Pending, 8, Tree, Tuning);
+	TestTrue(TEXT("legal pending set unchanged"), Pending == Before);
+
+	// Spend lock countdown.
+	TestNearlyEqual(TEXT("just hit"), UMDPerkCatalog::GetSpendLockSeconds(0.0, Tuning), 5.0f, 0.001f);
+	TestNearlyEqual(TEXT("3.2 s left is 1.8"), UMDPerkCatalog::GetSpendLockSeconds(3.2, Tuning), 1.8f, 0.001f);
+	TestEqual(TEXT("exactly the delay"), UMDPerkCatalog::GetSpendLockSeconds(5.0, Tuning), 0.0f);
+	TestEqual(TEXT("long ago"), UMDPerkCatalog::GetSpendLockSeconds(1.0e6, Tuning), 0.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDPerkNodeDescriptionTest, "MazeDemons.Perk.NodeDescription", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDPerkNodeDescriptionTest::RunTest(const FString& Parameters)
+{
+	const UMDPerkTree& Tree = PerkTestTree();
+	const FString Hardened2 = UMDPerkCatalog::GetNodeDescription(Tree.Nodes[0], 2).ToString();
+	TestTrue(TEXT("Hardened per rank"), Hardened2.Contains(TEXT("+3 ")));
+	TestTrue(TEXT("Hardened total at rank 2"), Hardened2.Contains(TEXT("total 6")));
+	TestTrue(TEXT("rank 0 describes rank 1"), UMDPerkCatalog::GetNodeDescription(Tree.Nodes[0], 0).ToString().Contains(TEXT("total 3")));
+	TestTrue(TEXT("rank past max is clamped"), UMDPerkCatalog::GetNodeDescription(Tree.Nodes[0], 9).ToString().Contains(TEXT("total 6")));
+
+	// Percent effects are shown as percent: 0.06 -> 6, 0.12 -> 12.
+	const int32 Sharpened = Tree.FindNodeIndex(FName(TEXT("Sharpened")));
+	const FString Sharp2 = UMDPerkCatalog::GetNodeDescription(Tree.Nodes[Sharpened], 2).ToString();
+	TestTrue(TEXT("Sharpened per rank"), Sharp2.Contains(TEXT("+6%")));
+	TestTrue(TEXT("Sharpened total"), Sharp2.Contains(TEXT("total 12%")));
+	const int32 Recovery = Tree.FindNodeIndex(FName(TEXT("Recovery")));
+	TestTrue(TEXT("Recovery keeps 0.5 per rank"), UMDPerkCatalog::GetNodeDescription(Tree.Nodes[Recovery], 2).ToString().Contains(TEXT("+0.5 ")));
+
+	// Every default node produces a non-empty text without leftover placeholders.
+	for (int32 i = 0; i < Tree.Nodes.Num(); ++i)
+	{
+		const FString Text = UMDPerkCatalog::GetNodeDescription(Tree.Nodes[i], 1).ToString();
+		TestFalse(*FString::Printf(TEXT("node %d has text"), i), Text.IsEmpty());
+		TestFalse(*FString::Printf(TEXT("node %d has no placeholder left"), i), Text.Contains(TEXT("{")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDPerkPointsAvailableStaticTest, "MazeDemons.Perk.PointsAvailableAndOwnedRanks", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDPerkPointsAvailableStaticTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("no player state: 0"), UMDGameplayStatics::GetPerkPointsAvailable(nullptr), 0);
+
+	FMDPerkFixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return true;
+	}
+	TestEqual(TEXT("fresh character: the starting point"), UMDGameplayStatics::GetPerkPointsAvailable(Fx.PS), 1);
+	Fx.Perk->Ranks[0] = 1;
+	TestEqual(TEXT("one spent"), UMDGameplayStatics::GetPerkPointsAvailable(Fx.PS), 0);
+	Fx.Perk->DebugBonusPoints = 2;
+	TestEqual(TEXT("debug points count"), UMDGameplayStatics::GetPerkPointsAvailable(Fx.PS), 2);
+
+	const TArray<uint8> Owned = Fx.Perk->GetOwnedRanks();
+	TestEqual(TEXT("owned ranks have full length"), Owned.Num(), MD_NumPerkNodes);
+	TestEqual(TEXT("owned ranks mirror the component"), static_cast<int32>(Owned[0]), 1);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

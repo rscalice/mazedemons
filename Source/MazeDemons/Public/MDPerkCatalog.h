@@ -32,6 +32,29 @@ public:
 	static EMDPerkReject ValidateCommitEx(const TArray<uint8>& Current, const TArray<uint8>& Desired, int32 PointsEarned,
 		double TimeSinceDamage, bool bDead, const UMDPerkTree& Tree, const FMDPerkTuning& Tuning, int32& OutArg, EMDPerkPath& OutPath);
 
+	// ---- Pending (client-side) model for the Perks panel ----
+	// Owned + Pending per node, each clamped to the node's MaxRank; a missing / short array counts as zeros. Always MD_NumPerkNodes long.
+	static TArray<uint8> MergeRanks(const TArray<uint8>& Owned, const TArray<uint8>& Pending, const UMDPerkTree& Tree);
+
+	// Panel state of Node when Pending ranks sit on top of Owned. Priority: Pending (has uncommitted ranks) > Maxed > Owned >
+	// Locked (path prerequisite unmet, counting pending ranks of the other nodes) > BranchCapped (path holds the cap) > Available.
+	// An owned node below MaxRank stays Owned even when its path is capped. None for a bad index or arrays of the wrong size.
+	static EMDPerkNodeState GetNodeState(int32 Node, const TArray<uint8>& Owned, const TArray<uint8>& Pending, const UMDPerkTree& Tree);
+
+	// Why one more rank in Node would not be a legal commit (None = it would be). Time and death are ignored (those only block
+	// Confirm); points, path cap and prerequisites are checked on Owned + Pending + 1. A node already at MaxRank, or a bad
+	// index, gives InvalidRanks. OutArg / OutPath as in ValidateCommitEx.
+	static EMDPerkReject GetAddRankReject(const TArray<uint8>& Owned, const TArray<uint8>& Pending, int32 Node, int32 PointsEarned,
+		const UMDPerkTree& Tree, const FMDPerkTuning& Tuning, int32& OutArg, EMDPerkPath& OutPath);
+
+	// Drops pending ranks until Owned + Pending is a legal commit apart from time / death: ranks above MaxRank first, then
+	// (highest node first, so capstones go before the tier below) whatever breaks points, the path cap or a prerequisite.
+	static void SanitizePending(const TArray<uint8>& Owned, TArray<uint8>& Pending, int32 PointsEarned, const UMDPerkTree& Tree,
+		const FMDPerkTuning& Tuning = FMDPerkTuning());
+
+	// Seconds until committing is allowed: max(0, SpendDelay - TimeSinceDamage).
+	static float GetSpendLockSeconds(double TimeSinceDamage, const FMDPerkTuning& Tuning = FMDPerkTuning());
+
 	// ---- Modifiers ----
 	// Sums the ranks into totals and applies the BALANCE section 7 caps. Order-independent: depends only on the ranks.
 	static void ComputeModifiers(const TArray<uint8>& Ranks, const UMDPerkTree& Tree, FMDPerkModifiers& Out,
@@ -75,6 +98,9 @@ public:
 
 	// Toast text for a reject. Arg / Path as reported by ValidateCommitEx.
 	static FText GetPerkRejectText(EMDPerkReject Reject, int32 Arg = 0, EMDPerkPath Path = EMDPerkPath::None);
+
+	// The node's description with {Value} (per rank, scaled for percent effects: 0.06 -> "6") and {Total} (Rank ranks, at least 1) filled in.
+	static FText GetNodeDescription(const FMDPerkNode& Node, int32 Rank);
 
 	// "+6 pp damage reduction" for a node at Rank (0 = empty text).
 	static FText GetEffectDetailText(const FMDPerkNode& Node, int32 Rank);

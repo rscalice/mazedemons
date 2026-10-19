@@ -67,6 +67,19 @@ enum class EMDPerkReject : uint8
 	NotAtStation
 };
 
+// How a node looks in the Perks panel, evaluated against owned ranks plus the client's pending ranks (UMDPerkCatalog::GetNodeState).
+UENUM(BlueprintType)
+enum class EMDPerkNodeState : uint8
+{
+	None = 0,      // not a node (bad index / malformed arrays)
+	Locked,        // the path prerequisite is not met (and the node has no rank)
+	Available,     // a rank can be added as far as the tree rules go
+	Pending,       // has ranks that are not committed yet
+	Owned,         // has committed ranks, more are possible
+	Maxed,         // at MaxRank
+	BranchCapped   // no rank yet and the path already holds the per-path cap
+};
+
 USTRUCT(BlueprintType)
 struct MAZEDEMONS_API FMDPerkNode
 {

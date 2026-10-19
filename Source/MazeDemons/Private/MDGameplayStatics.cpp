@@ -157,6 +157,12 @@ namespace
 	}
 }
 
+int32 UMDGameplayStatics::GetPerkPointsAvailable(APlayerState* PS)
+{
+	const UMDPerkComponent* Perks = UMDPerkComponent::FindFor(PS);
+	return Perks ? Perks->GetPointsAvailable() : 0;
+}
+
 TArray<FMDStatLine> UMDGameplayStatics::GetCharacterStatLines(APlayerState* PS, FName CompareRow)
 {
 	TArray<FMDStatLine> Lines;
