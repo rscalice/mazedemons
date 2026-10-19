@@ -16,17 +16,28 @@
 
 namespace
 {
-	// BALANCE section 8 ceilings, as multiples of a bare character. Exceeding one is reported as a warning with the offending
-	// build: the model is a first-order stand-in for BALANCE.md's own spreadsheet, so a miss is a balance finding, not a bug.
+	// BALANCE section 8 ceilings, as multiples of a bare character (sprint uptime is absolute).
 	constexpr float MDBalCeilEHPPerks = 1.35f;
 	constexpr float MDBalCeilDPSPerks = 1.35f;
 	constexpr float MDBalCeilEHPGear = 2.0f;
 	constexpr float MDBalCeilDPSGear = 1.6f;
 	constexpr float MDBalCeilSprintUptime = 0.75f;
 
-	// "With upgrades and gear": a mid-game kit expressed as extra damage reduction % and an attack power multiplier.
-	constexpr float MDBalGearDR = 20.0f;
-	constexpr float MDBalGearAP = 1.3f;
+	// "With upgrades and gear": derived from FMDEconomyTuning (starter cloth set with every piece at the max upgrade level,
+	// main weapon at the same level), see UMDBalanceModel::GetGearScenario.
+	float BalGearDR()
+	{
+		float DR = 0.0f, AP = 1.0f;
+		UMDBalanceModel::GetGearScenario(FMDEconomyTuning(), DR, AP);
+		return DR;
+	}
+
+	float BalGearAP()
+	{
+		float DR = 0.0f, AP = 1.0f;
+		UMDBalanceModel::GetGearScenario(FMDEconomyTuning(), DR, AP);
+		return AP;
+	}
 
 	struct FMDBalBuild
 	{
@@ -147,7 +158,7 @@ namespace
 			}
 			UMDPerkCatalog::ComputeModifiers(Ranks, BalTree(), Build.Mods);
 			Build.Perks = BalMetrics(Build.Mods);
-			Build.Geared = BalMetrics(Build.Mods, MDBalGearDR, MDBalGearAP);
+			Build.Geared = BalMetrics(Build.Mods, BalGearDR(), BalGearAP());
 		});
 	}
 }
@@ -164,8 +175,10 @@ bool FMDBalanceExhaustiveBuildsTest::RunTest(const FString& Parameters)
 
 	// The empty build is in the set and is the baseline.
 	const FMDBuildMetrics Baseline = BalMetrics(FMDPerkModifiers());
-	const FMDBuildMetrics BaselineGear = BalMetrics(FMDPerkModifiers(), MDBalGearDR, MDBalGearAP);
-	TestNearlyEqual(TEXT("baseline effective HP vs werewolf"), Baseline.EffectiveHPWerewolf, 100.0f, 0.01f);
+	const FMDBuildMetrics BaselineGear = BalMetrics(FMDPerkModifiers(), BalGearDR(), BalGearAP());
+	TestNearlyEqual(TEXT("baseline effective HP"), Baseline.EffectiveHP, 100.0f, 0.01f);
+	TestNearlyEqual(TEXT("baseline effective HP vs werewolf (informational)"), Baseline.EffectiveHPWerewolf, 100.0f, 0.01f);
+	TestNearlyEqual(TEXT("baseline sprint uptime ~53% (BALANCE section 8)"), Baseline.SprintUptime, 0.526f, 0.01f);
 	TestNearlyEqual(TEXT("baseline DPS"), Baseline.DPS, 10.0f, 0.01f);
 
 	// No legal build exceeds the budget or a per-path cap, and none is worse than a bare character.
@@ -177,6 +190,7 @@ bool FMDBalanceExhaustiveBuildsTest::RunTest(const FString& Parameters)
 	const FMDBalBuild* WorstUptime = nullptr;
 	const FMDBalBuild* WorstEHPGear = nullptr;
 	const FMDBalBuild* WorstDPSGear = nullptr;
+	const FMDBalBuild* WorstEHPThick = nullptr;
 	for (const FMDBalBuild& Build : Builds)
 	{
 		MaxPointsSeen = FMath::Max(MaxPointsSeen, Build.Points);
@@ -187,37 +201,45 @@ bool FMDBalanceExhaustiveBuildsTest::RunTest(const FString& Parameters)
 				AddError(FString::Printf(TEXT("build exceeds the path cap: %s"), *BalDescribe(Build.Ranks)));
 			}
 		}
-		if (Build.Perks.EffectiveHPWerewolf < Baseline.EffectiveHPWerewolf - 0.01f || Build.Perks.DPS < Baseline.DPS - 0.01f)
+		if (Build.Perks.EffectiveHP < Baseline.EffectiveHP - 0.01f || Build.Perks.DPS < Baseline.DPS - 0.01f)
 		{
 			AddError(FString::Printf(TEXT("build is weaker than a bare character: %s"), *BalDescribe(Build.Ranks)));
 		}
-		if (!FMath::IsFinite(Build.Perks.EffectiveHPWerewolf) || !FMath::IsFinite(Build.Perks.EffectiveHPBoss) || !FMath::IsFinite(Build.Perks.DPS))
+		if (!FMath::IsFinite(Build.Perks.EffectiveHP) || !FMath::IsFinite(Build.Perks.EffectiveHPBoss) || !FMath::IsFinite(Build.Perks.DPS))
 		{
 			AddError(FString::Printf(TEXT("non-finite metrics: %s"), *BalDescribe(Build.Ranks)));
 		}
 
-		if (!WorstEHP || Build.Perks.EffectiveHPWerewolf > WorstEHP->Perks.EffectiveHPWerewolf) { WorstEHP = &Build; }
+		if (!WorstEHP || Build.Perks.EffectiveHP > WorstEHP->Perks.EffectiveHP) { WorstEHP = &Build; }
 		if (!WorstDPS || Build.Perks.DPS > WorstDPS->Perks.DPS) { WorstDPS = &Build; }
 		if (!WorstUptime || Build.Perks.SprintUptime > WorstUptime->Perks.SprintUptime) { WorstUptime = &Build; }
-		if (!WorstEHPGear || Build.Geared.EffectiveHPWerewolf > WorstEHPGear->Geared.EffectiveHPWerewolf) { WorstEHPGear = &Build; }
+		if (!WorstEHPGear || Build.Geared.EffectiveHP > WorstEHPGear->Geared.EffectiveHP) { WorstEHPGear = &Build; }
+		if (!WorstEHPThick || Build.Perks.EffectiveHPWerewolf > WorstEHPThick->Perks.EffectiveHPWerewolf) { WorstEHPThick = &Build; }
 		if (!WorstDPSGear || Build.Geared.DPS > WorstDPSGear->Geared.DPS) { WorstDPSGear = &Build; }
 	}
 	TestEqual(TEXT("the budget is spent in full by some build"), MaxPointsSeen, Ref.FullRunPoints);
 
-	// BALANCE section 8 ceilings. Reported as warnings (see the constants above) with the offending build.
-	auto Ceiling = [this](const TCHAR* What, float Value, float Ceil, const FMDBalBuild* Build)
+	// BALANCE section 8 ceilings. Hard errors where the model is faithful to BALANCE.md; a ceiling that a legal build still
+	// exceeds is a design finding, so it stays a warning (bHard = false) and prints the build.
+	auto Ceiling = [this](const TCHAR* What, float Value, float Ceil, const FMDBalBuild* Build, bool bHard)
 	{
 		if (Build && Value > Ceil)
 		{
-			AddWarning(FString::Printf(TEXT("BALANCE ceiling exceeded: %s %.3f > %.3f by build: %s"), What, Value, Ceil, *BalDescribe(Build->Ranks)));
+			const FString Msg = FString::Printf(TEXT("BALANCE ceiling exceeded: %s %.3f > %.3f by build: %s"), What, Value, Ceil, *BalDescribe(Build->Ranks));
+			if (bHard) { AddError(Msg); } else { AddWarning(Msg); }
 		}
 	};
-	Ceiling(TEXT("effective HP, perks alone"), WorstEHP->Perks.EffectiveHPWerewolf / Baseline.EffectiveHPWerewolf, MDBalCeilEHPPerks, WorstEHP);
-	Ceiling(TEXT("DPS, perks alone"), WorstDPS->Perks.DPS / Baseline.DPS, MDBalCeilDPSPerks, WorstDPS);
-	Ceiling(TEXT("sprint uptime"), WorstUptime->Perks.SprintUptime, MDBalCeilSprintUptime, WorstUptime);
-	Ceiling(TEXT("effective HP, with upgrades and gear"), WorstEHPGear->Geared.EffectiveHPWerewolf / Baseline.EffectiveHPWerewolf, MDBalCeilEHPGear, WorstEHPGear);
-	Ceiling(TEXT("DPS, with upgrades and gear"), WorstDPSGear->Geared.DPS / Baseline.DPS, MDBalCeilDPSGear, WorstDPSGear);
-	(void)BaselineGear;
+	Ceiling(TEXT("effective HP, perks alone"), WorstEHP->Perks.EffectiveHP / Baseline.EffectiveHP, MDBalCeilEHPPerks, WorstEHP, true);
+	Ceiling(TEXT("DPS, perks alone"), WorstDPS->Perks.DPS / Baseline.DPS, MDBalCeilDPSPerks, WorstDPS, true);
+	Ceiling(TEXT("sprint uptime"), WorstUptime->Perks.SprintUptime, MDBalCeilSprintUptime, WorstUptime, true);
+	Ceiling(TEXT("DPS, with upgrades and gear"), WorstDPSGear->Geared.DPS / Baseline.DPS, MDBalCeilDPSGear, WorstDPSGear, true);
+	// Warning, not error: the gear alone (cloth set at level 3, 44.09% DR) is already 1.79x, so a Defense + Vitality build lands
+	// above 2.0x. Robert decides whether to tune the perks, the upgrade DR or this ceiling.
+	Ceiling(TEXT("effective HP, with upgrades and gear"), WorstEHPGear->Geared.EffectiveHP / Baseline.EffectiveHP, MDBalCeilEHPGear, WorstEHPGear, false);
+	AddInfo(FString::Printf(TEXT("Balance worst cases: EHP perks %.3fx, EHP gear %.3fx (gear alone %.3fx), DPS perks %.3fx, DPS gear %.3fx, sprint uptime %.3f (baseline %.3f), Thick Hide EHP vs werewolf hit %.3fx"),
+		WorstEHP->Perks.EffectiveHP / Baseline.EffectiveHP, WorstEHPGear->Geared.EffectiveHP / Baseline.EffectiveHP, BaselineGear.EffectiveHP / Baseline.EffectiveHP,
+		WorstDPS->Perks.DPS / Baseline.DPS, WorstDPSGear->Geared.DPS / Baseline.DPS, WorstUptime->Perks.SprintUptime, Baseline.SprintUptime,
+		WorstEHPThick ? WorstEHPThick->Perks.EffectiveHPWerewolf / Baseline.EffectiveHPWerewolf : 0.0f));
 
 	// Saved/Balance/perk_builds.csv: one row per build.
 	FString Csv = TEXT("points,paths");
@@ -225,7 +247,7 @@ bool FMDBalanceExhaustiveBuildsTest::RunTest(const FString& Parameters)
 	{
 		Csv += TEXT(",") + Node.Id.ToString();
 	}
-	Csv += TEXT(",ehp_werewolf,ehp_boss,dps,sprint_uptime,ttk_werewolf,ttk_boss,ehp_werewolf_geared,dps_geared\n");
+	Csv += TEXT(",ehp,ehp_werewolf_thickhide,dps,sprint_uptime,ttk_werewolf,ttk_boss,ehp_geared,dps_geared\n");
 	for (const FMDBalBuild& Build : Builds)
 	{
 		Csv += FString::Printf(TEXT("%d,%d"), Build.Points, Build.PathsUsed);
@@ -233,8 +255,8 @@ bool FMDBalanceExhaustiveBuildsTest::RunTest(const FString& Parameters)
 		{
 			Csv += FString::Printf(TEXT(",%d"), static_cast<int32>(Rank));
 		}
-		Csv += FString::Printf(TEXT(",%.3f,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f\n"), Build.Perks.EffectiveHPWerewolf, Build.Perks.EffectiveHPBoss,
-			Build.Perks.DPS, Build.Perks.SprintUptime, Build.Perks.TTKWerewolf, Build.Perks.TTKBoss, Build.Geared.EffectiveHPWerewolf, Build.Geared.DPS);
+		Csv += FString::Printf(TEXT(",%.3f,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f\n"), Build.Perks.EffectiveHP, Build.Perks.EffectiveHPWerewolf,
+			Build.Perks.DPS, Build.Perks.SprintUptime, Build.Perks.TTKWerewolf, Build.Perks.TTKBoss, Build.Geared.EffectiveHP, Build.Geared.DPS);
 	}
 	const FString Dir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Balance"));
 	IFileManager::Get().MakeDirectory(*Dir, true);
@@ -248,12 +270,14 @@ bool FMDBalanceExhaustiveBuildsTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDBalanceSprintUptimeTest, "MazeDemons.Balance.SprintUptimeFinite", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FMDBalanceSprintUptimeTest::RunTest(const FString& Parameters)
 {
-	// Bare character: sprint 100 / 15 = 6.67 s, recover 1 + 0.3 * 100 / 20 = 2.5 s.
-	TestNearlyEqual(TEXT("baseline uptime"), BalMetrics(FMDPerkModifiers()).SprintUptime, 0.7273f, 0.001f);
+	// Reference cycle (BALANCE section 8): bare character sprints 100 / 15 = 6.67 s, recovers 1 + 100 / 20 = 6 s -> 52.6%.
+	TestNearlyEqual(TEXT("baseline uptime ~53%"), BalMetrics(FMDPerkModifiers()).SprintUptime, 0.5263f, 0.001f);
+	// BALANCE's worked check for max Movement: 150 stamina, drain 15 x 0.7, regen 20 x 1.45, delay 0.5 -> ~14.3 s vs ~5.2 s, ~72%.
+	TestNearlyEqual(TEXT("max Movement worked check ~72%"), UMDBalanceModel::SprintUptime(150.0f, 29.0f, 0.5f, 10.5f, 1.0f), 0.716f, 0.005f);
 
-	TestEqual(TEXT("no drain, no model"), UMDBalanceModel::SprintUptime(100.0f, 20.0f, 1.0f, 0.0f, 0.3f), 0.0f);
-	TestEqual(TEXT("no regen, no model"), UMDBalanceModel::SprintUptime(100.0f, 0.0f, 1.0f, 15.0f, 0.3f), 0.0f);
-	TestEqual(TEXT("no stamina, no model"), UMDBalanceModel::SprintUptime(0.0f, 20.0f, 1.0f, 15.0f, 0.3f), 0.0f);
+	TestEqual(TEXT("no drain, no model"), UMDBalanceModel::SprintUptime(100.0f, 20.0f, 1.0f, 0.0f, 1.0f), 0.0f);
+	TestEqual(TEXT("no regen, no model"), UMDBalanceModel::SprintUptime(100.0f, 0.0f, 1.0f, 15.0f, 1.0f), 0.0f);
+	TestEqual(TEXT("no stamina, no model"), UMDBalanceModel::SprintUptime(0.0f, 20.0f, 1.0f, 15.0f, 1.0f), 0.0f);
 
 	TArray<FMDBalBuild> Builds;
 	BalCollect(Builds);
@@ -308,13 +332,13 @@ bool FMDBalancePureVsMixedTest::RunTest(const FString& Parameters)
 		if (Build.PathsUsed <= 1)
 		{
 			++PureCount;
-			BestPureEHP = FMath::Max(BestPureEHP, Build.Perks.EffectiveHPWerewolf);
+			BestPureEHP = FMath::Max(BestPureEHP, Build.Perks.EffectiveHP);
 			BestPureDPS = FMath::Max(BestPureDPS, Build.Perks.DPS);
 		}
 		else
 		{
 			++MixedCount;
-			BestMixedEHP = FMath::Max(BestMixedEHP, Build.Perks.EffectiveHPWerewolf);
+			BestMixedEHP = FMath::Max(BestMixedEHP, Build.Perks.EffectiveHP);
 			BestMixedDPS = FMath::Max(BestMixedDPS, Build.Perks.DPS);
 		}
 	}
@@ -325,6 +349,41 @@ bool FMDBalancePureVsMixedTest::RunTest(const FString& Parameters)
 	// (no pure branch dominates every mixed build).
 	TestTrue(TEXT("best mixed effective HP >= best pure branch"), BestMixedEHP >= BestPureEHP - 0.01f);
 	TestTrue(TEXT("best mixed DPS >= best pure branch"), BestMixedDPS >= BestPureDPS - 0.01f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDBalanceGearScenarioTest, "MazeDemons.Balance.GearScenarioAndStalwart", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDBalanceGearScenarioTest::RunTest(const FString& Parameters)
+{
+	// Cloth set 4 / 8 / 4 / 2 with +3 pp per level at level 3 -> 13 / 17 / 13 / 11: 1 - .87 * .83 * .87 * .89 = 44.09%; weapon x1.18.
+	float DR = 0.0f, AP = 0.0f;
+	UMDBalanceModel::GetGearScenario(FMDEconomyTuning(), DR, AP);
+	TestNearlyEqual(TEXT("gear damage reduction"), DR, 44.09f, 0.05f);
+	TestNearlyEqual(TEXT("gear attack power multiplier"), AP, 1.18f, 0.001f);
+
+	FMDEconomyTuning NoUpgrades;
+	NoUpgrades.MaxUpgradeLevel = 0;
+	UMDBalanceModel::GetGearScenario(NoUpgrades, DR, AP);
+	TestNearlyEqual(TEXT("level 0 cloth set"), DR, 16.91f, 0.01f);
+	TestNearlyEqual(TEXT("level 0 weapon"), AP, 1.0f, 0.001f);
+
+	// Stalwart: half the bar at 6 % DR, half at 16 % (6 + 10 combined): 100 * (0.5 / 0.94 + 0.5 / 0.846) = 112.2.
+	const float Plain = UMDBalanceModel::EffectiveHP(100.0f, 6.0f, 0.0f, 0.0f, false);
+	TestNearlyEqual(TEXT("plain effective HP = Max / (1 - DR)"), Plain, 100.0f / 0.94f, 0.01f);
+	const float Weighted = UMDBalanceModel::EffectiveHPStalwart(100.0f, 6.0f, 15.4f, 0.5f, 0.0f, 0.0f, false);
+	TestNearlyEqual(TEXT("Stalwart weighted effective HP"), Weighted, 100.0f * (0.5f / 0.94f + 0.5f / 0.846f), 0.05f);
+	TestNearlyEqual(TEXT("no Stalwart gain = plain"), UMDBalanceModel::EffectiveHPStalwart(100.0f, 6.0f, 6.0f, 0.5f, 0.0f, 0.0f, false), Plain, 0.01f);
+
+	// Bulwark only bites on a hit above 30% of max health: 30 damage on 100 HP is not capped, 60 is (60 -> 30 halves the damage).
+	TestNearlyEqual(TEXT("bulwark does not touch a 30 hit"), UMDBalanceModel::EffectiveHP(100.0f, 0.0f, 30.0f, 0.0f, true), 100.0f, 0.01f);
+	TestNearlyEqual(TEXT("bulwark caps a 60 hit"), UMDBalanceModel::EffectiveHP(100.0f, 0.0f, 60.0f, 0.0f, true), 200.0f, 0.01f);
+
+	// The ceilinged measure ignores Thick Hide; the informational one does not (15 hit, 4 flat: 15 -> 11).
+	FMDPerkModifiers Mods;
+	Mods.FlatDamageReduction = 4.0f;
+	const FMDBuildMetrics M = BalMetrics(Mods);
+	TestNearlyEqual(TEXT("Thick Hide is not in the ceilinged EHP"), M.EffectiveHP, 100.0f, 0.01f);
+	TestNearlyEqual(TEXT("Thick Hide vs the werewolf hit"), M.EffectiveHPWerewolf, 100.0f * 15.0f / 11.0f, 0.05f);
 	return true;
 }
 
