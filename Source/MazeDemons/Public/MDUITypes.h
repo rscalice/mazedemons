@@ -117,3 +117,13 @@ struct FMDMotion
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motion") float DeathFade = 0.20f;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motion") float LowHealthPulseHz = 1.0f;
 };
+
+// Tabs of the in-game menu (W_MDGameMenu). None is "no selection" and is never a valid active tab.
+UENUM(BlueprintType)
+enum class EMDMenuTab : uint8
+{
+	None = 0,
+	Inventory,
+	Perks,
+	Run
+};
