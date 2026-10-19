@@ -5,10 +5,14 @@
 #include "MDGameState.h"
 #include "MDPlayerState.h"
 #include "MDInventoryComponent.h"
+#include "MDPerkCatalog.h"
+#include "MDPerkComponent.h"
 #include "MDPickupBase.h"
 #include "MDInteractAbility.h"
 #include "MDGameSettings.h"
 #include "MDStation.h"
+#include "MDAttributeSet.h"
+#include "MDStaminaComponent.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Character.h"
@@ -861,6 +865,15 @@ void AMDPlayerController::DumpCondition()
 			UMDStatCalculator::EffectivePieceDR(Inv->GetItemArmorReduction(E.ItemRowName), Level, Mult, Tuning),
 			Inv->GetItemAttackBonus(E.ItemRowName));
 	}
+	if (const UMDPerkComponent* Perk = UMDPerkComponent::FindFor(PS))
+	{
+		const FMDPerkModifiers Mods = Perk->ComputeCurrentModifiers();
+		UE_LOG(LogMDInventory, Warning, TEXT("  perks: spent %d/%d  DR +%.1f pp (Stalwart +%.1f)  flat -%.1f  AP +%.0f%%  crit %.0f%% x%.2f  exec +%.0f%%  regen %.1f/s  potion x%.2f  bulwark %d  secondWind %d (used %d)  stamCost x%.2f  sprint x%.2f"),
+			Perk->GetPointsSpent(), Perk->GetPointsEarned(), Mods.DamageReductionPP, Mods.StalwartPP, Mods.FlatDamageReduction,
+			Mods.AttackPowerPct * 100.0f, Mods.CritChance * 100.0f, Mods.CritDamage, Mods.ExecutionerPct * 100.0f, Mods.HealthRegen,
+			1.0f + Mods.PotionHealPct, Mods.bBulwark ? 1 : 0, Mods.bSecondWind ? 1 : 0, Perk->bSecondWindUsed ? 1 : 0,
+			Mods.StaminaCostScale, Mods.SprintSpeedScale);
+	}
 #endif
 }
 
@@ -919,5 +932,154 @@ void AMDPlayerController::ListItemRows()
 	{
 		UE_LOG(LogMDInventory, Warning, TEXT("  %s  slot=%d  maxStack=%d"), *Row.ToString(), Inv->GetSlotForItem(Row), Inv->GetMaxStackForItem(Row));
 	}
+#endif
+}
+
+// ---- Perk debug execs ----
+
+namespace
+{
+#if !UE_BUILD_SHIPPING
+	UMDPerkComponent* FindPerkComponentFor(const AMDPlayerController* Controller)
+	{
+		return UMDPerkComponent::FindFor(Controller);
+	}
+#endif
+}
+
+void AMDPlayerController::GivePerkPoints(int32 N)
+{
+#if !UE_BUILD_SHIPPING
+	Server_GivePerkPoints(N);
+#endif
+}
+
+void AMDPlayerController::Server_GivePerkPoints_Implementation(int32 N)
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDPerkComponent* Perk = FindPerkComponentFor(this))
+	{
+		Perk->DebugAddPoints(FMath::Clamp(N, -1000, 1000));
+		UE_LOG(LogMDInventory, Warning, TEXT("GivePerkPoints %d -> earned %d, spent %d, available %d"),
+			N, Perk->GetPointsEarned(), Perk->GetPointsSpent(), Perk->GetPointsAvailable());
+	}
+#endif
+}
+
+void AMDPlayerController::SetZonesCompleted(int32 Zones)
+{
+#if !UE_BUILD_SHIPPING
+	Server_SetZonesCompleted(Zones);
+#endif
+}
+
+void AMDPlayerController::Server_SetZonesCompleted_Implementation(int32 Zones)
+{
+#if !UE_BUILD_SHIPPING
+	if (AMDGameState* State = GetWorld() ? GetWorld()->GetGameState<AMDGameState>() : nullptr)
+	{
+		State->SetZonesCompleted(Zones);
+		UE_LOG(LogMDInventory, Warning, TEXT("SetZonesCompleted %d -> zones %d, souls %d"), Zones, State->ZonesCompleted, State->SoulsSaved);
+	}
+	else
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("SetZonesCompleted: no AMDGameState in this world (set GameStateClass)"));
+	}
+#endif
+}
+
+void AMDPlayerController::SetSoulsSaved(int32 Souls)
+{
+#if !UE_BUILD_SHIPPING
+	Server_SetSoulsSaved(Souls);
+#endif
+}
+
+void AMDPlayerController::Server_SetSoulsSaved_Implementation(int32 Souls)
+{
+#if !UE_BUILD_SHIPPING
+	if (AMDGameState* State = GetWorld() ? GetWorld()->GetGameState<AMDGameState>() : nullptr)
+	{
+		State->SetSoulsSaved(Souls);
+		UE_LOG(LogMDInventory, Warning, TEXT("SetSoulsSaved %d -> zones %d, souls %d"), Souls, State->ZonesCompleted, State->SoulsSaved);
+	}
+	else
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("SetSoulsSaved: no AMDGameState in this world (set GameStateClass)"));
+	}
+#endif
+}
+
+void AMDPlayerController::SetPerkRank(int32 Node, int32 Rank)
+{
+#if !UE_BUILD_SHIPPING
+	Server_SetPerkRank(Node, Rank);
+#endif
+}
+
+void AMDPlayerController::Server_SetPerkRank_Implementation(int32 Node, int32 Rank)
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDPerkComponent* Perk = FindPerkComponentFor(this))
+	{
+		Perk->DebugSetRank(Node, Rank);
+		UE_LOG(LogMDInventory, Warning, TEXT("SetPerkRank node %d -> rank %d (spent %d, earned %d)"), Node, Perk->GetRank(Node), Perk->GetPointsSpent(), Perk->GetPointsEarned());
+	}
+#endif
+}
+
+void AMDPlayerController::ResetPerks()
+{
+#if !UE_BUILD_SHIPPING
+	Server_ResetPerks();
+#endif
+}
+
+void AMDPlayerController::Server_ResetPerks_Implementation()
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDPerkComponent* Perk = FindPerkComponentFor(this))
+	{
+		Perk->DebugReset();
+		UE_LOG(LogMDInventory, Warning, TEXT("ResetPerks -> spent %d, available %d"), Perk->GetPointsSpent(), Perk->GetPointsAvailable());
+	}
+#endif
+}
+
+void AMDPlayerController::DumpPerks()
+{
+#if !UE_BUILD_SHIPPING
+	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
+	const UMDPerkComponent* Perk = UMDPerkComponent::FindFor(this);
+	const UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+	if (!Perk || !ASC)
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("DumpPerks: no UMDPerkComponent / ASC for local player %s"), *GetNameSafe(this));
+		return;
+	}
+
+	const UMDPerkTree* Tree = UMDGameSettings::GetPerkTree();
+	UE_LOG(LogMDInventory, Warning, TEXT("==== Perks [%s] points earned %d  spent %d  available %d  (debug bonus %d)  second wind used %d ===="),
+		NetModeName(GetNetMode()), Perk->GetPointsEarned(), Perk->GetPointsSpent(), Perk->GetPointsAvailable(),
+		Perk->DebugBonusPoints, Perk->bSecondWindUsed ? 1 : 0);
+	for (int32 PathIndex = 1; PathIndex <= 4; ++PathIndex)
+	{
+		const EMDPerkPath Path = static_cast<EMDPerkPath>(PathIndex);
+		UE_LOG(LogMDInventory, Warning, TEXT("  %s: %d point(s)"), *UMDPerkCatalog::GetPathText(Path).ToString(), Perk->GetPathPoints(Path));
+	}
+	for (int32 i = 0; i < Tree->Nodes.Num(); ++i)
+	{
+		const FMDPerkNode& Node = Tree->Nodes[i];
+		UE_LOG(LogMDInventory, Warning, TEXT("  [%2d] %-15s rank %d/%d  (%s)"), i, *Node.Id.ToString(), Perk->GetRank(i), Node.MaxRank,
+			*UMDPerkCatalog::GetEffectDetailText(Node, FMath::Max(Perk->GetRank(i), 1)).ToString());
+	}
+
+	const UMDStaminaComponent* Stamina = PS->StaminaComponent;
+	UE_LOG(LogMDInventory, Warning, TEXT("  MaxHealth %.1f  Defense %.2f%% (cap %.0f)  AttackPower %.2f  CritChance %.3f  CritDamage %.2f  HealthRegen %.2f/s"),
+		ASC->GetMaxHealth(), ASC->GetDefense(), ASC->DefenseCap, ASC->GetAttackPower(), ASC->GetCritChance(), ASC->GetCritDamage(), ASC->GetHealthRegen());
+	UE_LOG(LogMDInventory, Warning, TEXT("  MaxStamina %.1f  StaminaRegen %.2f/s  RegenDelay %s  StaminaCostScale %.2f  SprintSpeedScale %.2f  timeSinceDamage %.1fs"),
+		ASC->GetMaxStamina(), ASC->GetStaminaRegenRate(),
+		Stamina ? *FString::Printf(TEXT("%.2fs (base %.2f)"), Stamina->GetEffectiveRegenDelay(), Stamina->RegenDelay) : TEXT("n/a"),
+		ASC->GetStaminaCostScale(), ASC->GetSprintSpeedScale(), Perk->GetTimeSinceDamage());
 #endif
 }

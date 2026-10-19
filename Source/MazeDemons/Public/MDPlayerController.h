@@ -237,6 +237,47 @@ public:
 	UFUNCTION(Exec)
 	void DumpCondition();
 
+	// ---- Perks (U3). Debug, non-shipping: the Server_ RPCs mutate on the server; bodies are compiled out in shipping. ----
+
+	// Adds N (may be negative) bonus perk points to this player.
+	UFUNCTION(Exec)
+	void GivePerkPoints(int32 N = 1);
+
+	UFUNCTION(Server, Reliable)
+	void Server_GivePerkPoints(int32 N);
+
+	// Sets the run's completed zones (0..4); points are derived from it.
+	UFUNCTION(Exec)
+	void SetZonesCompleted(int32 Zones);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetZonesCompleted(int32 Zones);
+
+	// Sets the run's Souls Saved; points are derived from it (milestones 5 / 10 / 15).
+	UFUNCTION(Exec)
+	void SetSoulsSaved(int32 Souls);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetSoulsSaved(int32 Souls);
+
+	// Sets a node's rank (Node 0..15, clamped to its max rank), bypassing every rule. Re-applies the perk effect.
+	UFUNCTION(Exec)
+	void SetPerkRank(int32 Node, int32 Rank);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetPerkRank(int32 Node, int32 Rank);
+
+	// Sets every rank to 0 (no refund rules, no station needed).
+	UFUNCTION(Exec)
+	void ResetPerks();
+
+	UFUNCTION(Server, Reliable)
+	void Server_ResetPerks();
+
+	// Logs THIS machine's view: ranks, points earned / spent / available, path points and the resulting stats.
+	UFUNCTION(Exec)
+	void DumpPerks();
+
 	// Debug (non-shipping): logs THIS machine's view of the local player's inventory (LogMDInventory, Warning).
 	UFUNCTION(Exec)
 	void DumpInventory();

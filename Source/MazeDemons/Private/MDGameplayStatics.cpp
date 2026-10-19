@@ -11,6 +11,8 @@
 #include "MDGameState.h"
 #include "MDInventoryComponent.h"
 #include "MDPlayerState.h"
+#include "MDPerkCatalog.h"
+#include "MDPerkComponent.h"
 #include "MDPlayerController.h"
 #include "MDGameSettings.h"
 #include "MDStaminaComponent.h"
@@ -182,7 +184,8 @@ TArray<FMDStatLine> UMDGameplayStatics::GetCharacterStatLines(APlayerState* PS, 
 	{
 		if (Inv->IsConsumable(CompareRow))
 		{
-			NewHealth = HealthAfterHeal(Health, MaxHealth, Inv->GetConsumableHeal(CompareRow));
+			const UMDPerkComponent* Perk = UMDPerkComponent::FindFor(PS);
+			NewHealth = HealthAfterHeal(Health, MaxHealth, Inv->GetConsumableHeal(CompareRow) * (Perk ? Perk->GetPotionHealScale() : 1.0f));
 		}
 		else
 		{
@@ -219,6 +222,162 @@ TArray<FMDStatLine> UMDGameplayStatics::GetCharacterStatLines(APlayerState* PS, 
 	Lines.Add(MakeLine(LOCTEXT("StatAttackPower", "Attack power"), AttackPower, NewAttackPower, false, false, 0.0f, 0.0f, TEXT("")));
 	Lines.Add(MakeLine(LOCTEXT("StatDefense", "Defense"), BaseDefense, BaseDefense, true, false, 0.0f, 0.0f, TEXT("")));
 	Lines.Add(MakeLine(LOCTEXT("StatDamageReduction", "Damage reduction"), Defense, NewDefense, true, false, 0.0f, 0.0f, TEXT("")));
+
+	// Perk stats: shown only when they differ from the default, so a fresh character's panel is unchanged. No compare delta.
+	const float CritChance = ASC->GetCritChance();
+	if (CritChance > KINDA_SMALL_NUMBER)
+	{
+		Lines.Add(MakeLine(LOCTEXT("StatCritChance", "Crit chance"), CritChance * 100.0f, CritChance * 100.0f, true, false, 0.0f, 0.0f, TEXT("")));
+	}
+	const float CritDamage = ASC->GetCritDamage();
+	if (CritChance > KINDA_SMALL_NUMBER || CritDamage > 1.5f + KINDA_SMALL_NUMBER)
+	{
+		Lines.Add(MakeLine(LOCTEXT("StatCritDamage", "Crit damage"), CritDamage * 100.0f, CritDamage * 100.0f, true, false, 0.0f, 0.0f, TEXT("")));
+	}
+	const float HealthRegen = ASC->GetHealthRegen();
+	if (HealthRegen > KINDA_SMALL_NUMBER)
+	{
+		FMDStatLine Line = MakeLine(LOCTEXT("StatHealthRegen", "Health regen"), HealthRegen, HealthRegen, false, false, 0.0f, 0.0f, TEXT(" /s"));
+		Line.CurrentText = FText::FromString(FString::Printf(TEXT("%.1f /s"), HealthRegen));
+		Line.NewText = Line.CurrentText;
+		Lines.Add(Line);
+	}
+	const float CostScale = ASC->GetStaminaCostScale();
+	if (CostScale < 1.0f - KINDA_SMALL_NUMBER)
+	{
+		Lines.Add(MakeLine(LOCTEXT("StatStaminaCost", "Stamina cost"), CostScale * 100.0f, CostScale * 100.0f, true, false, 0.0f, 0.0f, TEXT("")));
+	}
+	const float SprintScale = ASC->GetSprintSpeedScale();
+	if (SprintScale > 1.0f + KINDA_SMALL_NUMBER)
+	{
+		Lines.Add(MakeLine(LOCTEXT("StatSprintSpeed", "Sprint speed"), SprintScale * 100.0f, SprintScale * 100.0f, true, false, 0.0f, 0.0f, TEXT("")));
+	}
+	return Lines;
+}
+
+bool UMDGameplayStatics::MakeConditionLine(const FText& ItemName, float CondMult, FMDEffectLine& OutLine)
+{
+	if (CondMult >= 0.999f)
+	{
+		return false;
+	}
+	OutLine = FMDEffectLine();
+	OutLine.Name = FText::Format(LOCTEXT("EffectWornName", "Worn {0}"), ItemName);
+	OutLine.Detail = FText::Format(LOCTEXT("EffectWornDetail", "{0}% effectiveness"), FText::AsNumber(FMath::RoundToInt(FMath::Max(CondMult, 0.0f) * 100.0f)));
+	OutLine.Source = LOCTEXT("EffectSourceCondition", "Condition");
+	OutLine.Tone = EMDColor::Danger;
+	OutLine.bDebuff = true;
+	OutLine.IconKey = FName(TEXT("Condition"));
+	return true;
+}
+
+TArray<FMDEffectLine> UMDGameplayStatics::GetActiveEffectLines(APlayerState* PS)
+{
+	TArray<FMDEffectLine> Lines;
+	if (!PS)
+	{
+		return Lines;
+	}
+	const UMDAbilitySystemComponent* ASC = GetMDAbilitySystemComponent(PS);
+
+	// Perks: one line per ranked node.
+	if (const UMDPerkComponent* Perk = UMDPerkComponent::FindFor(PS))
+	{
+		const UMDPerkTree* Tree = UMDGameSettings::GetPerkTree();
+		for (int32 i = 0; i < Tree->Nodes.Num(); ++i)
+		{
+			const int32 Rank = Perk->GetRank(i);
+			if (Rank <= 0)
+			{
+				continue;
+			}
+			const FMDPerkNode& Node = Tree->Nodes[i];
+			FText Detail = UMDPerkCatalog::GetEffectDetailText(Node, Rank);
+			EMDColor Tone = EMDColor::Accent;
+			if (Node.Effect == EMDPerkEffect::StalwartDRPP)
+			{
+				const bool bActive = ASC && UMDPerkCatalog::IsBelowHealthFraction(ASC->GetHealth(), ASC->GetMaxHealth(),
+					UMDGameSettings::GetPerkTuning().StalwartHealthThreshold);
+				Detail = FText::Format(LOCTEXT("EffectStalwartState", "{0} ({1})"), Detail,
+					bActive ? LOCTEXT("EffectActive", "active") : LOCTEXT("EffectInactive", "inactive"));
+			}
+			else if (Node.Effect == EMDPerkEffect::SecondWind && Perk->bSecondWindUsed)
+			{
+				Detail = FText::Format(LOCTEXT("EffectSecondWindUsed", "{0} (used)"), Detail);
+				Tone = EMDColor::TextDisabled;
+			}
+
+			FMDEffectLine& Line = Lines.AddDefaulted_GetRef();
+			Line.Name = FText::Format(LOCTEXT("EffectPerkName", "{0} rank {1}"), Node.Name, FText::AsNumber(Rank));
+			Line.Detail = Detail;
+			Line.Source = LOCTEXT("EffectSourcePerks", "Perks");
+			Line.Tone = Tone;
+			Line.IconKey = Node.Id;
+		}
+	}
+
+	const UMDInventoryComponent* Inv = GetInventory(PS);
+	if (!Inv)
+	{
+		Inv = GetInventory(PS->GetPawn());
+	}
+	if (Inv)
+	{
+		const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+
+		// Upgrades: armor slots add damage reduction, the primary weapon adds attack power.
+		for (const FMDEquippedSlot& Entry : Inv->GetEquipped())
+		{
+			const int32 Level = Inv->GetSlotUpgradeLevel(Entry.Slot);
+			if (Level <= 0)
+			{
+				continue;
+			}
+			FText Detail;
+			if (Entry.Slot >= MDItemType::Helmet && Entry.Slot <= MDItemType::Boots)
+			{
+				Detail = FText::Format(LOCTEXT("EffectUpgradeArmor", "+{0} pp damage reduction"), FText::AsNumber(Tuning.ArmorDRPerLevel * Level));
+			}
+			else if (Entry.Slot == Inv->GetPrimaryWeaponSlot())
+			{
+				Detail = FText::Format(LOCTEXT("EffectUpgradeWeapon", "+{0}% attack"), FText::AsNumber(FMath::RoundToInt(Tuning.WeaponAPPctPerLevel * Level * 100.0f)));
+			}
+			else
+			{
+				continue;
+			}
+			FMDEffectLine& Line = Lines.AddDefaulted_GetRef();
+			Line.Name = FText::Format(LOCTEXT("EffectUpgradeName", "{0} +{1}"), GetItemDisplayName(Entry.ItemRowName), FText::AsNumber(Level));
+			Line.Detail = Detail;
+			Line.Source = LOCTEXT("EffectSourceUpgrades", "Upgrades");
+			Line.Tone = EMDColor::Upgrade;
+		}
+
+		// Worn gear: condition multiplier below 1.
+		for (const FMDEquippedSlot& Entry : Inv->GetEquipped())
+		{
+			FMDEffectLine Line;
+			if (MakeConditionLine(GetItemDisplayName(Entry.ItemRowName), Inv->GetSlotConditionMultiplier(Entry.Slot), Line))
+			{
+				Lines.Add(Line);
+			}
+		}
+	}
+
+	// Exhausted.
+	if (const UMDStaminaComponent* Stamina = GetStaminaComponent(PS))
+	{
+		if (Stamina->IsExhausted())
+		{
+			FMDEffectLine& Line = Lines.AddDefaulted_GetRef();
+			Line.Name = LOCTEXT("EffectExhaustedName", "Exhausted");
+			Line.Detail = LOCTEXT("EffectExhaustedDetail", "Cannot sprint, jump or vault");
+			Line.Source = LOCTEXT("EffectSourceStatus", "Status");
+			Line.Tone = EMDColor::Danger;
+			Line.bDebuff = true;
+			Line.IconKey = FName(TEXT("Exhausted"));
+		}
+	}
 	return Lines;
 }
 
