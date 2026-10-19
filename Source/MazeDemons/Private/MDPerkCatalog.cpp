@@ -308,7 +308,7 @@ float UMDPerkCatalog::CurrentAfterMaxChange(float OldMax, float NewMax, float Cu
 	{
 		return FMath::Min(Current + (NewMax - OldMax), Max);
 	}
-	return FMath::Clamp(Current, 1.0f, Max);
+	return FMath::Min(Current, Max); // Max >= 1, so a living character stays alive
 }
 
 // ---- Stamina ----

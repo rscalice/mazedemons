@@ -38,7 +38,7 @@ public:
 		const FMDPerkTuning& Tuning = FMDPerkTuning());
 
 	// Current health after the maximum moved from OldMax to NewMax: a rise adds the difference (never above NewMax), a fall
-	// clamps to NewMax. A living character is never killed by this (stays at least 1); a dead one (Current <= 0) stays dead.
+	// clamps to NewMax (at least 1, so a living character is never killed by this). A dead one (Current <= 0) stays as it is.
 	static float CurrentAfterMaxChange(float OldMax, float NewMax, float Current);
 
 	// ---- Stamina ----

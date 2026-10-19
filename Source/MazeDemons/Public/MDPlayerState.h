@@ -7,6 +7,7 @@
 
 class UMDAbilitySystemComponent;
 class UMDAttributeSet;
+class UMDPerkComponent;
 class UMDStaminaComponent;
 class USkeletalMesh;
 
@@ -33,6 +34,10 @@ public:
 	// Server-side stamina rules (drain/regen/exhaustion). Pool size and regen come from its tunables.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Stamina")
 	TObjectPtr<UMDStaminaComponent> StaminaComponent;
+
+	// Perk ranks and everything they drive (U3). Ranks persist across respawns.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Perks")
+	TObjectPtr<UMDPerkComponent> PerkComponent;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Stats", meta = (ClampMin = "1"))
 	float StartingMaxHealth = 100.0f;

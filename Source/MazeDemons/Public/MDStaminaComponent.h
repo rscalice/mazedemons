@@ -90,6 +90,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
 	bool IsSprintAllowedFor(bool bPawnLocallyControlled) const;
 
+	// Cost is the unscaled cost; the perk StaminaCostScale attribute (Light Step) is applied here.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
 	bool HasStaminaFor(float Cost) const;
 
@@ -100,8 +101,14 @@ public:
 	bool CanVault() const { return !bExhausted && HasStaminaFor(VaultCost); }
 
 	// ---- Authority only ----
+	// Seconds removed from RegenDelay by perks (Fleet). Server only: the delay lives in the server simulation. Never negative overall.
+	void SetRegenDelayModifier(float ReductionSeconds);
+
+	// RegenDelay minus the perk reduction, never below 0.
+	float GetEffectiveRegenDelay() const;
+
 	// Spends stamina, clamped at 0 (the server never refuses a jump/vault the owning client already started).
-	// Restarts the regen delay and flags exhaustion at 0.
+	// Restarts the regen delay and flags exhaustion at 0. Cost is unscaled; StaminaCostScale is applied here.
 	void Consume(float Cost);
 
 	// Charged by the movement layer when a jump / traversal actually starts.
@@ -141,6 +148,10 @@ private:
 	bool IsPawnSprinting() const;
 	void SetExhausted(bool bNewExhausted);
 
+	// Stamina cost multiplier from the ASC attribute (1 without perks), clamped to the BALANCE floor.
+	float ScaleCost(float Cost) const;
+
+	float RegenDelayReduction = 0.0f; // server only
 	double LastSpendTime = -1000.0;
 	double ExhaustedStartTime = -1000.0; // server only
 	bool bSprintTagged = false;
