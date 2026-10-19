@@ -1,6 +1,7 @@
 #include "MDPlayerController.h"
 
 #include "MDAbilitySystemComponent.h"
+#include "MDGameMenuWidget.h"
 #include "MDGameplayStatics.h"
 #include "MDGameState.h"
 #include "MDPlayerState.h"
@@ -28,6 +29,7 @@
 #include "Blueprint/UserWidget.h"
 #include "MDUISettings.h"
 #include "EnhancedInputComponent.h"
+#include "InputCoreTypes.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -94,7 +96,12 @@ void AMDPlayerController::UpdateInteractFocus()
 	const UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
 	const bool bAlive = LocalPawn && !(ASC && ASC->IsDead());
 
-	if (bAlive && !bPauseMenuOpen)
+	if (!bAlive && bGameMenuOpen)
+	{
+		CloseGameMenu(); // dead or between pawns: never leave the menu (and the cursor) up
+	}
+
+	if (bAlive && !bPauseMenuOpen && !bGameMenuOpen)
 	{
 		float Range = 250.0f;
 		float Radius = 80.0f;
@@ -153,7 +160,173 @@ void AMDPlayerController::SetupInputComponent()
 		{
 			EIC->BindAction(PauseAction, ETriggerEvent::Started, this, &AMDPlayerController::OnPause);
 		}
+		if (ToggleMenuAction)
+		{
+			EIC->BindAction(ToggleMenuAction, ETriggerEvent::Started, this, &AMDPlayerController::OnToggleMenu);
+		}
+		if (OpenPerksAction)
+		{
+			EIC->BindAction(OpenPerksAction, ETriggerEvent::Started, this, &AMDPlayerController::OnOpenPerks);
+		}
+		if (OpenRunAction)
+		{
+			EIC->BindAction(OpenRunAction, ETriggerEvent::Started, this, &AMDPlayerController::OnOpenRun);
+		}
 	}
+
+	// Fallback keys for any menu action the Blueprint defaults do not set (legacy key bindings still run beside Enhanced Input).
+	if (InputComponent)
+	{
+		if (!ToggleMenuAction)
+		{
+			InputComponent->BindKey(EKeys::Tab, IE_Pressed, this, &AMDPlayerController::ToggleGameMenu);
+			InputComponent->BindKey(EKeys::Gamepad_Special_Right, IE_Pressed, this, &AMDPlayerController::ToggleGameMenu);
+		}
+		if (!OpenPerksAction)
+		{
+			InputComponent->BindKey(EKeys::P, IE_Pressed, this, &AMDPlayerController::OpenPerksFallback);
+		}
+		if (!OpenRunAction)
+		{
+			InputComponent->BindKey(EKeys::R, IE_Pressed, this, &AMDPlayerController::OpenRunFallback);
+		}
+	}
+}
+
+void AMDPlayerController::OnToggleMenu(const FInputActionValue& Value)
+{
+	ToggleGameMenu();
+}
+
+void AMDPlayerController::OnOpenPerks(const FInputActionValue& Value)
+{
+	OpenGameMenuTab(EMDMenuTab::Perks);
+}
+
+void AMDPlayerController::OnOpenRun(const FInputActionValue& Value)
+{
+	OpenGameMenuTab(EMDMenuTab::Run);
+}
+
+void AMDPlayerController::OpenPerksFallback()
+{
+	OpenGameMenuTab(EMDMenuTab::Perks);
+}
+
+void AMDPlayerController::OpenRunFallback()
+{
+	OpenGameMenuTab(EMDMenuTab::Run);
+}
+
+void AMDPlayerController::ToggleGameMenu()
+{
+	if (bGameMenuOpen)
+	{
+		CloseGameMenu();
+	}
+	else
+	{
+		OpenGameMenuTab(EMDMenuTab::None);
+	}
+}
+
+void AMDPlayerController::OpenGameMenuTab(EMDMenuTab Tab)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+	if (Tab == EMDMenuTab::None)
+	{
+		Tab = LastMenuTab;
+	}
+	if (!UMDGameMenuWidget::IsTabSelectable(Tab))
+	{
+		Tab = EMDMenuTab::Inventory;
+	}
+
+	if (bGameMenuOpen && GameMenuWidget)
+	{
+		if (GameMenuWidget->ActiveTab == Tab)
+		{
+			CloseGameMenu(); // pressing the key of the tab you are on closes
+		}
+		else
+		{
+			GameMenuWidget->SetActiveTab(Tab);
+			LastMenuTab = GameMenuWidget->ActiveTab;
+		}
+		return;
+	}
+
+	// Never over the pause menu, a station panel or any other menu that shows the cursor (legacy W_Inventory), nor while dead.
+	if (bPauseMenuOpen || bStationOpen || bShowMouseCursor)
+	{
+		return;
+	}
+	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
+	const UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+	if (!GetPawn() || (ASC && ASC->IsDead()))
+	{
+		return;
+	}
+
+	if (!GameMenuWidget)
+	{
+		if (!GameMenuClass)
+		{
+			UE_LOG(LogMDInventory, Warning, TEXT("OpenGameMenuTab: GameMenuClass is not set on %s (set W_MDGameMenu in BP_MDPlayerController defaults)"), *GetNameSafe(this));
+			return;
+		}
+		GameMenuWidget = CreateWidget<UMDGameMenuWidget>(this, GameMenuClass);
+	}
+	if (!GameMenuWidget)
+	{
+		return;
+	}
+
+	GameMenuWidget->AddToViewport(90); // below the pause menu (100)
+	GameMenuWidget->SetActiveTab(Tab);
+	GameMenuWidget->PlayOpen();
+	LastMenuTab = GameMenuWidget->ActiveTab;
+	bGameMenuOpen = true;
+
+	FInputModeGameAndUI Mode;
+	Mode.SetWidgetToFocus(GameMenuWidget->TakeWidget());
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	SetInputMode(Mode);
+	SetShowMouseCursor(true); // the project's "a menu is open" rule: BP_Player and quick slots block gameplay input on it
+}
+
+void AMDPlayerController::CloseGameMenu()
+{
+	if (!bGameMenuOpen)
+	{
+		return;
+	}
+	bGameMenuOpen = false;
+	if (GameMenuWidget)
+	{
+		LastMenuTab = GameMenuWidget->ActiveTab;
+		GameMenuWidget->RemoveFromParent();
+	}
+	SetInputMode(FInputModeGameOnly());
+	SetShowMouseCursor(false);
+}
+
+void AMDPlayerController::OpenMenu()
+{
+	ToggleGameMenu();
+}
+
+void AMDPlayerController::OpenMenuTab(int32 TabNumber)
+{
+	if (TabNumber < 1 || TabNumber > UMDGameMenuWidget::NumTabs)
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("OpenMenuTab: %d is not a tab (1 Inventory, 2 Perks, 3 Run)"), TabNumber);
+		return;
+	}
+	OpenGameMenuTab(static_cast<EMDMenuTab>(TabNumber));
 }
 
 void AMDPlayerController::OnQuickSlot1(const FInputActionValue& Value)
@@ -176,7 +349,7 @@ void AMDPlayerController::OnQuickSlot2(const FInputActionValue& Value)
 
 void AMDPlayerController::OnPause(const FInputActionValue& Value)
 {
-	TogglePauseMenu();
+	TogglePauseMenu(); // closes the game menu first when it is open
 }
 
 void AMDPlayerController::UseQuickSlot(int32 Slot)
@@ -243,6 +416,11 @@ void AMDPlayerController::TogglePauseMenu()
 {
 	if (!IsLocalController())
 	{
+		return;
+	}
+	if (bGameMenuOpen)
+	{
+		CloseGameMenu(); // Esc closes the game menu; the pause menu stays separate and is not opened over it
 		return;
 	}
 	if (bPauseMenuOpen)
@@ -536,6 +714,7 @@ void AMDPlayerController::OpenStationLocal(AMDStation* Station)
 	{
 		return;
 	}
+	CloseGameMenu(); // the station panel and the game menu never show together
 	OpenStation = Station;
 	bStationOpen = true;
 	GetWorldTimerManager().SetTimer(StationWatchTimer, this, &AMDPlayerController::WatchStation, 0.25f, true);

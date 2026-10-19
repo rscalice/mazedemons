@@ -7,6 +7,7 @@
 #include "MDPlayerController.generated.h"
 
 class AMDStation;
+class UMDGameMenuWidget;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDPickupNotified, FName, ItemRowName, int32, Quantity);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDUseRejected, EMDUseRejectReason, Reason, float, CooldownRemaining);
@@ -37,6 +38,45 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
 	TObjectPtr<UInputAction> PauseAction;
+
+	// Game menu (M1). Assets set in BP_MDPlayerController defaults. When an action is left empty, C++ binds a fallback key
+	// instead (Tab and gamepad Menu / View toggle, P opens Perks, R opens Run).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> ToggleMenuAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> OpenPerksAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> OpenRunAction;
+
+	// ---- Game menu (W_MDGameMenu): Inventory / Perks / Run tabs. Local only; the game is never paused. ----
+
+	// W_MDGameMenu (parent UMDGameMenuWidget), set in BP_MDPlayerController defaults. Created lazily on first open.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Maze Demons|UI")
+	TSubclassOf<UMDGameMenuWidget> GameMenuClass;
+
+	// Opens on the last-used tab (Inventory the first time), or closes when open. Refused while the station panel, the pause
+	// menu or another cursor-showing menu is open, and while dead.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|UI")
+	void ToggleGameMenu();
+
+	// Opens the menu on Tab; when already open on another tab, switches to it; when already on that tab, closes. None = last used tab.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|UI")
+	void OpenGameMenuTab(EMDMenuTab Tab);
+
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|UI")
+	void CloseGameMenu();
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
+	bool IsGameMenuOpen() const { return bGameMenuOpen && GameMenuWidget != nullptr; }
+
+	// Console / debug: `OpenMenu` toggles; `OpenMenuTab 2` opens Perks (1 Inventory, 2 Perks, 3 Run).
+	UFUNCTION(Exec)
+	void OpenMenu();
+
+	UFUNCTION(Exec)
+	void OpenMenuTab(int32 TabNumber);
 
 	// Console / debug: Slot is 1 or 2.
 	UFUNCTION(Exec)
@@ -322,6 +362,11 @@ private:
 	void OnQuickSlot1(const FInputActionValue& Value);
 	void OnQuickSlot2(const FInputActionValue& Value);
 	void OnPause(const FInputActionValue& Value);
+	void OnToggleMenu(const FInputActionValue& Value);
+	void OnOpenPerks(const FInputActionValue& Value);
+	void OnOpenRun(const FInputActionValue& Value);
+	void OpenPerksFallback();
+	void OpenRunFallback();
 	void ApplyMovementReset();
 	void UpdateInteractFocus();
 	FTimerHandle FocusTraceTimer;
@@ -336,6 +381,11 @@ private:
 	FText InteractPrompt;
 	bool bUsingGamepad = false;
 	bool bPauseMenuOpen = false;
+	bool bGameMenuOpen = false;
+	EMDMenuTab LastMenuTab = EMDMenuTab::Inventory;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMDGameMenuWidget> GameMenuWidget;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UUserWidget> PauseWidget;
