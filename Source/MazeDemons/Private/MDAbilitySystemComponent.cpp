@@ -9,6 +9,7 @@
 #include "MDPerkCatalog.h"
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
+#include "MDPlayerState.h"
 #include "MDStatCalculator.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -406,6 +407,26 @@ void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigat
 		{
 			LastDamageTakenTime = GetServerNow(); // the 5 s out-of-combat clock for perk spending and Recovery
 			OnDamageApplied.Broadcast(DamageInstigator, Applied);
+
+			// Run tab stats (owner-only replicated on the PlayerState). The victim is a player when this ASC lives on a PlayerState.
+			AMDPlayerState* VictimState = Cast<AMDPlayerState>(GetOwner());
+			if (VictimState)
+			{
+				VictimState->AddDamageTaken(Applied);
+			}
+			if (DamageInstigator && DamageInstigator != Target)
+			{
+				const APawn* AttackerPawn = Cast<APawn>(DamageInstigator);
+				AMDPlayerState* AttackerState = AttackerPawn ? AttackerPawn->GetPlayerState<AMDPlayerState>() : nullptr;
+				if (AttackerState && AttackerState != VictimState)
+				{
+					AttackerState->AddDamageDealt(Applied);
+					if (!VictimState && IsDead())
+					{
+						AttackerState->AddKill(); // alive at the top of this function, dead now: this hit killed it
+					}
+				}
+			}
 			// Weapon wear for the attacker (the victim's own inventory listens to OnDamageApplied for armor wear).
 			UMDInventoryComponent::NotifyHitLanded(DamageInstigator, Target);
 

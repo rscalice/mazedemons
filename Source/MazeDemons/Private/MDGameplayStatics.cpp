@@ -445,6 +445,7 @@ void UMDGameplayStatics::AwardKillGold(const AActor* Victim, const AController* 
 			continue;
 		}
 		Inventory->AddGold(Shares[i]);
+		Players[i]->AddGoldEarned(Shares[i]);
 		if (AMDPlayerController* Controller = Cast<AMDPlayerController>(Players[i]->GetOwner()))
 		{
 			Controller->NotifyToast(FText::Format(NSLOCTEXT("MDGold", "KillGoldToast", "+{0} Gold"), FText::AsNumber(Shares[i])), EMDColor::Gold);

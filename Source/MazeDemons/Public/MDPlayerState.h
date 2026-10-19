@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
 #include "GameFramework/PlayerState.h"
+#include "MDRunStats.h"
 #include "MDPlayerState.generated.h"
 
 class UMDAbilitySystemComponent;
@@ -10,6 +11,8 @@ class UMDAttributeSet;
 class UMDPerkComponent;
 class UMDStaminaComponent;
 class USkeletalMesh;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDRunStatsChanged);
 
 // Owns the player's ASC and attributes so stats/abilities persist across pawn respawns.
 UCLASS()
@@ -53,9 +56,26 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Armor")
 	void SyncArmorFromPawn();
 
+	// ---- Run stats (Run tab). Replicated to the owning client only. ----
+	UPROPERTY(ReplicatedUsing = OnRep_RunStats, BlueprintReadOnly, Category = "Maze Demons|Run")
+	FMDPlayerRunStats RunStats;
+
+	// Fires on the server after a change and on the owning client after replication.
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Run")
+	FMDRunStatsChanged OnRunStatsChanged;
+
+	// Authority only; each ignores bad input (see FMDPlayerRunStats::AddAmount / AddCount).
+	void AddDamageDealt(float Amount);
+	void AddDamageTaken(float Amount);
+	void AddKill();
+	void AddGoldEarned(int32 Amount);
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
+	UFUNCTION()
+	void OnRep_RunStats();
+
 	virtual void BeginPlay() override;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Armor)
