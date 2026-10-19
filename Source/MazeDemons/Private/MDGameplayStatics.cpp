@@ -277,6 +277,47 @@ bool UMDGameplayStatics::MakeConditionLine(const FText& ItemName, float CondMult
 	return true;
 }
 
+FMDRespecInfo UMDGameplayStatics::GetRespecInfo(APlayerState* PS, AActor* Station)
+{
+	const UMDPerkComponent* Perk = UMDPerkComponent::FindFor(PS);
+	return Perk ? Perk->GetRespecInfo(Station) : FMDRespecInfo();
+}
+
+bool UMDGameplayStatics::MakeUpgradeLine(const FText& ItemName, bool bArmorSlot, int32 Level, const FMDEconomyTuning& Tuning, FMDEffectLine& OutLine)
+{
+	if (Level <= 0)
+	{
+		return false;
+	}
+	OutLine = FMDEffectLine();
+	OutLine.Name = FText::Format(LOCTEXT("EffectUpgradeName", "{0} +{1}"), ItemName, FText::AsNumber(Level));
+	OutLine.Detail = bArmorSlot
+		? FText::Format(LOCTEXT("EffectUpgradeArmor", "+{0} pp damage reduction"), FText::AsNumber(Tuning.ArmorDRPerLevel * Level))
+		: FText::Format(LOCTEXT("EffectUpgradeWeapon", "+{0}% attack"), FText::AsNumber(FMath::RoundToInt(Tuning.WeaponAPPctPerLevel * Level * 100.0f)));
+	OutLine.Source = LOCTEXT("EffectSourceUpgrades", "Upgrades");
+	OutLine.Tone = EMDColor::Upgrade;
+	return true;
+}
+
+bool UMDGameplayStatics::MakePerkLine(const FMDPerkNode& Node, int32 Rank, bool bUsedUp, FMDEffectLine& OutLine)
+{
+	if (Rank <= 0)
+	{
+		return false;
+	}
+	OutLine = FMDEffectLine();
+	OutLine.Name = FText::Format(LOCTEXT("EffectPerkName", "{0} rank {1}"), Node.Name, FText::AsNumber(Rank));
+	OutLine.Detail = UMDPerkCatalog::GetEffectDetailText(Node, Rank);
+	if (bUsedUp)
+	{
+		OutLine.Detail = FText::Format(LOCTEXT("EffectSecondWindUsed", "{0} (used)"), OutLine.Detail);
+	}
+	OutLine.Source = LOCTEXT("EffectSourcePerks", "Perks");
+	OutLine.Tone = bUsedUp ? EMDColor::TextDisabled : EMDColor::Accent;
+	OutLine.IconKey = Node.Id;
+	return true;
+}
+
 TArray<FMDEffectLine> UMDGameplayStatics::GetActiveEffectLines(APlayerState* PS)
 {
 	TArray<FMDEffectLine> Lines;
@@ -298,27 +339,16 @@ TArray<FMDEffectLine> UMDGameplayStatics::GetActiveEffectLines(APlayerState* PS)
 				continue;
 			}
 			const FMDPerkNode& Node = Tree->Nodes[i];
-			FText Detail = UMDPerkCatalog::GetEffectDetailText(Node, Rank);
-			EMDColor Tone = EMDColor::Accent;
+			FMDEffectLine Line;
+			MakePerkLine(Node, Rank, Node.Effect == EMDPerkEffect::SecondWind && Perk->bSecondWindUsed, Line);
 			if (Node.Effect == EMDPerkEffect::StalwartDRPP)
 			{
 				const bool bActive = ASC && UMDPerkCatalog::IsBelowHealthFraction(ASC->GetHealth(), ASC->GetMaxHealth(),
 					UMDGameSettings::GetPerkTuning().StalwartHealthThreshold);
-				Detail = FText::Format(LOCTEXT("EffectStalwartState", "{0} ({1})"), Detail,
+				Line.Detail = FText::Format(LOCTEXT("EffectStalwartState", "{0} ({1})"), Line.Detail,
 					bActive ? LOCTEXT("EffectActive", "active") : LOCTEXT("EffectInactive", "inactive"));
 			}
-			else if (Node.Effect == EMDPerkEffect::SecondWind && Perk->bSecondWindUsed)
-			{
-				Detail = FText::Format(LOCTEXT("EffectSecondWindUsed", "{0} (used)"), Detail);
-				Tone = EMDColor::TextDisabled;
-			}
-
-			FMDEffectLine& Line = Lines.AddDefaulted_GetRef();
-			Line.Name = FText::Format(LOCTEXT("EffectPerkName", "{0} rank {1}"), Node.Name, FText::AsNumber(Rank));
-			Line.Detail = Detail;
-			Line.Source = LOCTEXT("EffectSourcePerks", "Perks");
-			Line.Tone = Tone;
-			Line.IconKey = Node.Id;
+			Lines.Add(Line);
 		}
 	}
 
@@ -339,24 +369,16 @@ TArray<FMDEffectLine> UMDGameplayStatics::GetActiveEffectLines(APlayerState* PS)
 			{
 				continue;
 			}
-			FText Detail;
-			if (Entry.Slot >= MDItemType::Helmet && Entry.Slot <= MDItemType::Boots)
-			{
-				Detail = FText::Format(LOCTEXT("EffectUpgradeArmor", "+{0} pp damage reduction"), FText::AsNumber(Tuning.ArmorDRPerLevel * Level));
-			}
-			else if (Entry.Slot == Inv->GetPrimaryWeaponSlot())
-			{
-				Detail = FText::Format(LOCTEXT("EffectUpgradeWeapon", "+{0}% attack"), FText::AsNumber(FMath::RoundToInt(Tuning.WeaponAPPctPerLevel * Level * 100.0f)));
-			}
-			else
+			const bool bArmor = Entry.Slot >= MDItemType::Helmet && Entry.Slot <= MDItemType::Boots;
+			if (!bArmor && Entry.Slot != Inv->GetPrimaryWeaponSlot())
 			{
 				continue;
 			}
-			FMDEffectLine& Line = Lines.AddDefaulted_GetRef();
-			Line.Name = FText::Format(LOCTEXT("EffectUpgradeName", "{0} +{1}"), GetItemDisplayName(Entry.ItemRowName), FText::AsNumber(Level));
-			Line.Detail = Detail;
-			Line.Source = LOCTEXT("EffectSourceUpgrades", "Upgrades");
-			Line.Tone = EMDColor::Upgrade;
+			FMDEffectLine Line;
+			if (MakeUpgradeLine(GetItemDisplayName(Entry.ItemRowName), bArmor, Level, Tuning, Line))
+			{
+				Lines.Add(Line);
+			}
 		}
 
 		// Worn gear: condition multiplier below 1.

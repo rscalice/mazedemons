@@ -15,6 +15,54 @@ class UMDStaminaComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDPerksChanged);
 
+// Owning client (and server for its own player): the outcome of a RequestRespec. Message is the same text as the toast.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDRespecResult, bool, bSuccess, FText, Message);
+
+// One owned node in the station Respec tab list.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDRespecRow
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	FText Name;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	int32 Rank = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	int32 MaxRank = 0;
+};
+
+// Everything the station Respec tab shows (UMDPerkComponent::GetRespecInfo).
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDRespecInfo
+{
+	GENERATED_BODY()
+
+	// Owned nodes in tree order.
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	TArray<FMDRespecRow> Rows;
+
+	// Points a respec returns (one per owned rank).
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	int32 PointsReturned = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	int32 RanksOwned = 0;
+
+	// Enables the "Respec all (free)" button.
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	bool bCanRespec = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	EMDPerkReject Reject = EMDPerkReject::None;
+
+	// Empty when bCanRespec ("Nothing to reset", "No station in reach", ...).
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	FText ReasonText;
+};
+
 // A player's perk ranks and everything that turns them into gameplay. Lives on AMDPlayerState so ranks survive respawns.
 // Server-authoritative: clients only request (RequestCommit / RequestRespec). Points are computed from replicated progress
 // (AMDGameState::ZonesCompleted / SoulsSaved) plus debug points, never granted one by one.
@@ -46,6 +94,10 @@ public:
 	// Fires on the server after any change and on the owning client after replication (ranks, debug points, Second Wind flag).
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Perks")
 	FMDPerksChanged OnPerksChanged;
+
+	// Result of the last RequestRespec (success or refusal). Fires on the owning client after the server decided.
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Perks")
+	FMDRespecResult OnRespecResult;
 
 	// ---- Queries (all machines) ----
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
@@ -84,6 +136,11 @@ public:
 
 	// Reject for a respec at Station (None = allowed): wrong / missing station, out of range, or dead.
 	EMDPerkReject GetRespecReject(const AActor* Station) const;
+
+	// Station Respec tab data for Station (the station the panel was opened for; null gives bCanRespec = false).
+	// The panel is Blueprint-only, so this is the C++ source for its Respec tab. The server re-validates on RequestRespec.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
+	FMDRespecInfo GetRespecInfo(const AActor* Station) const;
 
 	// ---- Requests (owning client -> server; run directly on the server) ----
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Perks")
@@ -126,6 +183,9 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void Server_Respec(AActor* Station);
 
+	UFUNCTION(Client, Reliable)
+	void Client_RespecResult(bool bSuccess, const FText& Message);
+
 	UFUNCTION()
 	void OnRep_Perks();
 
@@ -147,6 +207,7 @@ private:
 	void SendToast(const FText& Message, EMDColor Tone) const;
 	bool Commit_Impl(const TArray<uint8>& Desired);
 	bool Respec_Impl(AActor* Station);
+	void ReportRespec(bool bSuccess, const FText& Message);
 	void PushDefense();
 	void PushCombatState();
 	bool RecomputeStalwartFlag();

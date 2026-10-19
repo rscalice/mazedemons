@@ -64,7 +64,8 @@ enum class EMDPerkReject : uint8
 	WouldReduceRank,
 	PathLocked,
 	PathCap,
-	NotAtStation
+	NotAtStation,
+	NothingToReset
 };
 
 // How a node looks in the Perks panel, evaluated against owned ranks plus the client's pending ranks (UMDPerkCatalog::GetNodeState).

@@ -289,7 +289,7 @@ bool FMDPerkCommitValidatesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("cap detail"), UMDPerkCatalog::ValidateCommitEx(None, SixDefense, 8, 10.0, false, Tree, FMDPerkTuning(), Arg, Path), EMDPerkReject::PathCap);
 	TestEqual(TEXT("cap is 5"), Arg, 5);
 
-	for (int32 Reason = 1; Reason <= static_cast<int32>(EMDPerkReject::NotAtStation); ++Reason)
+	for (int32 Reason = 1; Reason <= static_cast<int32>(EMDPerkReject::NothingToReset); ++Reason)
 	{
 		TestFalse(*FString::Printf(TEXT("text for reject %d"), Reason), UMDPerkCatalog::GetPerkRejectText(static_cast<EMDPerkReject>(Reason), 3, EMDPerkPath::Offense).IsEmpty());
 	}
@@ -857,6 +857,64 @@ bool FMDEffectLinesTest::RunTest(const FString& Parameters)
 	// Perk stat lines appear only when they differ from the default.
 	Fx.ASC->GetMazeDemonsAttributes()->SetCritChance(0.1f);
 	TestEqual(TEXT("crit chance adds crit chance + crit damage lines"), UMDGameplayStatics::GetCharacterStatLines(Fx.PS, NAME_None).Num(), 8);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDEffectActiveLinesTest, "MazeDemons.Effects.ActiveLines", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDEffectActiveLinesTest::RunTest(const FString& Parameters)
+{
+	const FMDEconomyTuning Tuning;
+	FMDEffectLine Line;
+	TestFalse(TEXT("armor level 0: no line"), UMDGameplayStatics::MakeUpgradeLine(FText::FromString(TEXT("Chest")), true, 0, Tuning, Line));
+
+	TestTrue(TEXT("armor level 2: line"), UMDGameplayStatics::MakeUpgradeLine(FText::FromString(TEXT("Chest")), true, 2, Tuning, Line));
+	TestTrue(TEXT("armor name has item and level"), Line.Name.ToString().Contains(TEXT("Chest")) && Line.Name.ToString().Contains(TEXT("2")));
+	TestTrue(TEXT("armor detail is damage reduction"), Line.Detail.ToString().Contains(TEXT("damage reduction")));
+	TestEqual(TEXT("upgrade source"), Line.Source.ToString(), FString(TEXT("Upgrades")));
+	TestFalse(TEXT("upgrade is not a debuff"), Line.bDebuff);
+
+	TestTrue(TEXT("weapon level 3: line"), UMDGameplayStatics::MakeUpgradeLine(FText::FromString(TEXT("Sword")), false, 3, Tuning, Line));
+	TestTrue(TEXT("weapon detail is attack"), Line.Detail.ToString().Contains(TEXT("attack")));
+
+	const UMDPerkTree& Tree = PerkTestTree();
+	const int32 Hardened = Tree.FindNodeIndex(TEXT("Hardened"));
+	if (TestTrue(TEXT("Hardened exists"), Tree.Nodes.IsValidIndex(Hardened)))
+	{
+		TestFalse(TEXT("rank 0: no perk line"), UMDGameplayStatics::MakePerkLine(Tree.Nodes[Hardened], 0, false, Line));
+		TestTrue(TEXT("rank 2: perk line"), UMDGameplayStatics::MakePerkLine(Tree.Nodes[Hardened], 2, false, Line));
+		TestEqual(TEXT("perk source"), Line.Source.ToString(), FString(TEXT("Perks")));
+		TestEqual(TEXT("perk tone"), Line.Tone, EMDColor::Accent);
+		TestTrue(TEXT("used-up perk is greyed"), UMDGameplayStatics::MakePerkLine(Tree.Nodes[Hardened], 1, true, Line) && Line.Tone == EMDColor::TextDisabled && Line.Detail.ToString().Contains(TEXT("used")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDPerkRespecRulesTest, "MazeDemons.Perk.RespecRules", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDPerkRespecRulesTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("allowed"), UMDPerkCatalog::CanRespec(true, true, true, false, 5), EMDPerkReject::None);
+	TestEqual(TEXT("no station"), UMDPerkCatalog::CanRespec(false, true, true, false, 5), EMDPerkReject::NotAtStation);
+	TestEqual(TEXT("station without the service"), UMDPerkCatalog::CanRespec(true, false, true, false, 5), EMDPerkReject::NotAtStation);
+	TestEqual(TEXT("out of range"), UMDPerkCatalog::CanRespec(true, true, false, false, 5), EMDPerkReject::NotAtStation);
+	TestEqual(TEXT("dead"), UMDPerkCatalog::CanRespec(true, true, true, true, 5), EMDPerkReject::Dead);
+	TestEqual(TEXT("nothing to reset"), UMDPerkCatalog::CanRespec(true, true, true, false, 0), EMDPerkReject::NothingToReset);
+	TestEqual(TEXT("station check wins over dead"), UMDPerkCatalog::CanRespec(false, false, false, true, 0), EMDPerkReject::NotAtStation);
+	// Free and combat-agnostic: the rule has no combat or cost input at all.
+	TestTrue(TEXT("nothing-to-reset has text"), !UMDPerkCatalog::GetPerkRejectText(EMDPerkReject::NothingToReset).IsEmpty());
+
+	// Component level (all-or-nothing, baseline): an unreachable station never touches the ranks.
+	FMDPerkFixture Fx;
+	if (Fx.Init(*this))
+	{
+		Fx.Perk->Ranks[0] = 2;
+		TestEqual(TEXT("null station is refused"), Fx.Perk->GetRespecReject(nullptr), EMDPerkReject::NotAtStation);
+		const FMDRespecInfo Info = Fx.Perk->GetRespecInfo(nullptr);
+		TestFalse(TEXT("info: cannot respec without a station"), Info.bCanRespec);
+		TestEqual(TEXT("info: points returned"), Info.PointsReturned, 2);
+		TestEqual(TEXT("info: one owned row"), Info.Rows.Num(), 1);
+		TestEqual(TEXT("ranks unchanged"), static_cast<int32>(Fx.Perk->Ranks[0]), 2);
+		Fx.Perk->Ranks[0] = 0;
+	}
 	return true;
 }
 

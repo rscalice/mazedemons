@@ -534,6 +534,23 @@ FText UMDPerkCatalog::GetPathText(EMDPerkPath Path)
 	}
 }
 
+EMDPerkReject UMDPerkCatalog::CanRespec(bool bIsStation, bool bOffersRespec, bool bInRange, bool bDead, int32 RanksOwned)
+{
+	if (!bIsStation || !bOffersRespec)
+	{
+		return EMDPerkReject::NotAtStation;
+	}
+	if (bDead)
+	{
+		return EMDPerkReject::Dead;
+	}
+	if (!bInRange)
+	{
+		return EMDPerkReject::NotAtStation;
+	}
+	return RanksOwned > 0 ? EMDPerkReject::None : EMDPerkReject::NothingToReset;
+}
+
 FText UMDPerkCatalog::GetPerkRejectText(EMDPerkReject Reject, int32 Arg, EMDPerkPath Path)
 {
 	switch (Reject)
@@ -554,6 +571,8 @@ FText UMDPerkCatalog::GetPerkRejectText(EMDPerkReject Reject, int32 Arg, EMDPerk
 		return FText::Format(LOCTEXT("RejectPathCap", "Path limit reached ({0})"), FText::AsNumber(Arg));
 	case EMDPerkReject::NotAtStation:
 		return LOCTEXT("RejectNotAtStation", "No station in reach");
+	case EMDPerkReject::NothingToReset:
+		return LOCTEXT("RejectNothingToReset", "Nothing to reset");
 	default:
 		return FText::GetEmpty();
 	}

@@ -259,25 +259,39 @@ EMDPerkReject UMDPerkComponent::GetCommitReject(const TArray<uint8>& Desired) co
 EMDPerkReject UMDPerkComponent::GetRespecReject(const AActor* Station) const
 {
 	const AMDStation* StationActor = Cast<AMDStation>(Station);
-	if (!StationActor || !StationActor->Supports(EMDStationService::Respec))
-	{
-		return EMDPerkReject::NotAtStation;
-	}
-	if (IsOwnerDead())
-	{
-		return EMDPerkReject::Dead;
-	}
 	const AMDPlayerState* PS = GetPlayerState();
 	const AActor* Body = PS ? PS->GetPawn() : nullptr;
 	if (!Body)
 	{
 		Body = GetOwner();
 	}
-	if (!Body || !AMDStation::IsWithinRange(Body->GetActorLocation(), StationActor->GetActorLocation(), UMDGameSettings::GetEconomy().StationRange))
+	const bool bInRange = StationActor && Body
+		&& AMDStation::IsWithinRange(Body->GetActorLocation(), StationActor->GetActorLocation(), UMDGameSettings::GetEconomy().StationRange);
+	return UMDPerkCatalog::CanRespec(StationActor != nullptr, StationActor && StationActor->Supports(EMDStationService::Respec),
+		bInRange, IsOwnerDead(), GetPointsSpent());
+}
+
+FMDRespecInfo UMDPerkComponent::GetRespecInfo(const AActor* Station) const
+{
+	FMDRespecInfo Info;
+	const UMDPerkTree* Tree = UMDGameSettings::GetPerkTree();
+	for (int32 i = 0; i < Ranks.Num(); ++i)
 	{
-		return EMDPerkReject::NotAtStation;
+		if (Ranks[i] == 0 || !Tree || !Tree->Nodes.IsValidIndex(i))
+		{
+			continue;
+		}
+		FMDRespecRow& Row = Info.Rows.AddDefaulted_GetRef();
+		Row.Name = Tree->Nodes[i].Name;
+		Row.Rank = Ranks[i];
+		Row.MaxRank = Tree->Nodes[i].MaxRank;
 	}
-	return EMDPerkReject::None;
+	Info.RanksOwned = GetPointsSpent();
+	Info.PointsReturned = Info.RanksOwned;
+	Info.Reject = GetRespecReject(Station);
+	Info.bCanRespec = Info.Reject == EMDPerkReject::None;
+	Info.ReasonText = UMDPerkCatalog::GetPerkRejectText(Info.Reject);
+	return Info;
 }
 
 void UMDPerkComponent::OnRep_Perks()
@@ -360,15 +374,26 @@ bool UMDPerkComponent::Respec_Impl(AActor* Station)
 	const EMDPerkReject Reject = GetRespecReject(Station);
 	if (Reject != EMDPerkReject::None)
 	{
-		SendToast(UMDPerkCatalog::GetPerkRejectText(Reject), EMDColor::Warning);
+		ReportRespec(false, UMDPerkCatalog::GetPerkRejectText(Reject));
 		return false;
 	}
 
 	const int32 Returned = GetPointsSpent();
 	Ranks.Init(0, MD_NumPerkNodes);
 	ApplyToASC();
-	SendToast(FText::Format(LOCTEXT("PerksReset", "Perks reset ({0} points returned)"), FText::AsNumber(Returned)), EMDColor::Success);
+	ReportRespec(true, FText::Format(LOCTEXT("PerksReset", "Perks reset ({0} points returned)"), FText::AsNumber(Returned)));
 	return true;
+}
+
+void UMDPerkComponent::ReportRespec(bool bSuccess, const FText& Message)
+{
+	SendToast(Message, bSuccess ? EMDColor::Success : EMDColor::Warning);
+	Client_RespecResult(bSuccess, Message);
+}
+
+void UMDPerkComponent::Client_RespecResult_Implementation(bool bSuccess, const FText& Message)
+{
+	OnRespecResult.Broadcast(bSuccess, Message);
 }
 
 // ---- Server lifecycle ----

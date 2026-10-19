@@ -44,6 +44,7 @@ void UMDPerksWidget::Unbind()
 		Perks->OnPerksChanged.RemoveDynamic(this, &UMDPerksWidget::HandlePerksChanged);
 	}
 	PerkComponent.Reset();
+	LastOwnedTotal = -1;
 }
 
 void UMDPerksWidget::TryBind()
@@ -64,7 +65,16 @@ void UMDPerksWidget::HandlePerksChanged()
 {
 	PendingRanks.SetNumZeroed(MD_NumPerkNodes);
 	const TArray<uint8> Owned = GetOwned();
-	if (LastCommitted.Num() == MD_NumPerkNodes && Owned == LastCommitted)
+	const int32 OwnedTotal = UMDPerkCatalog::TotalRanks(Owned);
+	const bool bRespecced = LastOwnedTotal >= 0 && OwnedTotal < LastOwnedTotal;
+	LastOwnedTotal = OwnedTotal;
+	if (bRespecced)
+	{
+		// Owned ranks dropped (station respec): the pending plan was made against the old build, start clean.
+		PendingRanks.Init(0, MD_NumPerkNodes);
+		LastCommitted.Reset();
+	}
+	else if (LastCommitted.Num() == MD_NumPerkNodes && Owned == LastCommitted)
 	{
 		// The commit arrived: the pending ranks are owned now.
 		PendingRanks.Init(0, MD_NumPerkNodes);

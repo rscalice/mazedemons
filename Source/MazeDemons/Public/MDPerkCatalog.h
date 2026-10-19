@@ -93,6 +93,10 @@ public:
 	// True when Max > 0 and Health / Max is strictly below Threshold (Stalwart, Executioner).
 	static bool IsBelowHealthFraction(float Health, float MaxHealth, float Threshold);
 
+	// Pure respec rule shared by the server and the station panel. Order: not a respec station, dead, out of range, no ranks.
+	// None = allowed. Free, no combat check, no cooldown (stations are safe spots).
+	static EMDPerkReject CanRespec(bool bIsStation, bool bOffersRespec, bool bInRange, bool bDead, int32 RanksOwned);
+
 	// ---- Text ----
 	static FText GetPathText(EMDPerkPath Path);
 

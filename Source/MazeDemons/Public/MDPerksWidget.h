@@ -149,4 +149,7 @@ private:
 
 	// The desired array sent by the last ConfirmPending; when the owned ranks become equal to it, the pending set is spent.
 	TArray<uint8> LastCommitted;
+
+	// Owned rank total at the last refresh (-1 = none yet); a drop means a respec, which clears the pending set.
+	int32 LastOwnedTotal = -1;
 };
