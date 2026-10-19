@@ -8,6 +8,7 @@
 
 class APawn;
 class UDataTable;
+class UMDAbilitySystemComponent;
 
 MAZEDEMONS_API DECLARE_LOG_CATEGORY_EXTERN(LogMDInventory, Log, All);
 
@@ -63,6 +64,17 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Inventory")
 	void AddGold(int32 Amount);
 
+	// Deducts gold. All-or-nothing: false (nothing changes) if Amount is negative or exceeds the balance.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Inventory")
+	bool SpendGold(int32 Amount);
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	bool CanAfford(int32 Amount) const { return Amount >= 0 && GoldAmount >= Amount; }
+
+	// Removes Qty units of Row across stacks. All-or-nothing: false (nothing changes) if the inventory holds fewer.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Inventory")
+	bool RemoveItemByRow(FName Row, int32 Qty);
+
 	// ---- Client-callable requests (RPC, or direct call when already authoritative) ----
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	void RequestEquip(int32 Index);
@@ -112,6 +124,81 @@ public:
 	// Attack power bonus of a weapon row from DT_ItemStats (0 if the table or row is missing).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	float GetItemAttackBonus(FName ItemRowName) const;
+
+	// ---- Durability / upgrades (DT_ItemStats columns; condition and upgrade level are per equipped slot) ----
+	// Max durability of a row (0 = none). Rows with durability never stack.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	int32 GetItemMaxDurability(FName ItemRowName) const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	int32 GetItemValue(FName ItemRowName) const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	bool IsItemUpgradeable(FName ItemRowName) const;
+
+	// Upgrade level of an equipment slot (0 if never upgraded). Per slot: a replacement item inherits it.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	int32 GetSlotUpgradeLevel(uint8 Slot) const;
+
+	// Durability of the item equipped in Slot. Max is 0 when the slot is empty or the item has no durability.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	void GetSlotDurability(uint8 Slot, int32& Cur, int32& Max) const;
+
+	// Durability of the bag stack at BagIndex (Max 0 when it has none or the index is invalid).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	void GetItemDurability(int32 BagIndex, int32& Cur, int32& Max) const;
+
+	// Effectiveness multiplier (0.5..1) from the equipped item's durability; 1 for empty / non-durable slots.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetSlotConditionMultiplier(uint8 Slot) const;
+
+	// Effective stat of the item equipped in Slot, for current -> next displays without maths in Blueprint: damage reduction
+	// percent for armor slots (4-8), AttackPower (base + weapon) for weapon slots (0, 1, 3), 0 for an empty slot or Shield.
+	// LevelOverride -1 = the slot's current upgrade level, otherwise that level; bAssumeFullDurability ignores wear.
+	// The weapon base is DA_BalanceReference StartingAttackPower (client-safe), so it can differ from the live attribute only
+	// if the attribute was changed at runtime.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	float GetSlotEffectiveStat(uint8 Slot, int32 LevelOverride, bool bAssumeFullDurability) const;
+
+	// Total Upgrade Shards (FMDEconomyTuning ShardRow) in the bag.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	int32 GetShardCount() const;
+
+	// Slot of the weapon in use: TwoHanded if equipped, else MainHand, else 255.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	uint8 GetPrimaryWeaponSlot() const;
+
+	// ---- Stations (server validates everything; Station must be an AMDStation within range that offers the service) ----
+	// Slot 255 = repair every damaged equipped item (all-or-nothing on gold).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Station")
+	void RequestRepair(AActor* Station, uint8 Slot);
+
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Station")
+	void RequestUpgrade(AActor* Station, uint8 Slot);
+
+	// The same checks the server runs, for the UI to grey buttons. OutCost / OutGold / OutShards are filled whenever they
+	// could be computed, including for NotEnoughGold / NotEnoughShards.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Station")
+	EMDStationReject GetRepairReject(const AActor* Station, uint8 Slot, int32& OutCost) const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Station")
+	EMDStationReject GetUpgradeReject(const AActor* Station, uint8 Slot, int32& OutGold, int32& OutShards) const;
+
+	// Pure: player-facing text for a rejection. Needed / Have feed the funds messages ("Not enough gold (need 34)",
+	// "Not enough Shards (2/3)"); ignored for other reasons.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Station")
+	static FText GetStationRejectText(EMDStationReject Reason, int32 Needed = 0, int32 Have = 0);
+
+	// Authority: subscribes to the owner's ASC so hits on the owner wear armor. Idempotent; call whenever the ASC may have
+	// changed (AMDPlayerState does after every pawn set).
+	void BindToASC();
+
+	// Authority: every equipped item with durability loses ceil(Max * DeathDurabilityLossPct). Called on death.
+	void ApplyDeathPenalty();
+
+	// Authority: Instigator's main weapon wears by one (no-op for self damage, instigators without an inventory, or weapons
+	// without durability). Called from the victim's ApplyDamage.
+	static void NotifyHitLanded(AActor* Instigator, const AActor* Victim);
 
 	// Pure rule: maps the Blueprint enum byte to a rarity; anything outside 0..4 is Common.
 	static EMDRarity RarityFromByte(int32 Value);
@@ -210,6 +297,12 @@ protected:
 	int32 GetMaxStackForItem(FName ItemRowName) const;
 
 	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_Repair(AActor* Station, uint8 Slot);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_Upgrade(AActor* Station, uint8 Slot);
+
+	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_AssignQuickSlot(int32 QuickIndex, int32 InventoryIndex);
 
 	UFUNCTION(Server, Reliable, WithValidation)
@@ -242,6 +335,12 @@ protected:
 	UFUNCTION()
 	void OnRep_Equipped();
 
+	UFUNCTION()
+	void OnRep_Condition();
+
+	UFUNCTION()
+	void OnRep_SlotUpgrades();
+
 	UPROPERTY(ReplicatedUsing = OnRep_Items, BlueprintReadOnly, Category = "Maze Demons|Inventory")
 	TArray<FMDItemStack> Items;
 
@@ -251,6 +350,15 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_Equipped, BlueprintReadOnly, Category = "Maze Demons|Inventory")
 	TArray<FMDEquippedSlot> Equipped;
 
+	// Durability per equipped slot (only slots whose item has durability). Owner-only: it changes on every hit and must not
+	// re-run the Equipped visual diff on every client.
+	UPROPERTY(ReplicatedUsing = OnRep_Condition, BlueprintReadOnly, Category = "Maze Demons|Inventory")
+	TArray<FMDSlotCondition> EquippedCondition;
+
+	// Upgrade level per equipment slot (only slots above level 0). Owner-only.
+	UPROPERTY(ReplicatedUsing = OnRep_SlotUpgrades, BlueprintReadOnly, Category = "Maze Demons|Inventory")
+	TArray<FMDSlotUpgrade> SlotUpgrades;
+
 private:
 	// Client-side snapshot used by OnRep_Equipped to diff what changed.
 	TArray<FMDEquippedSlot> PrevEquipped;
@@ -258,10 +366,42 @@ private:
 	// Lets the automation tests (Private/Tests/MDInventoryTests.cpp) reach protected/private members.
 	friend struct FMDInventoryTestAccess;
 	friend struct FMDQuickSlotTestAccess;
+	friend struct FMDUpgradeTestAccess;
 	// Debug exec commands (ListItemRows) read GetSlotForItem.
 	friend class AMDPlayerController;
 
 	bool IsValidRow(FName Row) const;
+
+	// Durability an instance of Row should carry given a stored value: MD_NoDurability for rows without durability, Max for
+	// a negative stored value, else the stored value clamped to Max.
+	int32 ResolveDurabilityForRow(FName Row, int32 StoredDurability) const;
+	int32 GetConditionDurability(uint8 Slot) const;
+	void SetConditionDurability(uint8 Slot, int32 Durability);
+	int32 GetEquippedMaxDurability(uint8 Slot) const;
+	const FMDEquippedSlot* FindEquippedSlot(uint8 Slot) const;
+	void SetSlotUpgradeLevel(uint8 Slot, int32 Level);
+
+	// Like AddItem for one existing instance: keeps its Durability. Durable rows take their own stack.
+	bool AddItemInstance(const FMDItemStack& Instance);
+
+	// Re-pushes the effective armor reductions and weapon modifiers to the ASC (authority).
+	void RefreshEquippedStats();
+	void PushWeaponModifiers();
+	void ApplyArmorWear();
+	void ApplyWeaponWear();
+	void HandleDamageApplied(AActor* Instigator, float Applied);
+
+	EMDStationReject CheckStationAccess(const AActor* Station, uint8 ServiceFlag) const;
+	bool Repair_Impl(AActor* Station, uint8 Slot);
+	bool Upgrade_Impl(AActor* Station, uint8 Slot);
+	// Authority: tells the owning client (generic HUD toast). No-op without a controller.
+	void SendToast(const FText& Message, EMDColor Tone) const;
+
+	// Debug exec support (AMDPlayerController is a friend). Slot 255 = every equipped item with durability.
+	void DebugSetDurability(uint8 Slot, int32 Value);
+	void DebugSetUpgradeLevel(uint8 Slot, int32 Level);
+
+	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
 	void ApplyArmorReduction(uint8 Slot, FName Row);
 	// Slots 0 MainHand, 1 OffHand, 3 TwoHanded feed the ASC's weapon attack-power bonuses; other slots are ignored.
 	void ApplyWeaponBonus(uint8 Slot, FName Row);

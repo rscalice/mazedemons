@@ -87,6 +87,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Test Dummy")
 	bool bShowDamageNumbers = true;
 
+	// Gold shared among the players in range when the dummy dies (0 = none). Server only; see UMDGameplayStatics::AwardKillGold.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Test Dummy", meta = (ClampMin = "0"))
+	int32 KillGold = 0;
+
 	// Slot: Helmet | Chest | Legs | Boots. Server only.
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Test Dummy|Armor")
 	void EquipArmorPiece(FName Slot, USkeletalMesh* Mesh, float DamageReductionPercent);

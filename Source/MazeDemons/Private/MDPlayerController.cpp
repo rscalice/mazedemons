@@ -7,6 +7,9 @@
 #include "MDInventoryComponent.h"
 #include "MDPickupBase.h"
 #include "MDInteractAbility.h"
+#include "MDGameSettings.h"
+#include "MDStation.h"
+#include "MDStatCalculator.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
@@ -55,6 +58,7 @@ void AMDPlayerController::BeginPlay()
 void AMDPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(FocusTraceTimer);
+	GetWorldTimerManager().ClearTimer(StationWatchTimer);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -103,7 +107,12 @@ void AMDPlayerController::UpdateInteractFocus()
 		if (Candidate)
 		{
 			const AMDPickupBase* Pickup = Cast<AMDPickupBase>(Candidate);
-			if (!Pickup)
+			if (const AMDStation* Station = Cast<AMDStation>(Candidate))
+			{
+				Target = Candidate;
+				Prompt = FText::Format(NSLOCTEXT("MDInteract", "UseStationPrompt", "Use {0}"), Station->StationName);
+			}
+			else if (!Pickup)
 			{
 				Target = Candidate;
 				Prompt = BuildInteractPrompt(FText::GetEmpty());
@@ -345,18 +354,26 @@ namespace
 		UE_LOG(LogMDInventory, Warning, TEXT("==== Inventory [%s] NetMode=%s LocalRole=%s RemoteRole=%s Player=%s Actor=%s ===="),
 			bServer ? TEXT("Server") : TEXT("Client"), NetModeName(Mode), *Role, *RemoteRole,
 			PS ? *PS->GetPlayerName() : TEXT("<none>"), *GetNameSafe(Subject));
-		UE_LOG(LogMDInventory, Warning, TEXT("  Gold: %d"), Inv->GetGold());
+		UE_LOG(LogMDInventory, Warning, TEXT("  Gold: %d  Shards: %d"), Inv->GetGold(), Inv->GetShardCount());
 		const TArray<FMDItemStack>& Items = Inv->GetItems();
 		UE_LOG(LogMDInventory, Warning, TEXT("  Items (%d):"), Items.Num());
 		for (int32 i = 0; i < Items.Num(); ++i)
 		{
-			UE_LOG(LogMDInventory, Warning, TEXT("    %d %s x%d"), i, *Items[i].ItemRowName.ToString(), Items[i].Quantity);
+			int32 Cur = 0;
+			int32 Max = 0;
+			Inv->GetItemDurability(i, Cur, Max);
+			UE_LOG(LogMDInventory, Warning, TEXT("    %d %s x%d%s"), i, *Items[i].ItemRowName.ToString(), Items[i].Quantity,
+				Max > 0 ? *FString::Printf(TEXT("  dur %d/%d"), Cur, Max) : TEXT(""));
 		}
 		const TArray<FMDEquippedSlot>& Equipped = Inv->GetEquipped();
 		UE_LOG(LogMDInventory, Warning, TEXT("  Equipped (%d):"), Equipped.Num());
 		for (const FMDEquippedSlot& E : Equipped)
 		{
-			UE_LOG(LogMDInventory, Warning, TEXT("    slot %d %s"), E.Slot, *E.ItemRowName.ToString());
+			int32 Cur = 0;
+			int32 Max = 0;
+			Inv->GetSlotDurability(E.Slot, Cur, Max);
+			UE_LOG(LogMDInventory, Warning, TEXT("    slot %d %s%s  upgrade +%d"), E.Slot, *E.ItemRowName.ToString(),
+				Max > 0 ? *FString::Printf(TEXT("  dur %d/%d"), Cur, Max) : TEXT(""), Inv->GetSlotUpgradeLevel(E.Slot));
 		}
 	}
 }
@@ -439,6 +456,91 @@ void AMDPlayerController::NotifyUseRejected(EMDUseRejectReason Reason, float Coo
 void AMDPlayerController::Client_NotifyUseRejected_Implementation(EMDUseRejectReason Reason, float CooldownRemaining)
 {
 	OnUseRejected.Broadcast(Reason, CooldownRemaining);
+}
+
+void AMDPlayerController::NotifyToast(const FText& Message, EMDColor Tone)
+{
+	if (!HasAuthority() || Message.IsEmpty())
+	{
+		return;
+	}
+	if (IsLocalController())
+	{
+		OnToastNotified.Broadcast(Message, Tone); // listen-server host: no RPC hop
+	}
+	else
+	{
+		Client_NotifyToast(Message, Tone);
+	}
+}
+
+void AMDPlayerController::Client_NotifyToast_Implementation(const FText& Message, EMDColor Tone)
+{
+	OnToastNotified.Broadcast(Message, Tone);
+}
+
+AMDStation* AMDPlayerController::GetOpenStation() const
+{
+	return OpenStation.Get();
+}
+
+void AMDPlayerController::NotifyStationOpened(AMDStation* Station)
+{
+	if (!HasAuthority() || !Station)
+	{
+		return;
+	}
+	if (IsLocalController())
+	{
+		OpenStationLocal(Station);
+	}
+	else
+	{
+		Client_OpenStation(Station);
+	}
+}
+
+void AMDPlayerController::Client_OpenStation_Implementation(AMDStation* Station)
+{
+	OpenStationLocal(Station);
+}
+
+void AMDPlayerController::OpenStationLocal(AMDStation* Station)
+{
+	if (!Station)
+	{
+		return;
+	}
+	OpenStation = Station;
+	bStationOpen = true;
+	GetWorldTimerManager().SetTimer(StationWatchTimer, this, &AMDPlayerController::WatchStation, 0.25f, true);
+	OnStationOpened.Broadcast(Station);
+}
+
+void AMDPlayerController::CloseStation()
+{
+	GetWorldTimerManager().ClearTimer(StationWatchTimer);
+	OpenStation.Reset();
+	if (bStationOpen)
+	{
+		bStationOpen = false;
+		OnStationClosed.Broadcast();
+	}
+}
+
+void AMDPlayerController::WatchStation()
+{
+	const AMDStation* Station = OpenStation.Get();
+	const APawn* LocalPawn = GetPawn();
+	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
+	const UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+	const bool bDead = !LocalPawn || (ASC && ASC->IsDead());
+	// Close with some slack beyond the server's range so walking along the edge does not flicker the panel.
+	const float CloseRange = UMDGameSettings::GetEconomy().StationRange + 50.0f;
+	if (!Station || bDead || !AMDStation::IsWithinRange(LocalPawn->GetActorLocation(), Station->GetActorLocation(), CloseRange))
+	{
+		CloseStation();
+	}
 }
 
 bool AMDPlayerController::FindRespawnTransform(FTransform& OutTransform) const
@@ -635,6 +737,109 @@ void AMDPlayerController::Server_GiveItem_Implementation(FName RowName, int32 Qt
 	}
 	const bool bOk = Inv->AddItem(RowName, Qty);
 	UE_LOG(LogMDInventory, Warning, TEXT("GiveItem %s x%d -> %s"), *RowName.ToString(), Qty, bOk ? TEXT("added") : TEXT("rejected (invalid row, qty or inventory full)"));
+#endif
+}
+
+void AMDPlayerController::GiveGold(int32 Amount)
+{
+#if !UE_BUILD_SHIPPING
+	Server_GiveGold(Amount);
+#endif
+}
+
+void AMDPlayerController::Server_GiveGold_Implementation(int32 Amount)
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDInventoryComponent* Inv = FindInventoryFor(GetPawn(), this))
+	{
+		Inv->AddGold(FMath::Clamp(Amount, -1000000, 1000000));
+		UE_LOG(LogMDInventory, Warning, TEXT("GiveGold %d -> %d gold"), Amount, Inv->GetGold());
+	}
+#endif
+}
+
+void AMDPlayerController::GiveShards(int32 Qty)
+{
+#if !UE_BUILD_SHIPPING
+	Server_GiveShards(Qty);
+#endif
+}
+
+void AMDPlayerController::Server_GiveShards_Implementation(int32 Qty)
+{
+#if !UE_BUILD_SHIPPING
+	UMDInventoryComponent* Inv = FindInventoryFor(GetPawn(), this);
+	if (!Inv)
+	{
+		return;
+	}
+	const FName ShardRow = UMDGameSettings::GetEconomy().ShardRow;
+	const bool bOk = Inv->AddItem(ShardRow, Qty);
+	UE_LOG(LogMDInventory, Warning, TEXT("GiveShards %s x%d -> %s"), *ShardRow.ToString(), Qty, bOk ? TEXT("added") : TEXT("rejected (no such DT_Items row yet, qty or inventory full)"));
+#endif
+}
+
+void AMDPlayerController::SetDurability(int32 Slot, int32 Value)
+{
+#if !UE_BUILD_SHIPPING
+	Server_SetDurability(static_cast<uint8>(FMath::Clamp(Slot, 0, 255)), Value);
+#endif
+}
+
+void AMDPlayerController::Server_SetDurability_Implementation(uint8 Slot, int32 Value)
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDInventoryComponent* Inv = FindInventoryFor(GetPawn(), this))
+	{
+		Inv->DebugSetDurability(Slot, Value);
+	}
+#endif
+}
+
+void AMDPlayerController::SetUpgradeLevel(int32 Slot, int32 Level)
+{
+#if !UE_BUILD_SHIPPING
+	Server_SetUpgradeLevel(static_cast<uint8>(FMath::Clamp(Slot, 0, 255)), Level);
+#endif
+}
+
+void AMDPlayerController::Server_SetUpgradeLevel_Implementation(uint8 Slot, int32 Level)
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDInventoryComponent* Inv = FindInventoryFor(GetPawn(), this))
+	{
+		Inv->DebugSetUpgradeLevel(Slot, Level);
+	}
+#endif
+}
+
+void AMDPlayerController::DumpCondition()
+{
+#if !UE_BUILD_SHIPPING
+	const UMDInventoryComponent* Inv = FindInventoryFor(GetPawn(), this);
+	if (!Inv)
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("DumpCondition: no UMDInventoryComponent for local player %s"), *GetNameSafe(this));
+		return;
+	}
+	const AMDPlayerState* PS = GetPlayerState<AMDPlayerState>();
+	const UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	UE_LOG(LogMDInventory, Warning, TEXT("==== Condition [%s] Gold %d  Shards %d  Defense %.2f%% (cap %.0f)  AttackPower %.2f ===="),
+		NetModeName(GetNetMode()), Inv->GetGold(), Inv->GetShardCount(),
+		ASC ? ASC->GetDefense() : 0.0f, ASC ? ASC->DefenseCap : 0.0f, ASC ? ASC->GetAttackPower() : 0.0f);
+	for (const FMDEquippedSlot& E : Inv->GetEquipped())
+	{
+		int32 Cur = 0;
+		int32 Max = 0;
+		Inv->GetSlotDurability(E.Slot, Cur, Max);
+		const int32 Level = Inv->GetSlotUpgradeLevel(E.Slot);
+		const float Mult = Inv->GetSlotConditionMultiplier(E.Slot);
+		UE_LOG(LogMDInventory, Warning, TEXT("  slot %d %s  dur %d/%d (x%.2f)  +%d  rowDR %.1f -> effDR %.2f  rowAP %.1f"),
+			E.Slot, *E.ItemRowName.ToString(), Cur, Max, Mult, Level, Inv->GetItemArmorReduction(E.ItemRowName),
+			UMDStatCalculator::EffectivePieceDR(Inv->GetItemArmorReduction(E.ItemRowName), Level, Mult, Tuning),
+			Inv->GetItemAttackBonus(E.ItemRowName));
+	}
 #endif
 }
 

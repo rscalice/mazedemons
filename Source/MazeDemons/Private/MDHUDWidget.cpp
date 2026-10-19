@@ -44,6 +44,7 @@ void UMDHUDWidget::Unbind()
 	{
 		PC->OnPickupNotified.RemoveDynamic(this, &UMDHUDWidget::HandlePickupNotified);
 		PC->OnUseRejected.RemoveDynamic(this, &UMDHUDWidget::HandleUseRejected);
+		PC->OnToastNotified.RemoveDynamic(this, &UMDHUDWidget::HandleToast);
 	}
 	BoundASC.Reset();
 	BoundStamina.Reset();
@@ -81,6 +82,7 @@ void UMDHUDWidget::TryBind()
 	}
 	PC->OnPickupNotified.AddUniqueDynamic(this, &UMDHUDWidget::HandlePickupNotified);
 	PC->OnUseRejected.AddUniqueDynamic(this, &UMDHUDWidget::HandleUseRejected);
+	PC->OnToastNotified.AddUniqueDynamic(this, &UMDHUDWidget::HandleToast);
 
 	// Seed the cache so the first frame is correct even if no attribute change follows.
 	Health = ASC->GetHealth();
@@ -190,6 +192,14 @@ void UMDHUDWidget::HandleExhaustedChanged(bool bNowExhausted)
 void UMDHUDWidget::HandlePickupNotified(FName ItemRowName, int32 Quantity)
 {
 	OnPickupToast(ItemRowName, Quantity);
+}
+
+void UMDHUDWidget::HandleToast(FText Message, EMDColor Tone)
+{
+	if (!Message.IsEmpty())
+	{
+		OnToast(Message, Tone);
+	}
 }
 
 void UMDHUDWidget::HandleUseRejected(EMDUseRejectReason Reason, float CooldownRemaining)

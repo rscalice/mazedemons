@@ -3,6 +3,7 @@
 #include "AbilitySystemGlobals.h"
 #include "AbilitySystemInterface.h"
 #include "GenericTeamAgentInterface.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
@@ -11,7 +12,9 @@
 #include "MDInventoryComponent.h"
 #include "MDPlayerState.h"
 #include "MDPlayerController.h"
+#include "MDGameSettings.h"
 #include "MDStaminaComponent.h"
+#include "MDStatCalculator.h"
 #include "MDUISettings.h"
 #include "Engine/DataTable.h"
 
@@ -208,6 +211,8 @@ TArray<FMDStatLine> UMDGameplayStatics::GetCharacterStatLines(APlayerState* PS, 
 		}
 	}
 
+	NewDefense = FMath::Min(NewDefense, ASC->DefenseCap); // the preview obeys the player cap too
+
 	Lines.Add(MakeLine(LOCTEXT("StatHealth", "Health"), Health, NewHealth, false, true, MaxHealth, MaxHealth, TEXT("")));
 	Lines.Add(MakeLine(LOCTEXT("StatStamina", "Stamina"), Stamina, Stamina, false, true, MaxStamina, MaxStamina, TEXT("")));
 	Lines.Add(MakeLine(LOCTEXT("StatStaminaRegen", "Stamina regen"), Regen, Regen, false, false, 0.0f, 0.0f, TEXT(" /s")));
@@ -218,6 +223,69 @@ TArray<FMDStatLine> UMDGameplayStatics::GetCharacterStatLines(APlayerState* PS, 
 }
 
 #undef LOCTEXT_NAMESPACE
+
+EMDColor UMDGameplayStatics::DurabilityColor(float Fraction)
+{
+	const float Clamped = FMath::Clamp(Fraction, 0.0f, 1.0f);
+	if (Clamped >= 0.5f)
+	{
+		return EMDColor::Success;
+	}
+	return Clamped >= 0.25f ? EMDColor::Warning : EMDColor::Danger;
+}
+
+void UMDGameplayStatics::AwardKillGold(const AActor* Victim, const AController* Killer, int32 Gold)
+{
+	const UWorld* World = Victim ? Victim->GetWorld() : nullptr;
+	const AGameStateBase* GameState = World ? World->GetGameState() : nullptr;
+	if (!GameState || Gold <= 0 || !Victim->HasAuthority())
+	{
+		return;
+	}
+
+	TArray<AMDPlayerState*> Players;
+	TArray<float> Distances; // -1 = no pawn, never a recipient
+	int32 KillerIndex = INDEX_NONE;
+	for (APlayerState* State : GameState->PlayerArray)
+	{
+		AMDPlayerState* PlayerState = Cast<AMDPlayerState>(State);
+		if (!PlayerState)
+		{
+			continue;
+		}
+		const APawn* Pawn = PlayerState->GetPawn(); // a dead player's corpse still counts until it respawns
+		Distances.Add(Pawn ? FVector::Dist(Pawn->GetActorLocation(), Victim->GetActorLocation()) : -1.0f);
+		if (Killer && Killer->PlayerState.Get() == PlayerState)
+		{
+			KillerIndex = Players.Num();
+		}
+		Players.Add(PlayerState);
+	}
+
+	TArray<int32> Shares;
+	UMDStatCalculator::DistributeKillGold(Gold, Distances, UMDGameSettings::GetEconomy().KillGoldRadius, KillerIndex, Shares);
+	for (int32 i = 0; i < Players.Num(); ++i)
+	{
+		if (Shares[i] <= 0)
+		{
+			continue;
+		}
+		UMDInventoryComponent* Inventory = GetInventory(Players[i]);
+		if (!Inventory)
+		{
+			Inventory = GetInventory(Players[i]->GetPawn());
+		}
+		if (!Inventory)
+		{
+			continue;
+		}
+		Inventory->AddGold(Shares[i]);
+		if (AMDPlayerController* Controller = Cast<AMDPlayerController>(Players[i]->GetOwner()))
+		{
+			Controller->NotifyToast(FText::Format(NSLOCTEXT("MDGold", "KillGoldToast", "+{0} Gold"), FText::AsNumber(Shares[i])), EMDColor::Gold);
+		}
+	}
+}
 
 UMDAbilitySystemComponent* UMDGameplayStatics::GetMDAbilitySystemComponent(const AActor* Actor)
 {

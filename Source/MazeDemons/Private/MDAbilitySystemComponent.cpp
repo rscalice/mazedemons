@@ -4,6 +4,9 @@
 #include "MDDamageEffect.h"
 #include "MDGameplayStatics.h"
 #include "MDGameplayTags.h"
+#include "MDGameSettings.h"
+#include "MDInventoryComponent.h"
+#include "MDStatCalculator.h"
 #include "GameFramework/Actor.h"
 #include "GameplayEffect.h"
 #include "Net/UnrealNetwork.h"
@@ -193,11 +196,24 @@ void UMDAbilitySystemComponent::RemoveWeaponAttackBonus(FName WeaponSlot)
 	RecalculateAttackPower();
 }
 
+void UMDAbilitySystemComponent::SetWeaponModifiers(int32 UpgradeLevel, float CondMult)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	WeaponUpgradeLevel = FMath::Max(0, UpgradeLevel);
+	WeaponCondMult = FMath::Max(0.0f, CondMult);
+	RecalculateAttackPower();
+}
+
 void UMDAbilitySystemComponent::RecalculateAttackPower()
 {
 	if (UMDAttributeSet* Attrs = GetMazeDemonsAttributes())
 	{
-		Attrs->SetAttackPower(ComputeAttackPower(BaseAttackPower, EquippedWeaponAttackBonuses));
+		Attrs->SetAttackPower(UMDStatCalculator::EffectiveAttackPower(BaseAttackPower, EquippedWeaponAttackBonuses,
+			WeaponUpgradeLevel, WeaponCondMult, UMDGameSettings::GetEconomy()));
 	}
 }
 
@@ -236,8 +252,19 @@ void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigat
 	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UMDDamageEffect::StaticClass(), 1.0f, Context);
 	if (Spec.IsValid() && Spec.Data.IsValid())
 	{
+		// Set before the effect lands so a lethal hit's OnDeath handlers already see who killed.
+		LastDamageInstigator = DamageInstigator;
+		const float HealthBefore = GetHealth();
 		Spec.Data->SetSetByCallerMagnitude(TAG_Data_Damage.GetTag(), Damage);
 		ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
+
+		const float Applied = HealthBefore - GetHealth();
+		if (Applied > 0.0f)
+		{
+			OnDamageApplied.Broadcast(DamageInstigator, Applied);
+			// Weapon wear for the attacker (the victim's own inventory listens to OnDamageApplied for armor wear).
+			UMDInventoryComponent::NotifyHitLanded(DamageInstigator, Target);
+		}
 	}
 }
 
@@ -294,15 +321,12 @@ bool UMDAbilitySystemComponent::IsDead() const
 
 void UMDAbilitySystemComponent::RecalculateDefense()
 {
-	float RemainingDamageFraction = 1.0f - BaseDefense / 100.0f;
-	for (const TPair<FName, float>& ArmorPiece : EquippedArmorDamageReductions)
-	{
-		RemainingDamageFraction *= 1.0f - ArmorPiece.Value / 100.0f;
-	}
+	TArray<float> Pieces;
+	EquippedArmorDamageReductions.GenerateValueArray(Pieces);
 
 	if (UMDAttributeSet* Attrs = GetMazeDemonsAttributes())
 	{
-		Attrs->SetDefense(FMath::Clamp((1.0f - RemainingDamageFraction) * 100.0f, 0.0f, 90.0f));
+		Attrs->SetDefense(UMDStatCalculator::CombineDR(BaseDefense, Pieces, DefenseCap));
 	}
 }
 
