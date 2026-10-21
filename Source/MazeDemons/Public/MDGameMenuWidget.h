@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/Texture2D.h"
 #include "MDRunStats.h"
 #include "MDUITypes.h"
 #include "MDUIWidgets.h"
@@ -93,6 +94,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")
 	void SetActiveTab(EMDMenuTab NewTab);
 
+	// Re-fires OnActiveTabChanged(ActiveTab, ActiveTab) so the Blueprint resyncs the tab bar and content switcher
+	// even when the tab did not change (menu reopened on the same tab, construct ordering).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")
+	void SyncActiveTab();
+
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")
 	void NextTab();
 
@@ -108,6 +114,14 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Menu")
 	FText GetTabLabel(EMDMenuTab Tab) const;
+
+	// Tab icons, set in the widget Blueprint.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Menu")
+	TMap<EMDMenuTab, TSoftObjectPtr<UTexture2D>> TabIcons;
+
+	// Icon for a tab, null when unset or not loadable.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Menu")
+	UTexture2D* GetTabIcon(EMDMenuTab Tab) const;
 
 	// Asks the owning player controller to close the menu (Esc / Tab / B are handled natively; this is for a close button).
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")
@@ -147,4 +161,11 @@ private:
 	void HandlePerksChanged();
 
 	TWeakObjectPtr<UMDPerkComponent> PerkComponent;
+
+	// Content switcher in the Blueprint (Inventory 0, Perks 1, Run 2). C++ keeps it in step with ActiveTab every tick
+	// and logs any drift so the source can be found.
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|Menu", meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
+	TObjectPtr<class UWidgetSwitcher> TabSwitcher;
+
+	void EnforceSwitcherIndex(const TCHAR* Context);
 };

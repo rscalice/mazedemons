@@ -128,6 +128,25 @@ namespace
 
 // ---- Catalog ----
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDPerkIconPathsTest, "MazeDemons.Perk.IconPaths", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDPerkIconPathsTest::RunTest(const FString& Parameters)
+{
+	const UMDPerkTree& Tree = PerkTestTree();
+	if (!TestEqual(TEXT("16 nodes"), Tree.Nodes.Num(), MD_NumPerkNodes))
+	{
+		return false;
+	}
+	for (const FMDPerkNode& Node : Tree.Nodes)
+	{
+		const FString Name = FString::Printf(TEXT("T_Perk_%s"), *Node.Id.ToString());
+		TestFalse(*FString::Printf(TEXT("%s has an icon path"), *Node.Id.ToString()), Node.Icon.IsNull());
+		TestEqual(*FString::Printf(TEXT("%s icon asset name"), *Node.Id.ToString()), Node.Icon.ToSoftObjectPath().GetAssetName(), Name);
+		TestEqual(*FString::Printf(TEXT("%s icon path"), *Node.Id.ToString()), Node.Icon.ToSoftObjectPath().ToString(),
+			FString::Printf(TEXT("/Game/UI/Icons/Perks/%s.%s"), *Name, *Name));
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDPerkCatalogShapeTest, "MazeDemons.Perk.CatalogShape", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FMDPerkCatalogShapeTest::RunTest(const FString& Parameters)
 {

@@ -16,6 +16,10 @@ struct MAZEDEMONS_API FMDPerkNodeView
 	UPROPERTY(BlueprintReadOnly, Category = "Perk")
 	FText Name;
 
+	// Perk icon, null when the texture is missing.
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	TObjectPtr<UTexture2D> Icon = nullptr;
+
 	// The node description with this rank's value filled in (the next rank when none is owned or pending).
 	UPROPERTY(BlueprintReadOnly, Category = "Perk")
 	FText Description;

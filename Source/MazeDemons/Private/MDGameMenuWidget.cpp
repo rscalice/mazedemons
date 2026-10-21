@@ -14,6 +14,7 @@
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
 #include "MDPlayerState.h"
+#include "Components/WidgetSwitcher.h"
 
 // ---- Pure rules ----
 
@@ -70,6 +71,30 @@ void UMDGameMenuWidget::NativeConstruct()
 		ActiveTab = EMDMenuTab::Inventory;
 	}
 	TryBind();
+	SyncActiveTab();
+}
+
+void UMDGameMenuWidget::SyncActiveTab()
+{
+	OnActiveTabChanged(ActiveTab, ActiveTab);
+	EnforceSwitcherIndex(TEXT("SyncActiveTab"));
+}
+
+void UMDGameMenuWidget::EnforceSwitcherIndex(const TCHAR* Context)
+{
+	if (!TabSwitcher || !IsTabSelectable(ActiveTab))
+	{
+		return;
+	}
+	const int32 Expected = static_cast<int32>(ActiveTab) - 1;
+	const int32 Current = TabSwitcher->GetActiveWidgetIndex();
+	if (Current != Expected && Expected >= 0 && Expected < TabSwitcher->GetNumWidgets())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GameMenu: switcher index %d out of step with ActiveTab %d (%s); correcting"),
+			Current, static_cast<int32>(ActiveTab), Context);
+		TabSwitcher->SetActiveWidgetIndex(Expected);
+		OnActiveTabChanged(ActiveTab, ActiveTab); // re-highlight the tab bar from the same value
+	}
 }
 
 void UMDGameMenuWidget::NativeDestruct()
@@ -82,6 +107,7 @@ void UMDGameMenuWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	TryBind(); // PlayerState may not be replicated yet at construct time
+	EnforceSwitcherIndex(TEXT("Tick"));
 }
 
 void UMDGameMenuWidget::Unbind()
@@ -123,6 +149,7 @@ void UMDGameMenuWidget::SetActiveTab(EMDMenuTab NewTab)
 	const EMDMenuTab Old = ActiveTab;
 	ActiveTab = NewTab;
 	OnActiveTabChanged(NewTab, Old);
+	EnforceSwitcherIndex(TEXT("SetActiveTab"));
 }
 
 void UMDGameMenuWidget::NextTab()
@@ -174,6 +201,12 @@ FText UMDGameMenuWidget::GetTabLabel(EMDMenuTab Tab) const
 	case EMDMenuTab::Run: return NSLOCTEXT("MDMenu", "TabRun", "Run");
 	default: return FText::GetEmpty();
 	}
+}
+
+UTexture2D* UMDGameMenuWidget::GetTabIcon(EMDMenuTab Tab) const
+{
+	const TSoftObjectPtr<UTexture2D>* Found = TabIcons.Find(Tab);
+	return Found ? Found->LoadSynchronous() : nullptr;
 }
 
 void UMDGameMenuWidget::CloseMenu()

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "Engine/Texture2D.h"
 #include "MDPerkTypes.generated.h"
 
 // Perk system data (U3). Node values are BALANCE.md section 5 (all PER RANK); caps are section 7.
@@ -117,6 +118,10 @@ struct MAZEDEMONS_API FMDPerkNode
 	// Uses {Value} (this rank) and {Total}.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Perk")
 	FText Description;
+
+	// Icon texture (/Game/UI/Icons/Perks/T_Perk_<Id>). Soft: the asset may not exist yet; resolve with LoadSynchronous and null-check.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Perk")
+	TSoftObjectPtr<UTexture2D> Icon;
 };
 
 // BALANCE section 7 hard caps (PlayerDRCap lives in FMDEconomyTuning).

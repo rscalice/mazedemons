@@ -170,6 +170,7 @@ bool UMDPerksWidget::GetNodeInfo(int32 Node, FMDPerkNodeView& Out) const
 	Pending.SetNumZeroed(MD_NumPerkNodes);
 
 	Out.Name = N.Name;
+	Out.Icon = N.Icon.LoadSynchronous();
 	Out.Rank = Owned[Node];
 	Out.PendingRank = Pending[Node];
 	Out.MaxRank = N.MaxRank;
