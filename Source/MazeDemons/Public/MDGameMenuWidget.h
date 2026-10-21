@@ -164,7 +164,7 @@ private:
 
 	// Content switcher in the Blueprint (Inventory 0, Perks 1, Run 2). C++ keeps it in step with ActiveTab every tick
 	// and logs any drift so the source can be found.
-	UPROPERTY(meta = (BindWidgetOptional))
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|Menu", meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
 	TObjectPtr<class UWidgetSwitcher> TabSwitcher;
 
 	void EnforceSwitcherIndex(const TCHAR* Context);
