@@ -7,6 +7,7 @@
 #include "MDPlayerController.generated.h"
 
 class AMDStation;
+class UMDGameMenuWidget;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDPickupNotified, FName, ItemRowName, int32, Quantity);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDUseRejected, EMDUseRejectReason, Reason, float, CooldownRemaining);
@@ -37,6 +38,45 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
 	TObjectPtr<UInputAction> PauseAction;
+
+	// Game menu (M1). Assets set in BP_MDPlayerController defaults. When an action is left empty, C++ binds a fallback key
+	// instead (Tab and gamepad Menu / View toggle, P opens Perks, R opens Run).
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> ToggleMenuAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> OpenPerksAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
+	TObjectPtr<UInputAction> OpenRunAction;
+
+	// ---- Game menu (W_MDGameMenu): Inventory / Perks / Run tabs. Local only; the game is never paused. ----
+
+	// W_MDGameMenu (parent UMDGameMenuWidget), set in BP_MDPlayerController defaults. Created lazily on first open.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Maze Demons|UI")
+	TSubclassOf<UMDGameMenuWidget> GameMenuClass;
+
+	// Opens on the last-used tab (Inventory the first time), or closes when open. Refused while the station panel, the pause
+	// menu or another cursor-showing menu is open, and while dead.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|UI")
+	void ToggleGameMenu();
+
+	// Opens the menu on Tab; when already open on another tab, switches to it; when already on that tab, closes. None = last used tab.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|UI")
+	void OpenGameMenuTab(EMDMenuTab Tab);
+
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|UI")
+	void CloseGameMenu();
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
+	bool IsGameMenuOpen() const { return bGameMenuOpen && GameMenuWidget != nullptr; }
+
+	// Console / debug: `OpenMenu` toggles; `OpenMenuTab 2` opens Perks (1 Inventory, 2 Perks, 3 Run).
+	UFUNCTION(Exec)
+	void OpenMenu();
+
+	UFUNCTION(Exec)
+	void OpenMenuTab(int32 TabNumber);
 
 	// Console / debug: Slot is 1 or 2.
 	UFUNCTION(Exec)
@@ -121,6 +161,13 @@ public:
 
 	// Authority only: shows Message as a toast on the owning client; Tone picks the accent colour.
 	void NotifyToast(const FText& Message, EMDColor Tone);
+
+	// Authority only: a critical hit by this player's pawn landed (U3 crit feedback hook, no UI yet).
+	void NotifyCrit(float FinalDamage);
+
+	// Owning client: implement in Blueprint for crit feedback (floating number, sound). Unbound in U3.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|Combat")
+	void OnCritNotified(float FinalDamage);
 
 	// ---- Stations (owning client only; the server just opens / the client closes by distance) ----
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Station")
@@ -230,6 +277,47 @@ public:
 	UFUNCTION(Exec)
 	void DumpCondition();
 
+	// ---- Perks (U3). Debug, non-shipping: the Server_ RPCs mutate on the server; bodies are compiled out in shipping. ----
+
+	// Adds N (may be negative) bonus perk points to this player.
+	UFUNCTION(Exec)
+	void GivePerkPoints(int32 N = 1);
+
+	UFUNCTION(Server, Reliable)
+	void Server_GivePerkPoints(int32 N);
+
+	// Sets the run's completed zones (0..4); points are derived from it.
+	UFUNCTION(Exec)
+	void SetZonesCompleted(int32 Zones);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetZonesCompleted(int32 Zones);
+
+	// Sets the run's Souls Saved; points are derived from it (milestones 5 / 10 / 15).
+	UFUNCTION(Exec)
+	void SetSoulsSaved(int32 Souls);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetSoulsSaved(int32 Souls);
+
+	// Sets a node's rank (Node 0..15, clamped to its max rank), bypassing every rule. Re-applies the perk effect.
+	UFUNCTION(Exec)
+	void SetPerkRank(int32 Node, int32 Rank);
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetPerkRank(int32 Node, int32 Rank);
+
+	// Sets every rank to 0 (no refund rules, no station needed).
+	UFUNCTION(Exec)
+	void ResetPerks();
+
+	UFUNCTION(Server, Reliable)
+	void Server_ResetPerks();
+
+	// Logs THIS machine's view: ranks, points earned / spent / available, path points and the resulting stats.
+	UFUNCTION(Exec)
+	void DumpPerks();
+
 	// Debug (non-shipping): logs THIS machine's view of the local player's inventory (LogMDInventory, Warning).
 	UFUNCTION(Exec)
 	void DumpInventory();
@@ -257,6 +345,9 @@ protected:
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
 
+	UFUNCTION(Client, Unreliable)
+	void Client_NotifyCrit(float FinalDamage);
+
 	UFUNCTION(Client, Reliable)
 	void Client_NotifyToast(const FText& Message, EMDColor Tone);
 
@@ -271,6 +362,11 @@ private:
 	void OnQuickSlot1(const FInputActionValue& Value);
 	void OnQuickSlot2(const FInputActionValue& Value);
 	void OnPause(const FInputActionValue& Value);
+	void OnToggleMenu(const FInputActionValue& Value);
+	void OnOpenPerks(const FInputActionValue& Value);
+	void OnOpenRun(const FInputActionValue& Value);
+	void OpenPerksFallback();
+	void OpenRunFallback();
 	void ApplyMovementReset();
 	void UpdateInteractFocus();
 	FTimerHandle FocusTraceTimer;
@@ -285,6 +381,11 @@ private:
 	FText InteractPrompt;
 	bool bUsingGamepad = false;
 	bool bPauseMenuOpen = false;
+	bool bGameMenuOpen = false;
+	EMDMenuTab LastMenuTab = EMDMenuTab::Inventory;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMDGameMenuWidget> GameMenuWidget;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UUserWidget> PauseWidget;

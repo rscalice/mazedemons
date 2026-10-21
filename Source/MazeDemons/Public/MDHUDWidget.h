@@ -7,6 +7,7 @@
 
 class AMDPlayerController;
 class UMDAbilitySystemComponent;
+class UMDPerkComponent;
 class UMDStaminaComponent;
 
 // Native base of the in-game HUD (W_MDHUD). Binds once to the local player's PlayerState (ASC + stamina) and keeps
@@ -52,6 +53,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
 	bool bDead = false;
 
+	// Unspent perk points (earned minus spent) for the "+1" badge next to the health bar.
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	int32 PerkPointsAvailable = 0;
+
 	// Seconds until the server respawns this player (0 when alive). Derived from the replicated respawn time.
 	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
 	float RespawnSecondsRemaining = 0.0f;
@@ -77,6 +82,10 @@ protected:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
 	void OnDeathStateChanged(bool bNowDead);
+
+	// Unspent perk points changed (also fired once on bind). Show the badge while Available > 0.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnPerkPointsChanged(int32 Available);
 
 	// Server confirmed a pickup for this player (shown as a toast).
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
@@ -110,9 +119,12 @@ private:
 	void HandleUseRejected(EMDUseRejectReason Reason, float CooldownRemaining);
 	UFUNCTION()
 	void HandleToast(FText Message, EMDColor Tone);
+	UFUNCTION()
+	void HandlePerksChanged();
 
 	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
 	TWeakObjectPtr<UMDStaminaComponent> BoundStamina;
 	TWeakObjectPtr<AMDPlayerController> BoundController;
+	TWeakObjectPtr<UMDPerkComponent> BoundPerks;
 	bool bBound = false;
 };

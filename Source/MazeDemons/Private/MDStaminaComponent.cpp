@@ -2,6 +2,7 @@
 
 #include "MDAbilitySystemComponent.h"
 #include "MDGameplayTags.h"
+#include "MDPerkCatalog.h"
 #include "MDPlayerState.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -39,10 +40,29 @@ UMDAbilitySystemComponent* UMDStaminaComponent::GetASC() const
 	return nullptr;
 }
 
+float UMDStaminaComponent::ScaleCost(float Cost) const
+{
+	const UMDAbilitySystemComponent* ASC = GetASC();
+	return ASC ? UMDPerkCatalog::ScaleStaminaCost(Cost, ASC->GetStaminaCostScale()) : Cost;
+}
+
+void UMDStaminaComponent::SetRegenDelayModifier(float ReductionSeconds)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		RegenDelayReduction = FMath::Max(ReductionSeconds, 0.0f);
+	}
+}
+
+float UMDStaminaComponent::GetEffectiveRegenDelay() const
+{
+	return UMDPerkCatalog::EffectiveRegenDelay(RegenDelay, RegenDelayReduction);
+}
+
 bool UMDStaminaComponent::HasStaminaFor(float Cost) const
 {
 	const UMDAbilitySystemComponent* ASC = GetASC();
-	return ASC && ASC->GetStamina() >= Cost;
+	return ASC && ASC->GetStamina() >= ScaleCost(Cost);
 }
 
 bool UMDStaminaComponent::IsSprintAllowedFor(bool bPawnLocallyControlled) const
@@ -117,8 +137,8 @@ void UMDStaminaComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
 	In.Stamina = ASC->GetStamina();
 	In.MaxStamina = ASC->GetMaxStamina();
 	In.RegenPerSec = ASC->GetStaminaRegenRate();
-	In.RegenDelay = RegenDelay;
-	In.SprintDrainPerSec = SprintDrainPerSec;
+	In.RegenDelay = GetEffectiveRegenDelay();
+	In.SprintDrainPerSec = ScaleCost(SprintDrainPerSec);
 	In.ExhaustedRecoverFraction = ExhaustedRecoverFraction;
 	In.DeltaTime = DeltaTime;
 	In.TimeSinceSpend = static_cast<float>(Now - LastSpendTime);
@@ -159,7 +179,7 @@ void UMDStaminaComponent::Consume(float Cost)
 	{
 		return;
 	}
-	ASC->SetStaminaClamped(ASC->GetStamina() - Cost);
+	ASC->SetStaminaClamped(ASC->GetStamina() - ScaleCost(Cost));
 	if (const UWorld* World = GetWorld())
 	{
 		LastSpendTime = World->GetTimeSeconds();

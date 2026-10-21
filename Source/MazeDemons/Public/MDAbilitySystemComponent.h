@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "AbilitySystemComponent.h"
+#include "MDPerkTypes.h"
 #include "MDAbilitySystemComponent.generated.h"
 
 class UMDAttributeSet;
@@ -15,6 +16,12 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDStatsChanged);
 
 // Server only: damage actually reduced Health by Applied (> 0). Instigator may be null (environment).
 DECLARE_MULTICAST_DELEGATE_TwoParams(FMDDamageAppliedNative, AActor* /*Instigator*/, float /*Applied*/);
+
+// Server only: this ASC's owner landed a critical hit on Target; FinalDamage is the raw damage after the crit and Executioner.
+DECLARE_MULTICAST_DELEGATE_TwoParams(FMDCritLandedNative, AActor* /*Target*/, float /*FinalDamage*/);
+
+// Server only: Second Wind just saved the owner from a lethal hit (health is already 1).
+DECLARE_MULTICAST_DELEGATE(FMDSecondWindNative);
 
 UCLASS(ClassGroup = (Gameplay), meta = (BlueprintSpawnableComponent))
 class MAZEDEMONS_API UMDAbilitySystemComponent : public UAbilitySystemComponent
@@ -39,6 +46,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
 	float GetDefense() const;
 
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetCritChance() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetCritDamage() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetHealthRegen() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetStaminaCostScale() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|GAS")
+	float GetSprintSpeedScale() const;
+
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void SetArmorPieceDamageReduction(FName ArmorSlot, float DamageReductionPercent);
 
@@ -60,6 +82,41 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void RemoveWeaponAttackBonus(FName WeaponSlot);
 
+	// ---- Perks (server only; UMDPerkComponent pushes these from the full modifier set on every change) ----
+
+	// Damage reduction percentage points from perks (Hardened + Stalwart while active). One more entry ("Perk") in the armor
+	// map, so CombineDR and the player cap apply as for any piece. 0 removes it.
+	void SetPerkDamageReduction(float Percent);
+
+	// Attack power multiplier from perks (0.12 = +12%). Recalculates the AttackPower attribute.
+	void SetPerkAttackPct(float Pct);
+	float GetPerkAttackPct() const { return PerkAttackPct; }
+
+	// Thick Hide / Bulwark / Second Wind / Executioner. Never replicated: only the server mutates Health.
+	void SetPerkCombatState(const FMDPerkCombatState& State) { PerkCombat = State; }
+	const FMDPerkCombatState& GetPerkCombatState() const { return PerkCombat; }
+
+	// Called by the attribute set when Second Wind saved the owner: clears the availability flag and fires OnSecondWindTriggered.
+	void ConsumeSecondWind();
+
+	FMDSecondWindNative OnSecondWindTriggered;
+
+	// Server only; fires after ApplyDamage landed a critical hit with this ASC's owner as the instigator.
+	FMDCritLandedNative OnCritLanded;
+
+	// Server clock (AGameStateBase::GetServerWorldTimeSeconds) when this ASC last lost Health. Replicated to the owner only so
+	// the Perks panel can show the 5 s countdown. -1000 = never.
+	double GetLastDamageTakenTime() const { return LastDamageTakenTime; }
+
+	// Seconds since Health was last reduced (server value on the server, owner mirror on the owning client). Large when never.
+	double GetTimeSinceLastDamage() const;
+
+	// The clock LastDamageTakenTime is measured on.
+	double GetServerNow() const;
+
+	// Debug: kills the owner outright (ignores Bulwark and Second Wind). Server only.
+	void DebugKill(AActor* DamageInstigator);
+
 	// Upper bound of the Defense attribute (damage reduction %). 90 for enemies and dummies; AMDPlayerState lowers it to the
 	// player cap from the balance data.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze Demons|GAS", meta = (ClampMin = "0", ClampMax = "90"))
@@ -79,9 +136,10 @@ public:
 	static float ComputeAttackPower(float InBaseAttackPower, const TMap<FName, float>& WeaponBonuses);
 
 	// Applies raw damage through GAS; Defense mitigation is applied by the attribute set.
+	// Server-only. Instigator/causer feed team checks (friendly fire) and the effect context. bAllowCrit = false for DoT and
+	// debug self-damage; a crit also needs instigator != target and an instigator with CritChance > 0.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
-	// Server-only. Instigator/causer feed team checks (friendly fire) and the effect context.
-	void ApplyDamage(float Damage, AActor* DamageInstigator = nullptr, AActor* DamageCauser = nullptr);
+	void ApplyDamage(float Damage, AActor* DamageInstigator = nullptr, AActor* DamageCauser = nullptr, bool bAllowCrit = true);
 
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void ApplyHealing(float Amount);
@@ -173,6 +231,7 @@ private:
 	void HandleStaminaChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleMaxStaminaChanged(const FOnAttributeChangeData& ChangeData);
 	void HandleStaminaRegenRateChanged(const FOnAttributeChangeData& ChangeData);
+	void HandlePerkAttributeChanged(const FOnAttributeChangeData& ChangeData);
 
 	UPROPERTY()
 	TObjectPtr<UMDAttributeSet> MazeDemonsAttributes;
@@ -184,6 +243,12 @@ private:
 	int32 WeaponUpgradeLevel = 0;
 	float WeaponCondMult = 1.0f;
 	TWeakObjectPtr<AActor> LastDamageInstigator;
+
+	float PerkAttackPct = 0.0f;
+	FMDPerkCombatState PerkCombat;
+
+	UPROPERTY(Replicated)
+	double LastDamageTakenTime = -1000.0;
 
 	// Owner-only replicated so clients can show base vs. total on the character stats screen.
 	UPROPERTY(ReplicatedUsing = OnRep_BaseStats)

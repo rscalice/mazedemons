@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "MDInventoryTypes.h"
+#include "MDPerkTypes.h"
 #include "MDBalanceData.generated.h"
 
 // Central balance numbers (asset /Game/Data/DA_BalanceReference, referenced from Project Settings > Game > Maze Demons Game).
@@ -24,4 +25,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Economy")
 	FMDEconomyTuning Economy;
+
+	// Perk tuning (U3). Defaults equal BALANCE.md; a missing asset falls back to the same defaults.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Perks")
+	FMDPerkTuning Perks;
+
+	// Reference enemy numbers for the pure balance model.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Perks")
+	FMDBalanceReference Reference;
 };

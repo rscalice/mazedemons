@@ -6,6 +6,7 @@
 #include "MDGameSettings.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "MDPerkComponent.h"
 #include "MDStaminaComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
@@ -43,6 +44,8 @@ AMDPlayerState::AMDPlayerState()
 	Attributes = CreateDefaultSubobject<UMDAttributeSet>(TEXT("MazeDemonsAttributes"));
 
 	StaminaComponent = CreateDefaultSubobject<UMDStaminaComponent>(TEXT("StaminaComponent"));
+
+	PerkComponent = CreateDefaultSubobject<UMDPerkComponent>(TEXT("PerkComponent"));
 
 	SetNetUpdateFrequency(100.0f);
 }
@@ -198,6 +201,56 @@ void AMDPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(AMDPlayerState, LegsMesh);
 	DOREPLIFETIME(AMDPlayerState, FeetMesh);
 	DOREPLIFETIME(AMDPlayerState, DeadPawn);
+	DOREPLIFETIME_CONDITION(AMDPlayerState, RunStats, COND_OwnerOnly);
+}
+
+void AMDPlayerState::OnRep_RunStats()
+{
+	OnRunStatsChanged.Broadcast();
+}
+
+void AMDPlayerState::AddDamageDealt(float Amount)
+{
+	if (HasAuthority())
+	{
+		const float New = FMDPlayerRunStats::AddAmount(RunStats.DamageDealt, Amount);
+		if (New != RunStats.DamageDealt)
+		{
+			RunStats.DamageDealt = New;
+			OnRunStatsChanged.Broadcast();
+		}
+	}
+}
+
+void AMDPlayerState::AddDamageTaken(float Amount)
+{
+	if (HasAuthority())
+	{
+		const float New = FMDPlayerRunStats::AddAmount(RunStats.DamageTaken, Amount);
+		if (New != RunStats.DamageTaken)
+		{
+			RunStats.DamageTaken = New;
+			OnRunStatsChanged.Broadcast();
+		}
+	}
+}
+
+void AMDPlayerState::AddKill()
+{
+	if (HasAuthority())
+	{
+		RunStats.Kills = FMDPlayerRunStats::AddCount(RunStats.Kills, 1);
+		OnRunStatsChanged.Broadcast();
+	}
+}
+
+void AMDPlayerState::AddGoldEarned(int32 Amount)
+{
+	if (HasAuthority() && Amount > 0)
+	{
+		RunStats.GoldEarned = FMDPlayerRunStats::AddCount(RunStats.GoldEarned, Amount);
+		OnRunStatsChanged.Broadcast();
+	}
 }
 
 void AMDPlayerState::BeginPlay()
@@ -254,6 +307,10 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 			{
 				AbilitySystem->InitializeStamina(StaminaComponent->StartingMaxStamina, StaminaComponent->RegenPerSec);
 			}
+			if (PerkComponent)
+			{
+				PerkComponent->InitializeForRun(); // after the base stats, so the perk effect lands on top of them
+			}
 		}
 		else if (AbilitySystem->IsDead() && NewPawn != DeadPawn)
 		{
@@ -263,6 +320,10 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 			if (StaminaComponent)
 			{
 				StaminaComponent->ResetForRespawn();
+			}
+			if (PerkComponent)
+			{
+				PerkComponent->ResetLifeFlags(); // Second Wind is available again; ranks and points persist
 			}
 		}
 

@@ -7,6 +7,7 @@
 #include "MDBalanceData.h"
 #include "MDGameplayStatics.h"
 #include "MDGameSettings.h"
+#include "MDPerkComponent.h"
 #include "MDPlayerController.h"
 #include "MDStation.h"
 #include "MDStatCalculator.h"
@@ -360,7 +361,12 @@ bool UMDInventoryComponent::UseItem_Impl(int32 Index)
 	ConsumableReadyAtServer = static_cast<float>(ConsumableReadyAt);
 	ConsumableCooldownDuration = Row->CooldownSeconds;
 	OnQuickSlotsChanged.Broadcast(); // the server-side owner (listen server) has no OnRep
-	ASC->ApplyHealing(Row->HealAmount);
+	float HealAmount = Row->HealAmount;
+	if (const UMDPerkComponent* Perk = UMDPerkComponent::FindFor(ASC->GetOwner()))
+	{
+		HealAmount *= Perk->GetPotionHealScale(); // Potent Draughts; exactly 1 without perks
+	}
+	ASC->ApplyHealing(HealAmount);
 	RemoveItem(Index, 1);
 	return true;
 }

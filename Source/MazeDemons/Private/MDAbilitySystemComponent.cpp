@@ -6,8 +6,15 @@
 #include "MDGameplayTags.h"
 #include "MDGameSettings.h"
 #include "MDInventoryComponent.h"
+#include "MDPerkCatalog.h"
+#include "MDPerkComponent.h"
+#include "MDPlayerController.h"
+#include "MDPlayerState.h"
 #include "MDStatCalculator.h"
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/GameStateBase.h"
+#include "GameFramework/Pawn.h"
 #include "GameplayEffect.h"
 #include "Net/UnrealNetwork.h"
 
@@ -96,6 +103,36 @@ void UMDAbilitySystemComponent::SetStaminaClamped(float NewStamina)
 	{
 		Attrs->SetStamina(FMath::Clamp(NewStamina, 0.0f, Attrs->GetMaxStamina()));
 	}
+}
+
+float UMDAbilitySystemComponent::GetCritChance() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetCritChance() : 0.0f;
+}
+
+float UMDAbilitySystemComponent::GetCritDamage() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetCritDamage() : 1.5f;
+}
+
+float UMDAbilitySystemComponent::GetHealthRegen() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetHealthRegen() : 0.0f;
+}
+
+float UMDAbilitySystemComponent::GetStaminaCostScale() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetStaminaCostScale() : 1.0f;
+}
+
+float UMDAbilitySystemComponent::GetSprintSpeedScale() const
+{
+	const UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	return Attrs ? Attrs->GetSprintSpeedScale() : 1.0f;
 }
 
 float UMDAbilitySystemComponent::GetHealth() const
@@ -212,9 +249,76 @@ void UMDAbilitySystemComponent::RecalculateAttackPower()
 {
 	if (UMDAttributeSet* Attrs = GetMazeDemonsAttributes())
 	{
+		// Perk attack % multiplies after the weapon maths; at 0 the factor is exactly 1.
 		Attrs->SetAttackPower(UMDStatCalculator::EffectiveAttackPower(BaseAttackPower, EquippedWeaponAttackBonuses,
-			WeaponUpgradeLevel, WeaponCondMult, UMDGameSettings::GetEconomy()));
+			WeaponUpgradeLevel, WeaponCondMult, UMDGameSettings::GetEconomy()) * (1.0f + PerkAttackPct));
 	}
+}
+
+void UMDAbilitySystemComponent::SetPerkDamageReduction(float Percent)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	static const FName PerkSlot(TEXT("Perk"));
+	const float Clamped = FMath::Clamp(Percent, 0.0f, 90.0f);
+	if (Clamped > 0.0f)
+	{
+		EquippedArmorDamageReductions.Add(PerkSlot, Clamped);
+	}
+	else
+	{
+		EquippedArmorDamageReductions.Remove(PerkSlot);
+	}
+	RecalculateDefense();
+}
+
+void UMDAbilitySystemComponent::SetPerkAttackPct(float Pct)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	PerkAttackPct = FMath::Max(Pct, 0.0f);
+	RecalculateAttackPower();
+}
+
+void UMDAbilitySystemComponent::ConsumeSecondWind()
+{
+	PerkCombat.bSecondWindAvailable = false;
+	OnSecondWindTriggered.Broadcast();
+}
+
+double UMDAbilitySystemComponent::GetServerNow() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return 0.0;
+	}
+	if (const AGameStateBase* GS = World->GetGameState())
+	{
+		return GS->GetServerWorldTimeSeconds();
+	}
+	return World->GetTimeSeconds();
+}
+
+double UMDAbilitySystemComponent::GetTimeSinceLastDamage() const
+{
+	return GetServerNow() - LastDamageTakenTime;
+}
+
+void UMDAbilitySystemComponent::DebugKill(AActor* DamageInstigator)
+{
+	UMDAttributeSet* Attrs = GetMazeDemonsAttributes();
+	if (!Attrs || !GetOwner() || !GetOwner()->HasAuthority() || IsDead())
+	{
+		return;
+	}
+	LastDamageInstigator = DamageInstigator;
+	LastDamageTakenTime = GetServerNow();
+	Attrs->SetHealth(0.0f);
 }
 
 void UMDAbilitySystemComponent::OnRep_BaseStats()
@@ -222,7 +326,7 @@ void UMDAbilitySystemComponent::OnRep_BaseStats()
 	OnStatsChanged.Broadcast();
 }
 
-void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigator, AActor* DamageCauser)
+void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
@@ -246,6 +350,46 @@ void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigat
 		return;
 	}
 
+	// Attacker side (before the effect): critical hit, then Executioner. Both read the attacker's perk modifiers, which are
+	// zero for anyone without perks, so nothing changes for them (and no RNG is consumed unless CritChance > 0).
+	float FinalDamage = Damage;
+	bool bCrit = false;
+	UMDAbilitySystemComponent* AttackerASC = nullptr;
+	if (DamageInstigator && DamageInstigator != Target)
+	{
+		AttackerASC = UMDGameplayStatics::GetMDAbilitySystemComponent(DamageInstigator);
+		if (AttackerASC == this)
+		{
+			AttackerASC = nullptr;
+		}
+	}
+	if (AttackerASC)
+	{
+		if (bAllowCrit)
+		{
+			const float Chance = AttackerASC->GetCritChance();
+			if (Chance > 0.0f)
+			{
+				if (UMDPerkComponent* Perk = UMDPerkComponent::FindFor(DamageInstigator))
+				{
+					bCrit = Perk->RollCrit(Chance);
+					if (bCrit)
+					{
+						FinalDamage = UMDPerkCatalog::ApplyCrit(FinalDamage, 1.0f, AttackerASC->GetCritDamage(), 0.0f);
+					}
+				}
+			}
+		}
+		const float ExecutionerPct = AttackerASC->GetPerkCombatState().ExecutionerPct;
+		if (ExecutionerPct > 0.0f)
+		{
+			const float MaxHealthNow = GetMaxHealth();
+			const float HealthFraction = MaxHealthNow > 0.0f ? GetHealth() / MaxHealthNow : 1.0f;
+			FinalDamage = UMDPerkCatalog::ApplyExecutioner(FinalDamage, HealthFraction, ExecutionerPct,
+				UMDGameSettings::GetPerkTuning().ExecutionerThreshold);
+		}
+	}
+
 	FGameplayEffectContextHandle Context = MakeEffectContext();
 	Context.AddInstigator(DamageInstigator, DamageCauser ? DamageCauser : DamageInstigator);
 
@@ -255,15 +399,48 @@ void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigat
 		// Set before the effect lands so a lethal hit's OnDeath handlers already see who killed.
 		LastDamageInstigator = DamageInstigator;
 		const float HealthBefore = GetHealth();
-		Spec.Data->SetSetByCallerMagnitude(TAG_Data_Damage.GetTag(), Damage);
+		Spec.Data->SetSetByCallerMagnitude(TAG_Data_Damage.GetTag(), FinalDamage);
 		ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
 
 		const float Applied = HealthBefore - GetHealth();
 		if (Applied > 0.0f)
 		{
+			LastDamageTakenTime = GetServerNow(); // the 5 s out-of-combat clock for perk spending and Recovery
 			OnDamageApplied.Broadcast(DamageInstigator, Applied);
+
+			// Run tab stats (owner-only replicated on the PlayerState). The victim is a player when this ASC lives on a PlayerState.
+			AMDPlayerState* VictimState = Cast<AMDPlayerState>(GetOwner());
+			if (VictimState)
+			{
+				VictimState->AddDamageTaken(Applied);
+			}
+			if (DamageInstigator && DamageInstigator != Target)
+			{
+				const APawn* AttackerPawn = Cast<APawn>(DamageInstigator);
+				AMDPlayerState* AttackerState = AttackerPawn ? AttackerPawn->GetPlayerState<AMDPlayerState>() : nullptr;
+				if (AttackerState && AttackerState != VictimState)
+				{
+					AttackerState->AddDamageDealt(Applied);
+					if (!VictimState && IsDead())
+					{
+						AttackerState->AddKill(); // alive at the top of this function, dead now: this hit killed it
+					}
+				}
+			}
 			// Weapon wear for the attacker (the victim's own inventory listens to OnDamageApplied for armor wear).
 			UMDInventoryComponent::NotifyHitLanded(DamageInstigator, Target);
+
+			if (bCrit && AttackerASC)
+			{
+				AttackerASC->OnCritLanded.Broadcast(Target, FinalDamage);
+				if (const APawn* AttackerPawn = Cast<APawn>(DamageInstigator))
+				{
+					if (AMDPlayerController* AttackerController = Cast<AMDPlayerController>(AttackerPawn->GetController()))
+					{
+						AttackerController->NotifyCrit(FinalDamage);
+					}
+				}
+			}
 		}
 	}
 }
@@ -352,6 +529,16 @@ void UMDAbilitySystemComponent::BindAttributeDelegates()
 		.AddUObject(this, &UMDAbilitySystemComponent::HandleMaxStaminaChanged);
 	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetStaminaRegenRateAttribute())
 		.AddUObject(this, &UMDAbilitySystemComponent::HandleStaminaRegenRateChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetCritChanceAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandlePerkAttributeChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetCritDamageAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandlePerkAttributeChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetHealthRegenAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandlePerkAttributeChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetStaminaCostScaleAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandlePerkAttributeChanged);
+	GetGameplayAttributeValueChangeDelegate(UMDAttributeSet::GetSprintSpeedScaleAttribute())
+		.AddUObject(this, &UMDAbilitySystemComponent::HandlePerkAttributeChanged);
 }
 
 void UMDAbilitySystemComponent::HandleHealthChanged(const FOnAttributeChangeData& ChangeData)
@@ -388,6 +575,7 @@ void UMDAbilitySystemComponent::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME(UMDAbilitySystemComponent, bIsDeadState);
 	DOREPLIFETIME_CONDITION(UMDAbilitySystemComponent, BaseDefense, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UMDAbilitySystemComponent, BaseAttackPower, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UMDAbilitySystemComponent, LastDamageTakenTime, COND_OwnerOnly);
 }
 
 void UMDAbilitySystemComponent::HandleMaxHealthChanged(const FOnAttributeChangeData& ChangeData)
@@ -415,6 +603,11 @@ void UMDAbilitySystemComponent::HandleStaminaChanged(const FOnAttributeChangeDat
 }
 
 void UMDAbilitySystemComponent::HandleStaminaRegenRateChanged(const FOnAttributeChangeData& ChangeData)
+{
+	OnStatsChanged.Broadcast();
+}
+
+void UMDAbilitySystemComponent::HandlePerkAttributeChanged(const FOnAttributeChangeData& ChangeData)
 {
 	OnStatsChanged.Broadcast();
 }

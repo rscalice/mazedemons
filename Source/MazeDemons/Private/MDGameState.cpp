@@ -16,6 +16,46 @@ void AMDGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(AMDGameState, bHasCheckpoint);
 	DOREPLIFETIME(AMDGameState, CheckpointTransform);
 	DOREPLIFETIME(AMDGameState, CheckpointOrder);
+	DOREPLIFETIME(AMDGameState, ZonesCompleted);
+	DOREPLIFETIME(AMDGameState, SoulsSaved);
+}
+
+void AMDGameState::SetZonesCompleted(int32 Zones)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const int32 NewZones = FMath::Clamp(Zones, 0, 4);
+	if (NewZones != ZonesCompleted)
+	{
+		ZonesCompleted = NewZones;
+		OnRunProgressChanged.Broadcast();
+	}
+}
+
+void AMDGameState::AddSoulsSaved(int32 Delta)
+{
+	SetSoulsSaved(SoulsSaved + Delta);
+}
+
+void AMDGameState::SetSoulsSaved(int32 Souls)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const int32 NewSouls = FMath::Max(Souls, 0);
+	if (NewSouls != SoulsSaved)
+	{
+		SoulsSaved = NewSouls;
+		OnRunProgressChanged.Broadcast();
+	}
+}
+
+void AMDGameState::OnRep_RunProgress()
+{
+	OnRunProgressChanged.Broadcast();
 }
 
 void AMDGameState::SetCheckpoint(const FTransform& Transform, int32 Order)

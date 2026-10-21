@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "MDPerkComponent.h"
 #include "MDUITypes.h"
 #include "MDGameplayStatics.generated.h"
 
@@ -11,6 +12,8 @@ class UMDStaminaComponent;
 class APawn;
 class APlayerState;
 class AController;
+struct FMDEconomyTuning;
+struct FMDPerkNode;
 
 // One row of the character stats screen. Texts are pre-formatted ("85 / 100", "12 /s", "16.9%") so UI only displays them.
 // With a compare row, New/NewText show the value after the swap and DeltaSign is +1 / -1 / 0 (0 = unchanged or no compare).
@@ -47,6 +50,34 @@ struct MAZEDEMONS_API FMDStatLine
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
 	FText NewText;
+};
+
+// One row of the Character panel's "Active effects" list: a perk rank, an upgrade bonus, worn gear or Exhausted.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDEffectLine
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	FText Name;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	FText Detail;
+
+	// "Perks", "Upgrades", "Condition", "Status".
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	FText Source;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	EMDColor Tone = EMDColor::TextPrimary;
+
+	// Drawn with the Danger bar.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	bool bDebuff = false;
+
+	// Icon lookup key (perk node id, status id); empty = no icon.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects")
+	FName IconKey = NAME_None;
 };
 
 namespace MDTeams
@@ -89,6 +120,33 @@ public:
 	// CompareRow = an item row to preview equipping / using (NAME_None = no compare). Works on clients (replicated data only).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
 	static TArray<FMDStatLine> GetCharacterStatLines(APlayerState* PS, FName CompareRow);
+
+	// ---- Perks ----
+	// Unspent perk points of a PlayerState (earned minus spent), 0 when it has no perk component. Owner-only data: on a
+	// remote player's PlayerState this is just what that machine can see.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
+	static int32 GetPerkPointsAvailable(APlayerState* PS);
+
+	// Station Respec tab data for a PlayerState at Station (empty / bCanRespec false without a perk component).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
+	static FMDRespecInfo GetRespecInfo(APlayerState* PS, AActor* Station);
+
+	// ---- Character panel: active effects (works on clients from replicated data) ----
+	// Order: Perks (one line per ranked node), Upgrades, Condition debuffs, Exhausted. Status effects join with V1. A fresh
+	// character with nothing equipped and no perks returns no lines.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Stats")
+	static TArray<FMDEffectLine> GetActiveEffectLines(APlayerState* PS);
+
+	// Pure: the "Worn <item>: 81% effectiveness" debuff line for an item whose condition multiplier is below 1. False (and
+	// OutLine untouched) when the item is at full strength.
+	static bool MakeConditionLine(const FText& ItemName, float CondMult, FMDEffectLine& OutLine);
+
+	// Pure: the "<Item> +N" upgrade line (armor: "+X pp damage reduction", weapon: "+Y% attack"). False (OutLine untouched) at
+	// level 0 or below.
+	static bool MakeUpgradeLine(const FText& ItemName, bool bArmorSlot, int32 Level, const FMDEconomyTuning& Tuning, FMDEffectLine& OutLine);
+
+	// Pure: the "<Perk> rank N" line for a ranked node (Rank <= 0 returns false). bUsedUp greys it ("used", Second Wind).
+	static bool MakePerkLine(const FMDPerkNode& Node, int32 Rank, bool bUsedUp, FMDEffectLine& OutLine);
 
 	// Pure: total damage reduction % after replacing a piece (OldPiecePct, 0 if the slot is empty) with NewPiecePct.
 	// 1 - (1-c)(1-n)/(1-o), in percent, clamped to [0, 90].

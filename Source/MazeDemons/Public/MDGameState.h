@@ -5,6 +5,7 @@
 #include "MDGameState.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMDFriendlyFireChanged, bool, bEnabled);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDRunProgressChanged);
 
 // Replicated match rules. If the game mode derives from AGameMode (not AGameModeBase),
 // this class must derive from AGameState instead.
@@ -49,7 +50,34 @@ public:
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Respawn")
 	int32 CheckpointOrder = 0;
 
+	// ---- Run progress (perk points are computed from these; U4 sets the zones, V3 the souls) ----
+
+	// Authority only. Clamped to 0..4.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Progress")
+	void SetZonesCompleted(int32 Zones);
+
+	// Authority only. Souls Saved never goes down during a run; SetSoulsSaved exists for the debug exec.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Progress")
+	void AddSoulsSaved(int32 Delta);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Progress")
+	void SetSoulsSaved(int32 Souls);
+
+	// Zones finished this run (0..4).
+	UPROPERTY(ReplicatedUsing = OnRep_RunProgress, BlueprintReadOnly, Category = "Maze Demons|Progress")
+	int32 ZonesCompleted = 0;
+
+	UPROPERTY(ReplicatedUsing = OnRep_RunProgress, BlueprintReadOnly, Category = "Maze Demons|Progress")
+	int32 SoulsSaved = 0;
+
+	// Fires on the server after a change and on clients after replication.
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Progress")
+	FMDRunProgressChanged OnRunProgressChanged;
+
 protected:
 	UFUNCTION()
 	void OnRep_FriendlyFire();
+
+	UFUNCTION()
+	void OnRep_RunProgress();
 };
