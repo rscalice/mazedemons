@@ -94,5 +94,4 @@ private:
 	int32 FindActiveIndex() const;
 	bool ApplyToQuest(int32 Index, int32 Delta);
 	void HandleZoneCompleted(int32 Zone);
-	void ToastAll(const FText& Message) const;
 };

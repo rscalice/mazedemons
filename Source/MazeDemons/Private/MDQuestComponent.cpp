@@ -183,30 +183,9 @@ void UMDQuestComponent::HandleZoneCompleted(int32 Zone)
 	{
 		State->SetZonesCompleted(UMDQuestRules::CountZonesCompleted(Quests)); // perk points follow this
 	}
+	// No toast here: the HUD (W_MDHUD -> ProHUD) shows its own "Zone N cleansed"
+	// notification when it sees the zone complete, so a quest toast would double it.
 	OnQuestsChanged.Broadcast();
-
-	FText Toast = QuestSet && QuestSet->Zones.IsValidIndex(Zone - 1) ? QuestSet->Zones[Zone - 1].CompletionToast : FText::GetEmpty();
-	if (Toast.IsEmpty())
-	{
-		Toast = NSLOCTEXT("MDQuest", "ZoneComplete", "Zone cleansed");
-	}
-	ToastAll(Toast);
-}
-
-void UMDQuestComponent::ToastAll(const FText& Message) const
-{
-	const UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
-	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
-	{
-		if (AMDPlayerController* PC = Cast<AMDPlayerController>(It->Get()))
-		{
-			PC->NotifyToast(Message, EMDColor::Success);
-		}
-	}
 }
 
 void UMDQuestComponent::ForceCompleteZone(int32 Zone)

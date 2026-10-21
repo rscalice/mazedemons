@@ -49,8 +49,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Maze Demons|Map", meta = (ClampMin = "0"))
 	float CaptureHeightAboveBox = 100.0f;
 
+	// Height above the bottom of the zone box where the orthographic camera sits, looking down. Everything above it
+	// (tunnel ceilings, roofs) is clipped by the near plane so the floor is visible. 0 or less uses the old
+	// above-the-box position (CaptureHeightAboveBox), which only works for open-roof levels.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Maze Demons|Map", meta = (ClampMin = "0"))
+	float CaptureEyeHeight = 300.0f;
+
+	// Base colour needs no lighting, so dark or unlit interiors (sewers) still read on the minimap.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Maze Demons|Map")
-	TEnumAsByte<ESceneCaptureSource> CaptureSource = SCS_FinalColorLDR;
+	TEnumAsByte<ESceneCaptureSource> CaptureSource = SCS_BaseColor;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UBoxComponent> ZoneBox;

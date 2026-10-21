@@ -66,12 +66,19 @@ void AMDMapZone::DoCapture()
 
 	const FBox2D MapBounds = GetMapBounds();
 	const FVector2D Centre = (MapBounds.Min + MapBounds.Max) * 0.5;
-	const float TopZ = ZoneBox->GetComponentLocation().Z + ZoneBox->GetScaledBoxExtent().Z + CaptureHeightAboveBox;
+	const float BoxZ = ZoneBox->GetComponentLocation().Z;
+	const float BoxHalfZ = ZoneBox->GetScaledBoxExtent().Z;
+	const bool bInside = CaptureEyeHeight > 0.0f;
+	const float EyeZ = bInside ? BoxZ - BoxHalfZ + CaptureEyeHeight : BoxZ + BoxHalfZ + CaptureHeightAboveBox;
 
 	// Pitch -90 looks straight down; yaw -90 puts +X on the right and +Y down in the image (U follows X, V follows Y).
-	Capture->SetWorldLocationAndRotation(FVector(Centre.X, Centre.Y, TopZ), FRotator(-90.0f, -90.0f, 0.0f));
+	Capture->SetWorldLocationAndRotation(FVector(Centre.X, Centre.Y, EyeZ), FRotator(-90.0f, -90.0f, 0.0f));
 	Capture->ProjectionType = ECameraProjectionMode::Orthographic;
 	Capture->OrthoWidth = static_cast<float>(MapBounds.Max.X - MapBounds.Min.X);
+	// With the camera inside the zone, clip right at the camera so ceilings above it are not drawn.
+	Capture->bAutoCalculateOrthoPlanes = !bInside;
+	Capture->bOverride_CustomNearClippingPlane = bInside;
+	Capture->CustomNearClippingPlane = 1.0f;
 	Capture->CaptureSource = CaptureSource;
 	Capture->TextureTarget = RuntimeMap;
 	Capture->ShowFlags.SetPostProcessing(false);

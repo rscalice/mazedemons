@@ -18,7 +18,7 @@ struct MAZEDEMONS_API FMDQuestDef
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quest")
 	FMDObjectiveDef Objective;
 
-	// Toast shown to every player when the zone completes. Empty uses a default.
+	// Legacy: no longer toasted on completion (the HUD shows its own "Zone N cleansed" notification). Kept for data compatibility.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quest")
 	FText CompletionToast;
 };

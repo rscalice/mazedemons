@@ -2,6 +2,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "MDMinimapTextureLibrary.h"
 #include "MDQuestTypes.h"
 
 #include "Misc/AutomationTest.h"
@@ -165,6 +166,24 @@ bool FMDMapFogMergeSharedTest::RunTest(const FString& Parameters)
 	OneByte.Add(0x01);
 	TestTrue(TEXT("a short array merges its prefix"), Short.MergeBits(OneByte));
 	TestTrue(TEXT("cell 0 from the prefix"), Short.IsRevealed(0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDMinimapSnapshotRulesTest, "MazeDemons.Map.MinimapSnapshotRules",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDMinimapSnapshotRulesTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("no texture yet needs one"), UMDMinimapTextureLibrary::NeedsNewTexture(0, 0, 1024, 1024));
+	TestTrue(TEXT("a size change needs a new texture"), UMDMinimapTextureLibrary::NeedsNewTexture(512, 512, 1024, 1024));
+	TestFalse(TEXT("the same size is reused"), UMDMinimapTextureLibrary::NeedsNewTexture(1024, 1024, 1024, 1024));
+
+	TestTrue(TEXT("never baked is due"), UMDMinimapTextureLibrary::IsRebakeDue(5.0, -1.0, 1.0));
+	TestFalse(TEXT("inside the interval is not due"), UMDMinimapTextureLibrary::IsRebakeDue(5.5, 5.0, 1.0));
+	TestTrue(TEXT("after the interval is due"), UMDMinimapTextureLibrary::IsRebakeDue(6.0, 5.0, 1.0));
+	TestTrue(TEXT("a clock reset is due"), UMDMinimapTextureLibrary::IsRebakeDue(1.0, 5.0, 1.0));
+
+	// A null render target leaves the previous texture untouched.
+	TestNull(TEXT("null target and null reuse give null"), UMDMinimapTextureLibrary::CopyRenderTargetToTexture(nullptr, nullptr));
 	return true;
 }
 
