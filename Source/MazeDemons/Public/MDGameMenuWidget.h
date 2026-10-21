@@ -94,6 +94,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")
 	void SetActiveTab(EMDMenuTab NewTab);
 
+	// Re-fires OnActiveTabChanged(ActiveTab, ActiveTab) so the Blueprint resyncs the tab bar and content switcher
+	// even when the tab did not change (menu reopened on the same tab, construct ordering).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")
+	void SyncActiveTab();
+
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")
 	void NextTab();
 

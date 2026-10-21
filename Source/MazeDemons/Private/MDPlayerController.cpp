@@ -254,6 +254,7 @@ void AMDPlayerController::OpenGameMenuTab(EMDMenuTab Tab)
 		else
 		{
 			GameMenuWidget->SetActiveTab(Tab);
+			GameMenuWidget->SyncActiveTab();
 			LastMenuTab = GameMenuWidget->ActiveTab;
 		}
 		return;
@@ -287,6 +288,7 @@ void AMDPlayerController::OpenGameMenuTab(EMDMenuTab Tab)
 
 	GameMenuWidget->AddToViewport(90); // below the pause menu (100)
 	GameMenuWidget->SetActiveTab(Tab);
+	GameMenuWidget->SyncActiveTab(); // always resync tab bar + switcher on open, even if the tab is unchanged
 	GameMenuWidget->PlayOpen();
 	LastMenuTab = GameMenuWidget->ActiveTab;
 	bGameMenuOpen = true;

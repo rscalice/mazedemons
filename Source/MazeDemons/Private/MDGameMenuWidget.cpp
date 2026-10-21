@@ -70,6 +70,12 @@ void UMDGameMenuWidget::NativeConstruct()
 		ActiveTab = EMDMenuTab::Inventory;
 	}
 	TryBind();
+	SyncActiveTab();
+}
+
+void UMDGameMenuWidget::SyncActiveTab()
+{
+	OnActiveTabChanged(ActiveTab, ActiveTab);
 }
 
 void UMDGameMenuWidget::NativeDestruct()
