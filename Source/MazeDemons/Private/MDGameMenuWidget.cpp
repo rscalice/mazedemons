@@ -176,6 +176,12 @@ FText UMDGameMenuWidget::GetTabLabel(EMDMenuTab Tab) const
 	}
 }
 
+UTexture2D* UMDGameMenuWidget::GetTabIcon(EMDMenuTab Tab) const
+{
+	const TSoftObjectPtr<UTexture2D>* Found = TabIcons.Find(Tab);
+	return Found ? Found->LoadSynchronous() : nullptr;
+}
+
 void UMDGameMenuWidget::CloseMenu()
 {
 	if (AMDPlayerController* PC = Cast<AMDPlayerController>(GetOwningPlayer()))

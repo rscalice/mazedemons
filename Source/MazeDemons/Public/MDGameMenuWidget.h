@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/Texture2D.h"
 #include "MDRunStats.h"
 #include "MDUITypes.h"
 #include "MDUIWidgets.h"
@@ -108,6 +109,14 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Menu")
 	FText GetTabLabel(EMDMenuTab Tab) const;
+
+	// Tab icons, set in the widget Blueprint.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Menu")
+	TMap<EMDMenuTab, TSoftObjectPtr<UTexture2D>> TabIcons;
+
+	// Icon for a tab, null when unset or not loadable.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Menu")
+	UTexture2D* GetTabIcon(EMDMenuTab Tab) const;
 
 	// Asks the owning player controller to close the menu (Esc / Tab / B are handled natively; this is for a close button).
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Menu")

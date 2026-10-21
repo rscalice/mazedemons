@@ -32,6 +32,10 @@ struct MAZEDEMONS_API FMDRespecRow
 
 	UPROPERTY(BlueprintReadOnly, Category = "Perk")
 	int32 MaxRank = 0;
+
+	// Perk icon, null when the texture is missing.
+	UPROPERTY(BlueprintReadOnly, Category = "Perk")
+	TObjectPtr<UTexture2D> Icon = nullptr;
 };
 
 // Everything the station Respec tab shows (UMDPerkComponent::GetRespecInfo).

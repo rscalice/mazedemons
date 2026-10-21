@@ -285,6 +285,7 @@ FMDRespecInfo UMDPerkComponent::GetRespecInfo(const AActor* Station) const
 		Row.Name = Tree->Nodes[i].Name;
 		Row.Rank = Ranks[i];
 		Row.MaxRank = Tree->Nodes[i].MaxRank;
+		Row.Icon = Tree->Nodes[i].Icon.LoadSynchronous();
 	}
 	Info.RanksOwned = GetPointsSpent();
 	Info.PointsReturned = Info.RanksOwned;

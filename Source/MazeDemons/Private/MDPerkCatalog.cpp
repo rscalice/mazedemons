@@ -71,6 +71,7 @@ TArray<FMDPerkNode> UMDPerkTree::MakeDefaultNodes()
 		N.ValuePerRank = PerRank;
 		N.Name = Name;
 		N.Description = Desc;
+		N.Icon = TSoftObjectPtr<UTexture2D>(FSoftObjectPath(FString::Printf(TEXT("/Game/UI/Icons/Perks/T_Perk_%s.T_Perk_%s"), Id, Id)));
 	};
 
 	using P = EMDPerkPath;

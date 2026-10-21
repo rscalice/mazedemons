@@ -157,6 +157,22 @@ namespace
 	}
 }
 
+UTexture2D* UMDGameplayStatics::GetPerkNodeIcon(int32 Node)
+{
+	const UMDPerkTree* Tree = UMDGameSettings::GetPerkTree();
+	if (!Tree || !Tree->Nodes.IsValidIndex(Node))
+	{
+		return nullptr;
+	}
+	return Tree->Nodes[Node].Icon.LoadSynchronous();
+}
+
+float UMDGameplayStatics::GetSprintSpeedScale(AActor* Character)
+{
+	const UMDAbilitySystemComponent* ASC = GetMDAbilitySystemComponent(Character);
+	return ASC ? ASC->GetSprintSpeedScale() : 1.0f;
+}
+
 int32 UMDGameplayStatics::GetPerkPointsAvailable(APlayerState* PS)
 {
 	const UMDPerkComponent* Perks = UMDPerkComponent::FindFor(PS);

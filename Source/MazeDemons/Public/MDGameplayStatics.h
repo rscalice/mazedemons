@@ -127,6 +127,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
 	static int32 GetPerkPointsAvailable(APlayerState* PS);
 
+	// Icon of perk node Node (0..15, tree order), loaded synchronously. Null for a bad index or a texture that is not imported yet.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
+	static UTexture2D* GetPerkNodeIcon(int32 Node);
+
+	// Sprint speed multiplier from perks (1 .. 1.05) of a pawn, controller or PlayerState. 1 when unavailable.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
+	static float GetSprintSpeedScale(AActor* Character);
+
 	// Station Respec tab data for a PlayerState at Station (empty / bCanRespec false without a perk component).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Perks")
 	static FMDRespecInfo GetRespecInfo(APlayerState* PS, AActor* Station);
