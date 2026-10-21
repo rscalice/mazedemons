@@ -161,4 +161,11 @@ private:
 	void HandlePerksChanged();
 
 	TWeakObjectPtr<UMDPerkComponent> PerkComponent;
+
+	// Content switcher in the Blueprint (Inventory 0, Perks 1, Run 2). C++ keeps it in step with ActiveTab every tick
+	// and logs any drift so the source can be found.
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<class UWidgetSwitcher> TabSwitcher;
+
+	void EnforceSwitcherIndex(const TCHAR* Context);
 };
