@@ -8,6 +8,7 @@
 
 class AMDStation;
 class UMDGameMenuWidget;
+class UMDMapComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDPickupNotified, FName, ItemRowName, int32, Quantity);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDUseRejected, EMDUseRejectReason, Reason, float, CooldownRemaining);
@@ -29,6 +30,12 @@ class MAZEDEMONS_API AMDPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
+	AMDPlayerController();
+
+	// Local minimap state: current map zone, shared-fog texture, minimap options (U4). Not replicated.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Map")
+	TObjectPtr<UMDMapComponent> MapComponent;
+
 	// ---- Quick slots / pause input (assets set in BP_MDPlayerController defaults) ----
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
 	TObjectPtr<UInputAction> QuickSlot1Action;
@@ -329,6 +336,59 @@ public:
 	// Debug (non-shipping): lists DT_Items row names with their equip slot, for use with GiveItem.
 	UFUNCTION(Exec)
 	void ListItemRows();
+
+	// ---- Quests and minimap (U4). Debug execs, non-shipping unless noted: bodies are compiled out in shipping. ----
+
+	// Completes Zone's quest (1..4) on the server whatever its state; ZonesCompleted and perk points follow.
+	UFUNCTION(Exec)
+	void CompleteQuest(int32 Zone);
+
+	UFUNCTION(Server, Reliable)
+	void Server_CompleteQuest(int32 Zone);
+
+	// Adds Delta progress to the Active quest, ignoring its objective type and tag.
+	UFUNCTION(Exec)
+	void AddQuestProgress(int32 Delta = 1);
+
+	UFUNCTION(Server, Reliable)
+	void Server_AddQuestProgress(int32 Delta);
+
+	// Zone 1 Active, the rest Locked, progress and ZonesCompleted back to 0, objective markers usable again.
+	UFUNCTION(Exec)
+	void ResetQuests();
+
+	UFUNCTION(Server, Reliable)
+	void Server_ResetQuests();
+
+	// Logs THIS machine's view of the four quests.
+	UFUNCTION(Exec)
+	void DumpQuests();
+
+	// Reveals the whole shared fog for the party (server).
+	UFUNCTION(Exec)
+	void RevealMap();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RevealMap();
+
+	// Hides the whole shared fog again (server).
+	UFUNCTION(Exec)
+	void ResetFog();
+
+	UFUNCTION(Server, Reliable)
+	void Server_ResetFog();
+
+	// Local: re-renders the map capture of the zone you stand in.
+	UFUNCTION(Exec)
+	void CaptureMap();
+
+	// Local: logs the map zone, textures, fog grid and minimap option.
+	UFUNCTION(Exec)
+	void DumpMap();
+
+	// Local (also in shipping): flips the minimap between rotating with the camera (default) and north-up. Saved per user.
+	UFUNCTION(Exec)
+	void ToggleMinimapRotation();
 
 protected:
 	// Server: bound to the ASC's OnDeath; starts the respawn timer.

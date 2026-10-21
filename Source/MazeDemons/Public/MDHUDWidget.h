@@ -2,10 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "MDInventoryTypes.h"
+#include "MDQuestTypes.h"
 #include "MDUIWidgets.h"
 #include "MDHUDWidget.generated.h"
 
+class AMDMapZone;
 class AMDPlayerController;
+class UMDMapComponent;
+class UMDQuestComponent;
 class UMDAbilitySystemComponent;
 class UMDPerkComponent;
 class UMDStaminaComponent;
@@ -61,6 +65,37 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
 	float RespawnSecondsRemaining = 0.0f;
 
+	// ---- Quests (U4). Seeded when the game state is found, then kept current from UMDQuestComponent::OnQuestsChanged. ----
+
+	// Zone number (1..4) of the Active quest; 0 when every quest is done or none exist yet.
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	int32 QuestZone = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	FText QuestTitle;
+
+	// "Slay ghouls 3/6" for the Active quest.
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	FText ObjectiveText;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	int32 ObjectiveCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	int32 ObjectiveRequired = 1;
+
+	// Every zone quest is Completed (show "All zones cleansed").
+	UPROPERTY(BlueprintReadOnly, Category = "Maze Demons|HUD")
+	bool bAllQuestsDone = false;
+
+	// ProHUD ETaskState index for the Active quest (see UMDQuestRules::ToProHUDTaskState).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|HUD")
+	int32 GetObjectiveTaskState() const { return QuestZone > 0 ? UMDQuestRules::ToProHUDTaskState(EMDQuestState::Active) : UMDQuestRules::ToProHUDTaskState(EMDQuestState::Completed); }
+
+	// The local map component (zone, fog texture, minimap options), or null before the controller exists.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|HUD")
+	UMDMapComponent* GetMapComponent() const { return BoundMap.Get(); }
+
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
@@ -99,9 +134,20 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
 	void OnToast(const FText& Message, EMDColor Tone);
 
+	// A quest changed or the quests were first found. bJustCompleted: a zone quest finished with this change (the tracker
+	// checks the task and swaps in the next zone). Also fired once when the quests are first bound (bJustCompleted false).
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnQuestUpdated(bool bJustCompleted);
+
+	// The local pawn moved into another map zone (null = outside every zone). Feed the new zone's map texture to the minimap.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnMapZoneChanged(AMDMapZone* Zone);
+
 private:
 	void TryBind();
 	void Unbind();
+	void TryBindQuests();
+	void RefreshQuest(bool bAllowJustCompleted);
 
 	UFUNCTION()
 	void HandleHealthChanged(float OldValue, float NewValue);
@@ -121,10 +167,17 @@ private:
 	void HandleToast(FText Message, EMDColor Tone);
 	UFUNCTION()
 	void HandlePerksChanged();
+	UFUNCTION()
+	void HandleQuestsChanged();
+	UFUNCTION()
+	void HandleMapZoneChanged(AMDMapZone* Zone);
 
 	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
 	TWeakObjectPtr<UMDStaminaComponent> BoundStamina;
 	TWeakObjectPtr<AMDPlayerController> BoundController;
 	TWeakObjectPtr<UMDPerkComponent> BoundPerks;
+	TWeakObjectPtr<UMDQuestComponent> BoundQuests;
+	TWeakObjectPtr<UMDMapComponent> BoundMap;
+	int32 LastCompletedZones = -1;
 	bool bBound = false;
 };

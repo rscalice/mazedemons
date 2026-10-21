@@ -3,7 +3,11 @@
 #include "MDAbilitySystemComponent.h"
 #include "MDGameMenuWidget.h"
 #include "MDGameplayStatics.h"
+#include "MDFogComponent.h"
 #include "MDGameState.h"
+#include "MDMapComponent.h"
+#include "MDMapZone.h"
+#include "MDQuestComponent.h"
 #include "MDPlayerState.h"
 #include "MDInventoryComponent.h"
 #include "MDPerkCatalog.h"
@@ -35,6 +39,11 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "TimerManager.h"
 #include "Framework/Application/SlateApplication.h"
+
+AMDPlayerController::AMDPlayerController()
+{
+	MapComponent = CreateDefaultSubobject<UMDMapComponent>(TEXT("MapComponent"));
+}
 
 void AMDPlayerController::BeginPlay()
 {
@@ -1161,6 +1170,7 @@ void AMDPlayerController::Server_SetZonesCompleted_Implementation(int32 Zones)
 	{
 		State->SetZonesCompleted(Zones);
 		UE_LOG(LogMDInventory, Warning, TEXT("SetZonesCompleted %d -> zones %d, souls %d"), Zones, State->ZonesCompleted, State->SoulsSaved);
+		UE_LOG(LogMDInventory, Warning, TEXT("SetZonesCompleted: the quests were NOT changed and own ZonesCompleted from now on (use CompleteQuest / ResetQuests); the next quest completion overwrites this value"));
 	}
 	else
 	{
@@ -1189,6 +1199,163 @@ void AMDPlayerController::Server_SetSoulsSaved_Implementation(int32 Souls)
 		UE_LOG(LogMDInventory, Warning, TEXT("SetSoulsSaved: no AMDGameState in this world (set GameStateClass)"));
 	}
 #endif
+}
+
+// ---- Quests and minimap (U4 debug) ----
+
+void AMDPlayerController::CompleteQuest(int32 Zone)
+{
+#if !UE_BUILD_SHIPPING
+	Server_CompleteQuest(Zone);
+#endif
+}
+
+void AMDPlayerController::Server_CompleteQuest_Implementation(int32 Zone)
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDQuestComponent* Quests = UMDQuestComponent::FindFor(this))
+	{
+		Quests->ForceCompleteZone(Zone);
+		UE_LOG(LogMDInventory, Warning, TEXT("CompleteQuest %d -> zones completed %d"), Zone, UMDQuestRules::CountZonesCompleted(Quests->Quests));
+	}
+	else
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("CompleteQuest: no quest component (set GameStateClass to a MDGameState)"));
+	}
+#endif
+}
+
+void AMDPlayerController::AddQuestProgress(int32 Delta)
+{
+#if !UE_BUILD_SHIPPING
+	Server_AddQuestProgress(Delta);
+#endif
+}
+
+void AMDPlayerController::Server_AddQuestProgress_Implementation(int32 Delta)
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDQuestComponent* Quests = UMDQuestComponent::FindFor(this))
+	{
+		Quests->DebugAddProgress(FMath::Clamp(Delta, 1, 1000));
+		FMDQuestProgress Active;
+		if (Quests->GetActiveQuest(Active))
+		{
+			UE_LOG(LogMDInventory, Warning, TEXT("AddQuestProgress %d -> zone %d at %d/%d"), Delta, Active.ZoneIndex, Active.Count, Active.Required);
+		}
+		else
+		{
+			UE_LOG(LogMDInventory, Warning, TEXT("AddQuestProgress %d -> no active quest"), Delta);
+		}
+	}
+#endif
+}
+
+void AMDPlayerController::ResetQuests()
+{
+#if !UE_BUILD_SHIPPING
+	Server_ResetQuests();
+#endif
+}
+
+void AMDPlayerController::Server_ResetQuests_Implementation()
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDQuestComponent* Quests = UMDQuestComponent::FindFor(this))
+	{
+		Quests->ResetQuests();
+		UE_LOG(LogMDInventory, Warning, TEXT("ResetQuests: zone 1 active, zones completed 0"));
+	}
+#endif
+}
+
+void AMDPlayerController::DumpQuests()
+{
+#if !UE_BUILD_SHIPPING
+	const UMDQuestComponent* Quests = UMDQuestComponent::FindFor(this);
+	if (!Quests)
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("DumpQuests: no quest component (set GameStateClass to a MDGameState)"));
+		return;
+	}
+	const AMDGameState* State = GetWorld() ? GetWorld()->GetGameState<AMDGameState>() : nullptr;
+	UE_LOG(LogMDInventory, Warning, TEXT("DumpQuests: %d quests, zones completed %d, quest set %s"),
+		Quests->Quests.Num(), State ? State->ZonesCompleted : 0, *GetNameSafe(Quests->QuestSet));
+	for (const FMDQuestProgress& Quest : Quests->Quests)
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("  Zone %d: %s %d/%d  title '%s'  objective '%s'"), Quest.ZoneIndex,
+			*StaticEnum<EMDQuestState>()->GetNameStringByValue(static_cast<int64>(Quest.State)), Quest.Count, Quest.Required,
+			*Quests->GetQuestTitle(Quest.ZoneIndex).ToString(), *Quests->GetObjectiveText(Quest.ZoneIndex).ToString());
+	}
+#endif
+}
+
+void AMDPlayerController::RevealMap()
+{
+#if !UE_BUILD_SHIPPING
+	Server_RevealMap();
+#endif
+}
+
+void AMDPlayerController::Server_RevealMap_Implementation()
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDFogComponent* Fog = UMDFogComponent::FindFor(this))
+	{
+		Fog->RevealAllZones();
+		UE_LOG(LogMDInventory, Warning, TEXT("RevealMap: shared fog revealed"));
+	}
+#endif
+}
+
+void AMDPlayerController::ResetFog()
+{
+#if !UE_BUILD_SHIPPING
+	Server_ResetFog();
+#endif
+}
+
+void AMDPlayerController::Server_ResetFog_Implementation()
+{
+#if !UE_BUILD_SHIPPING
+	if (UMDFogComponent* Fog = UMDFogComponent::FindFor(this))
+	{
+		Fog->ResetAllZones();
+		UE_LOG(LogMDInventory, Warning, TEXT("ResetFog: shared fog cleared"));
+	}
+#endif
+}
+
+void AMDPlayerController::CaptureMap()
+{
+#if !UE_BUILD_SHIPPING
+	if (MapComponent)
+	{
+		MapComponent->ForceRecaptureCurrentZone();
+		UE_LOG(LogMDInventory, Warning, TEXT("CaptureMap: %s"), *MapComponent->BuildDump());
+	}
+#endif
+}
+
+void AMDPlayerController::DumpMap()
+{
+#if !UE_BUILD_SHIPPING
+	if (MapComponent)
+	{
+		UE_LOG(LogMDInventory, Warning, TEXT("DumpMap: %s"), *MapComponent->BuildDump());
+	}
+#endif
+}
+
+void AMDPlayerController::ToggleMinimapRotation()
+{
+	// Not compiled out in shipping: this is the player's option until an options menu exists.
+	if (MapComponent)
+	{
+		MapComponent->ToggleMinimapRotation();
+		UE_LOG(LogMDInventory, Log, TEXT("ToggleMinimapRotation: minimap is now %s"),
+			MapComponent->IsMinimapNorthUp() ? TEXT("north-up") : TEXT("rotating with the camera"));
+	}
 }
 
 void AMDPlayerController::SetPerkRank(int32 Node, int32 Rank)

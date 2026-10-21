@@ -10,12 +10,14 @@
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
 #include "MDPlayerState.h"
+#include "MDQuestComponent.h"
 #include "MDStatCalculator.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameplayEffect.h"
+#include "GameplayTagAssetInterface.h"
 #include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMDAbilitySystem, Log, All);
@@ -424,6 +426,17 @@ void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigat
 					if (!VictimState && IsDead())
 					{
 						AttackerState->AddKill(); // alive at the top of this function, dead now: this hit killed it
+
+						// U4 kill objective: the victim's tags and where it died (only kills inside the active quest's zone count).
+						FGameplayTagContainer VictimTags;
+						GetOwnedGameplayTags(VictimTags);
+						if (const IGameplayTagAssetInterface* TagActor = Cast<IGameplayTagAssetInterface>(Target))
+						{
+							FGameplayTagContainer ActorTags;
+							TagActor->GetOwnedGameplayTags(ActorTags);
+							VictimTags.AppendTags(ActorTags);
+						}
+						UMDQuestComponent::ReportKill(this, VictimTags, Target ? Target->GetActorLocation() : FVector::ZeroVector, AttackerState);
 					}
 				}
 			}

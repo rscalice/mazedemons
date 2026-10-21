@@ -3,6 +3,9 @@
 #include "MDAbilitySystemComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "MDMapComponent.h"
+#include "MDMapZone.h"
+#include "MDQuestComponent.h"
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
 #include "MDPlayerState.h"
@@ -55,7 +58,90 @@ void UMDHUDWidget::Unbind()
 	BoundStamina.Reset();
 	BoundController.Reset();
 	BoundPerks.Reset();
+	if (UMDQuestComponent* Quests = BoundQuests.Get())
+	{
+		Quests->OnQuestsChanged.RemoveDynamic(this, &UMDHUDWidget::HandleQuestsChanged);
+	}
+	if (UMDMapComponent* Map = BoundMap.Get())
+	{
+		Map->OnZoneChanged.RemoveDynamic(this, &UMDHUDWidget::HandleMapZoneChanged);
+	}
+	BoundQuests.Reset();
+	BoundMap.Reset();
+	LastCompletedZones = -1;
 	bBound = false;
+}
+
+void UMDHUDWidget::TryBindQuests()
+{
+	// The game state can replicate after the PlayerState, so this retries from NativeTick until both are found.
+	if (!BoundMap.IsValid())
+	{
+		if (UMDMapComponent* Map = UMDMapComponent::FindFor(GetOwningPlayer()))
+		{
+			BoundMap = Map;
+			Map->OnZoneChanged.AddUniqueDynamic(this, &UMDHUDWidget::HandleMapZoneChanged);
+			if (AMDMapZone* Zone = Map->GetCurrentZone())
+			{
+				OnMapZoneChanged(Zone);
+			}
+		}
+	}
+	if (!BoundQuests.IsValid())
+	{
+		if (UMDQuestComponent* Quests = UMDQuestComponent::FindFor(this))
+		{
+			if (Quests->Quests.Num() == 0)
+			{
+				return; // not replicated yet; OnQuestsChanged will come, but bind only once there is something to show
+			}
+			BoundQuests = Quests;
+			Quests->OnQuestsChanged.AddUniqueDynamic(this, &UMDHUDWidget::HandleQuestsChanged);
+			RefreshQuest(false);
+		}
+	}
+}
+
+void UMDHUDWidget::RefreshQuest(bool bAllowJustCompleted)
+{
+	const UMDQuestComponent* Quests = BoundQuests.Get();
+	if (!Quests)
+	{
+		return;
+	}
+	const int32 Completed = UMDQuestRules::CountZonesCompleted(Quests->Quests);
+	const bool bJustCompleted = bAllowJustCompleted && LastCompletedZones >= 0 && Completed > LastCompletedZones;
+	LastCompletedZones = Completed;
+
+	FMDQuestProgress Active;
+	if (Quests->GetActiveQuest(Active))
+	{
+		QuestZone = Active.ZoneIndex;
+		QuestTitle = Quests->GetQuestTitle(Active.ZoneIndex);
+		ObjectiveText = Quests->GetObjectiveText(Active.ZoneIndex);
+		ObjectiveCount = Active.Count;
+		ObjectiveRequired = Active.Required;
+	}
+	else
+	{
+		QuestZone = 0;
+		QuestTitle = FText::GetEmpty();
+		ObjectiveText = FText::GetEmpty();
+		ObjectiveCount = 0;
+		ObjectiveRequired = 1;
+	}
+	bAllQuestsDone = Quests->AreAllQuestsDone();
+	OnQuestUpdated(bJustCompleted);
+}
+
+void UMDHUDWidget::HandleQuestsChanged()
+{
+	RefreshQuest(true);
+}
+
+void UMDHUDWidget::HandleMapZoneChanged(AMDMapZone* Zone)
+{
+	OnMapZoneChanged(Zone);
 }
 
 void UMDHUDWidget::TryBind()
@@ -117,6 +203,7 @@ void UMDHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 	// Rebinds after a PlayerState change and covers the not-yet-replicated case.
 	TryBind();
+	TryBindQuests();
 	if (!bBound)
 	{
 		return;
