@@ -42,6 +42,15 @@ BOXES = {
         ("DoWeaponTrace", "Server only: trace and damage while the owner can attack; skip dead targets but keep them in the hit list so they are not re-checked", C_LOGIC, ALL),
         ("AdvancedPlayMontage", "Only play a montage when the owning character is valid; server RPC + multicast so a client's swing plays and hits", C_VIEW, ALL),
     ],
+    "/Game/Blueprints/UI/Inventory/W_Inventory": [
+        ("EventGraph", "Apply gamepad navigation: row wrap, left to paper doll, down to quick-slot strip", C_INPUT, ["ApplyGamepadNavigation"]),
+    ],
+    "/Game/UI/Menus/W_MDGameMenu": [
+        ("EventGraph", "Focus the active tab's content on open and on tab change (gamepad)", C_INPUT, ["FocusActiveTabContent"]),
+    ],
+    "/Game/UI/Menus/W_MDPerksPanel": [
+        ("FocusFirstNode", "Gamepad: focus the first perk node when the panel opens", C_INPUT, ALL),
+    ],
 }
 
 md_comment_lib.main(BOXES, "U5", REPLACE=REPLACE)
