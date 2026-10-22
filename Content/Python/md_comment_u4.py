@@ -24,12 +24,12 @@ BOXES = {
     HUD: [
         # Event graph: entry points from the C++ HUD base
         ("EventGraph", "Quest state changed: refresh the ProHUD mission tracker, guidance and minimap markers", C_LOGIC, ["OnQuestUpdated"]),
-        ("EventGraph", "Entered a new map zone: feed its captured map to the ProHUD minimap and rebind fog updates", C_SETUP, ["OnMapZoneChanged"]),
-        ("EventGraph", "Fog changed: only mark dirty; the poll tick re-bakes at most once a second", C_LOGIC, ["OnFogUpdated"]),
+        ("EventGraph", "Entered a new zone: refresh markers, guidance and labels only (the level map does not change)", C_LOGIC, ["OnMapZoneChanged"]),
+        ("EventGraph", "Level map ready (first capture or recapture): set up the minimap once, then add markers. Client race: markers wait for this", C_SETUP, ["OnLevelMapReady"]),
 
         # Minimap
-        ("SetupMinimapForZone", "Bake zone capture + shared fog into a runtime Texture2D (ProHUD needs a real Texture2D) and calibrate the minimap to the zone bounds", C_SETUP, ALL),
-        ("PlaceMinimapCorners", "Move ProHUD's corner actors to the zone bounds so world positions map onto the map image", C_SETUP, ALL),
+        ("SetupLevelMinimap", "Feed the whole-level map texture to ProHUD once, place its corners at the level-map bounds and set the canvas size; marks the minimap ready", C_SETUP, ALL),
+        ("PlaceMinimapCorners", "Move ProHUD's corner actors to the level-map bounds so world positions map onto the map image", C_SETUP, ALL),
         ("EnsureMinimapBrush", "ProHUD brush check: re-apply the map if the minimap brush was reset", C_SETUP, ALL),
         ("BeginMinimapRefresh", "Start a marker refresh: remember which targets exist so stale ones can be removed afterwards", C_LOGIC, ALL),
         ("RefreshMinimapMarkers", "Objective, gate, station and party markers, updated in place (never remove and re-add: ProHUD's delayed removal would delete the new marker)", C_LOGIC, ALL),
