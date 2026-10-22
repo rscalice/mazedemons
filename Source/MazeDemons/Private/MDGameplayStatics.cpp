@@ -19,6 +19,7 @@
 #include "MDStatCalculator.h"
 #include "MDUISettings.h"
 #include "Engine/DataTable.h"
+#include "Components/ActorComponent.h"
 
 UMDInventoryComponent* UMDGameplayStatics::GetInventory(const AActor* Actor)
 {
@@ -115,6 +116,86 @@ float UMDGameplayStatics::HealthAfterHeal(float Health, float MaxHealth, float H
 	return FMath::Min(MaxHealth, Health + FMath::Max(HealAmount, 0.0f));
 }
 
+FText UMDGameplayStatics::FormatDeltaText(float Current, float New, bool bPercent)
+{
+	// Compare what the player sees: tenths for percentages, whole numbers otherwise.
+	const int32 Scale = bPercent ? 10 : 1;
+	const int32 Delta = FMath::RoundToInt(New * Scale) - FMath::RoundToInt(Current * Scale);
+	if (Delta == 0)
+	{
+		return FText::GetEmpty();
+	}
+	const FString Sign = Delta > 0 ? FString(TEXT("+")) : FString(TEXT("\u2212"));
+	const int32 Magnitude = FMath::Abs(Delta);
+	if (bPercent)
+	{
+		return FText::FromString(FString::Printf(TEXT("%s%.1f%%"), *Sign, Magnitude / 10.0f));
+	}
+	return FText::FromString(FString::Printf(TEXT("%s%d"), *Sign, Magnitude));
+}
+
+EMDAttackBlock UMDGameplayStatics::EvaluateAttackGate(bool bHasPawn, bool bDead, bool bLocal, bool bMenuOpen, bool bHasCombat)
+{
+	if (!bHasPawn)
+	{
+		return EMDAttackBlock::NoPawn;
+	}
+	if (bDead)
+	{
+		return EMDAttackBlock::Dead;
+	}
+	if (bLocal && bMenuOpen)
+	{
+		return EMDAttackBlock::MenuOpen;
+	}
+	if (!bHasCombat)
+	{
+		return EMDAttackBlock::NoCombatComponent;
+	}
+	return EMDAttackBlock::None;
+}
+
+bool UMDGameplayStatics::IsPawnDead(const APawn* Pawn)
+{
+	const UMDAbilitySystemComponent* ASC = GetMDAbilitySystemComponent(Pawn);
+	return ASC && ASC->IsDead();
+}
+
+bool UMDGameplayStatics::IsLocalMenuBlockingPawn(const APawn* Pawn)
+{
+	if (!Pawn || !Pawn->IsLocallyControlled())
+	{
+		return false;
+	}
+	const AMDPlayerController* PC = Cast<AMDPlayerController>(Pawn->GetController());
+	return PC && PC->IsAnyMenuOpen();
+}
+
+UActorComponent* UMDGameplayStatics::FindCombatComponent(const AActor* Actor)
+{
+	if (!Actor)
+	{
+		return nullptr;
+	}
+	TArray<UActorComponent*> Components;
+	Actor->GetComponents(Components);
+	for (UActorComponent* Component : Components)
+	{
+		if (Component && Component->FindFunction(FName(TEXT("DoLightAttack"))))
+		{
+			return Component;
+		}
+	}
+	return nullptr;
+}
+
+bool UMDGameplayStatics::CanPawnAttack(const APawn* Pawn, EMDAttackBlock& OutReason)
+{
+	OutReason = EvaluateAttackGate(Pawn != nullptr, IsPawnDead(Pawn), Pawn && Pawn->IsLocallyControlled(),
+		IsLocalMenuBlockingPawn(Pawn), FindCombatComponent(Pawn) != nullptr);
+	return OutReason == EMDAttackBlock::None;
+}
+
 namespace
 {
 	int32 SignOfDelta(float Current, float New)
@@ -148,6 +229,7 @@ namespace
 		};
 		Line.CurrentText = Format(Current, Max);
 		Line.NewText = Format(New, NewMax);
+		Line.DeltaText = UMDGameplayStatics::FormatDeltaText(Current, New, bPercent);
 		return Line;
 	}
 

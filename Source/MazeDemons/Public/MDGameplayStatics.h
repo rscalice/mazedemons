@@ -11,6 +11,7 @@ class UMDInventoryComponent;
 class UMDStaminaComponent;
 class APawn;
 class APlayerState;
+class UActorComponent;
 class AController;
 struct FMDEconomyTuning;
 struct FMDPerkNode;
@@ -50,6 +51,21 @@ struct MAZEDEMONS_API FMDStatLine
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
 	FText NewText;
+
+	// Signed change between the shown values at the shown precision ("+1.7%", "-2" with a true minus sign (U+2212)). Empty when they show equal.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+	FText DeltaText;
+};
+
+// Why UMDGameplayStatics::CanPawnAttack refused. None = the attack is allowed.
+UENUM(BlueprintType)
+enum class EMDAttackBlock : uint8
+{
+	None,
+	NoPawn,
+	Dead,
+	MenuOpen,
+	NoCombatComponent
 };
 
 // One row of the Character panel's "Active effects" list: a perk rank, an upgrade bonus, worn gear or Exhausted.
@@ -168,6 +184,30 @@ public:
 	// Pure: colour token for a durability bar. >= 50% Success, 25..49% Warning, below 25% Danger. Fraction is clamped to [0,1].
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
 	static EMDColor DurabilityColor(float Fraction);
+
+	// Pure: "+1.7%" / "-2" with a true minus sign (U+2212) for the change from Current to New as shown (percent: one decimal, else whole numbers).
+	// Empty when the shown values are equal.
+	static FText FormatDeltaText(float Current, float New, bool bPercent);
+
+	// ---- Combat gate (U5) ----
+	// Pure truth table behind CanPawnAttack. Order: no pawn, dead, menu (local controllers only: menus never replicate),
+	// no combat component. Returns None when the attack may start.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
+	static EMDAttackBlock EvaluateAttackGate(bool bHasPawn, bool bDead, bool bLocal, bool bMenuOpen, bool bHasCombat);
+
+	// Whether Pawn may start a melee attack right now; OutReason says why not. Works on clients and the server: the menu
+	// check applies only when the pawn is locally controlled, the server checks pawn, dead and combat component.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
+	static bool CanPawnAttack(const APawn* Pawn, EMDAttackBlock& OutReason);
+
+	// Dead per the pawn's (or its PlayerState's) ability system. False when there is none.
+	static bool IsPawnDead(const APawn* Pawn);
+
+	// True when Pawn is locally controlled by an AMDPlayerController that has a menu open.
+	static bool IsLocalMenuBlockingPawn(const APawn* Pawn);
+
+	// First component of Actor with a function named DoLightAttack (AC_Combat). Null when there is none.
+	static UActorComponent* FindCombatComponent(const AActor* Actor);
 
 	// ---- Gold ----
 	// Server only. Splits Gold evenly among the players within KillGoldRadius of Victim (dead players' corpses count); the

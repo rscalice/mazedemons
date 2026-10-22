@@ -36,6 +36,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor")
 	static TArray<FString> GetGraphNames(UBlueprint* Blueprint);
 
+	/**
+	 * Rewrite the text of every existing comment box in the graph whose text contains OldTextContains (case and whitespace
+	 * insensitive; an empty needle matches nothing). Returns how many boxes changed (0 = none found or graph missing).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor")
+	static int32 SetCommentBoxText(UBlueprint* Blueprint, FName GraphName, const FString& OldTextContains, const FString& NewText);
+
+	/** Pure: true when Existing contains Needle ignoring case and all whitespace. Empty Needle never matches. */
+	static bool CommentTextMatches(const FString& Existing, const FString& Needle);
+
 	/** Compile the Blueprint (widget Blueprints included). Returns true if it compiled without errors. */
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor")
 	static bool CompileBlueprint(UBlueprint* Blueprint);

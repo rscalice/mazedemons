@@ -16,6 +16,13 @@ public class MazeDemonsEditor : ModuleRules
 			"UnrealEd",
 			"BlueprintGraph",
 			"Kismet",
+			"KismetCompiler",
+			"UMG",
+			"UMGEditor",
+			"Slate",
+			"SlateCore",
+			"AssetRegistry",
+			"MazeDemons",
 		});
 	}
 }
