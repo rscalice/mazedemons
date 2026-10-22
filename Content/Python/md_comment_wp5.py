@@ -41,7 +41,7 @@ BOXES = {
         ("OnFocusReceived", "Focus Resume when the menu opens", C_INPUT, ALL),
     ],
     "/Game/Components/Inventory/AC_Inventory": [
-        ("ToggleInventoryWidget", "Open or close the owning player's inventory without freezing time", C_LOGIC, ALL),
+        ("ToggleInventoryWidget", "Legacy inventory key: opens the game menu on the Inventory tab (never pauses)", C_LOGIC, ALL),
     ],
 }
 
