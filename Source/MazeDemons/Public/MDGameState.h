@@ -7,6 +7,9 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMDFriendlyFireChanged, bool, bEnabled);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDRunProgressChanged);
 
+class UMDFogComponent;
+class UMDQuestComponent;
+
 // Replicated match rules. If the game mode derives from AGameMode (not AGameModeBase),
 // this class must derive from AGameState instead.
 UCLASS()
@@ -73,6 +76,13 @@ public:
 	// Fires on the server after a change and on clients after replication.
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Progress")
 	FMDRunProgressChanged OnRunProgressChanged;
+
+	// ---- U4: zone quests (the only gameplay writer of ZonesCompleted) and the party's shared fog of war ----
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Quests")
+	TObjectPtr<UMDQuestComponent> QuestComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Map")
+	TObjectPtr<UMDFogComponent> FogComponent;
 
 protected:
 	UFUNCTION()

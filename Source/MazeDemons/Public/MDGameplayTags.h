@@ -19,3 +19,17 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Perk_CritDamage);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Perk_HealthRegen);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Perk_StaminaCostScale);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Perk_SprintSpeed);
+
+// U4 quests and minimap. Objective tags match markers and events; Enemy.Ghoul is on the Zone 2 kill targets.
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone1_Shrine);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone3_Key);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone4_Altar);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Ghoul);
+
+// Minimap marker kinds (mirrors EMDMapMarkerType; usable as widget lookup keys).
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Objective);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Gate);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Station);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Checkpoint);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Exit);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Player);

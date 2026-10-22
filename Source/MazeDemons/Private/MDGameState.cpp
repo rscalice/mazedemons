@@ -1,5 +1,7 @@
 #include "MDGameState.h"
 
+#include "MDFogComponent.h"
+#include "MDQuestComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
@@ -7,6 +9,8 @@
 
 AMDGameState::AMDGameState()
 {
+	QuestComponent = CreateDefaultSubobject<UMDQuestComponent>(TEXT("QuestComponent"));
+	FogComponent = CreateDefaultSubobject<UMDFogComponent>(TEXT("FogComponent"));
 }
 
 void AMDGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
