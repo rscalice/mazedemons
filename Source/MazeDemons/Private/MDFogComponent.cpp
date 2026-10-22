@@ -9,24 +9,9 @@
 #include "MDAbilitySystemComponent.h"
 #include "MDGameState.h"
 #include "MDGameplayStatics.h"
-#include "MDMapZone.h"
+#include "MDLevelMap.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
-
-namespace
-{
-	FMDFogGrid& EnsureFogGrid(TMap<int32, FMDFogGrid>& Grids, const AMDMapZone& Zone)
-	{
-		FMDFogGrid* Existing = Grids.Find(Zone.ZoneIndex);
-		if (!Existing)
-		{
-			FMDFogGrid& Created = Grids.Add(Zone.ZoneIndex);
-			Created.Init(Zone.GetMapBounds(), Zone.GetFogCellSize());
-			return Created;
-		}
-		return *Existing;
-	}
-}
 
 UMDFogComponent::UMDFogComponent()
 {
@@ -44,7 +29,7 @@ UMDFogComponent* UMDFogComponent::FindFor(const UObject* WorldContextObject)
 void UMDFogComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(UMDFogComponent, Fog);
+	DOREPLIFETIME(UMDFogComponent, LevelFog);
 }
 
 bool UMDFogComponent::IsServer() const
@@ -70,17 +55,43 @@ void UMDFogComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-bool UMDFogComponent::GetZoneBits(int32 Zone, TArray<uint8>& OutBits) const
+bool UMDFogComponent::BuildGrid(FMDFogGrid& OutGrid) const
 {
-	for (const FMDFogZoneBits& Entry : Fog)
+	if (!LevelFog.HasLayout())
 	{
-		if (Entry.ZoneIndex == Zone)
-		{
-			OutBits = Entry.Bits;
-			return true;
-		}
+		OutGrid = FMDFogGrid();
+		return false;
 	}
-	return false;
+	OutGrid.Init(FBox2D(LevelFog.BoundsMin, LevelFog.BoundsMax), LevelFog.CellSize);
+	OutGrid.MergeBits(LevelFog.Bits);
+	return true;
+}
+
+bool UMDFogComponent::EnsureGrid()
+{
+	const AMDLevelMap* Map = AMDLevelMap::FindLevelMap(this);
+	if (!Map)
+	{
+		return false;
+	}
+	FMDFogGrid Wanted;
+	Wanted.Init(Map->GetMapBounds(), Map->GetFogCellSize());
+	if (!Grid.HasSameLayout(Wanted))
+	{
+		// New or moved level map (e.g. recaptured after generation): the old bits no longer line up, start hidden.
+		Grid = Wanted;
+		Publish();
+		OnFogChanged.Broadcast();
+	}
+	return true;
+}
+
+void UMDFogComponent::Publish()
+{
+	LevelFog.BoundsMin = Grid.Bounds.Min;
+	LevelFog.BoundsMax = Grid.Bounds.Max;
+	LevelFog.CellSize = Grid.CellSize;
+	LevelFog.Bits = Grid.Bits;
 }
 
 void UMDFogComponent::UpdateFog()
@@ -113,63 +124,44 @@ void UMDFogComponent::UpdateFog()
 		return;
 	}
 
-	bool bAnyChanged = false;
-	for (TActorIterator<AMDMapZone> It(World); It; ++It)
+	if (!EnsureGrid())
 	{
-		const AMDMapZone* Zone = *It;
-		FMDFogGrid& Grid = EnsureFogGrid(Grids, *Zone);
-		bool bChanged = false;
-		for (const FVector2D& Position : Positions)
-		{
-			bChanged |= Grid.RevealRadius(Position, RevealRadius);
-		}
-		if (bChanged)
-		{
-			PublishZone(Zone->ZoneIndex, Grid);
-			bAnyChanged = true;
-		}
+		return;
 	}
-	if (bAnyChanged)
+	bool bChanged = false;
+	for (const FVector2D& Position : Positions)
 	{
+		bChanged |= Grid.RevealRadius(Position, RevealRadius);
+	}
+	if (bChanged)
+	{
+		Publish();
 		OnFogChanged.Broadcast();
 	}
 }
 
-void UMDFogComponent::PublishZone(int32 Zone, const FMDFogGrid& Grid)
+void UMDFogComponent::RevealAll()
 {
-	FMDFogZoneBits* Entry = Fog.FindByPredicate([Zone](const FMDFogZoneBits& Bits) { return Bits.ZoneIndex == Zone; });
-	if (!Entry)
-	{
-		Entry = &Fog.AddDefaulted_GetRef();
-		Entry->ZoneIndex = Zone;
-	}
-	Entry->Bits = Grid.Bits;
-}
-
-void UMDFogComponent::RevealAllZones()
-{
-	UWorld* World = GetWorld();
-	if (!IsServer() || !World)
+	if (!IsServer() || !EnsureGrid())
 	{
 		return;
 	}
-	for (TActorIterator<AMDMapZone> It(World); It; ++It)
-	{
-		FMDFogGrid& Grid = EnsureFogGrid(Grids, **It);
-		Grid.RevealAll();
-		PublishZone(It->ZoneIndex, Grid);
-	}
+	Grid.RevealAll();
+	Publish();
 	OnFogChanged.Broadcast();
 }
 
-void UMDFogComponent::ResetAllZones()
+void UMDFogComponent::ResetFog()
 {
 	if (!IsServer())
 	{
 		return;
 	}
-	Grids.Empty();
-	Fog.Reset();
+	if (EnsureGrid())
+	{
+		Grid.Clear();
+		Publish();
+	}
 	OnFogChanged.Broadcast();
 }
 

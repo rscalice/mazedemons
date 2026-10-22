@@ -6,6 +6,7 @@
 #include "MDUIWidgets.h"
 #include "MDHUDWidget.generated.h"
 
+class AMDLevelMap;
 class AMDMapZone;
 class AMDPlayerController;
 class UMDMapComponent;
@@ -139,9 +140,14 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
 	void OnQuestUpdated(bool bJustCompleted);
 
-	// The local pawn moved into another map zone (null = outside every zone). Feed the new zone's map texture to the minimap.
+	// The local pawn moved into another map zone (null = outside every zone). Tracker, labels and guidance only; never the map.
 	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
 	void OnMapZoneChanged(AMDMapZone* Zone);
+
+	// The level map is ready (first capture after binding) or was recaptured: feed the map component's GetMapTexture to the
+	// minimap once and place the calibration corners at the level map's bounds. Fog updates change that texture in place.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Maze Demons|HUD")
+	void OnLevelMapReady(AMDLevelMap* LevelMap);
 
 private:
 	void TryBind();
@@ -171,6 +177,8 @@ private:
 	void HandleQuestsChanged();
 	UFUNCTION()
 	void HandleMapZoneChanged(AMDMapZone* Zone);
+	UFUNCTION()
+	void HandleLevelMapChanged(AMDLevelMap* LevelMap);
 
 	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
 	TWeakObjectPtr<UMDStaminaComponent> BoundStamina;

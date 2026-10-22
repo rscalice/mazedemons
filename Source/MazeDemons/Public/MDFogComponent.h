@@ -8,9 +8,9 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDFogChanged);
 
-// Shared party fog of war, on AMDGameState. The server reveals around every living player pawn every UpdateInterval and
-// replicates one bit per cell and zone (only the zones whose bits changed are re-sent), so late joiners get the party's fog.
-// Reveal only: bits are never cleared except by the ResetAllZones debug call.
+// Shared party fog of war, on AMDGameState: ONE grid over the level map (AMDLevelMap, u4 §9), tunnels included. The server
+// reveals around every living player pawn every UpdateInterval and replicates the layout plus one bit per cell, so late joiners
+// get the party's fog. Reveal only: bits are cleared only by ResetFog (debug) or when the level map's layout changes.
 UCLASS(ClassGroup = (Gameplay), meta = (BlueprintSpawnableComponent))
 class MAZEDEMONS_API UMDFogComponent : public UActorComponent
 {
@@ -30,18 +30,18 @@ public:
 	float UpdateInterval = 0.25f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Fog)
-	TArray<FMDFogZoneBits> Fog;
+	FMDFogLevelBits LevelFog;
 
 	// Fires on the server after a change and on clients after replication.
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Fog")
 	FMDFogChanged OnFogChanged;
 
-	// Copies the replicated bits of Zone (false when nothing is revealed there yet).
-	bool GetZoneBits(int32 Zone, TArray<uint8>& OutBits) const;
+	// Builds OutGrid from the replicated layout and bits. False when there is no layout yet (no level map on the server).
+	bool BuildGrid(FMDFogGrid& OutGrid) const;
 
 	// Server debug: reveal everything / hide everything.
-	void RevealAllZones();
-	void ResetAllZones();
+	void RevealAll();
+	void ResetFog();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void BeginPlay() override;
@@ -54,9 +54,11 @@ protected:
 private:
 	bool IsServer() const;
 	void UpdateFog();
-	void PublishZone(int32 Zone, const FMDFogGrid& Grid);
+	// Server: (re)initialises Grid from the level map when its layout changed. False when there is no level map.
+	bool EnsureGrid();
+	void Publish();
 
-	// Server-side working grids by zone index (not replicated).
-	TMap<int32, FMDFogGrid> Grids;
+	// Server-side working grid (not replicated; LevelFog is its replicated copy).
+	FMDFogGrid Grid;
 	FTimerHandle UpdateTimer;
 };

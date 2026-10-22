@@ -6,10 +6,14 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "MDFogComponent.h"
+#include "MDLevelMap.h"
+#include "MDMapPlan.h"
 #include "MDMapZone.h"
 #include "MDObjectiveMarker.h"
 #include "MDQuestComponent.h"
+#include "MDUIStatics.h"
 #include "MDUISettings.h"
+#include "RenderingThread.h"
 #include "TextureResource.h"
 #include "TimerManager.h"
 
@@ -51,11 +55,24 @@ void UMDMapComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		Quests->OnQuestsChanged.RemoveDynamic(this, &UMDMapComponent::HandleQuestsChanged);
 	}
+	if (AMDLevelMap* Map = LevelMap.Get())
+	{
+		Map->OnMapCaptured.RemoveDynamic(this, &UMDMapComponent::HandleLevelMapCaptured);
+	}
 	Super::EndPlay(EndPlayReason);
 }
 
 void UMDMapComponent::BindSources()
 {
+	if (!LevelMap.IsValid())
+	{
+		if (AMDLevelMap* Map = AMDLevelMap::FindLevelMap(this))
+		{
+			LevelMap = Map;
+			Map->OnMapCaptured.AddUniqueDynamic(this, &UMDMapComponent::HandleLevelMapCaptured);
+			MapTextureCapture = -1; // picked up below once the map has a plan
+		}
+	}
 	if (!BoundFog.IsValid())
 	{
 		if (UMDFogComponent* Fog = UMDFogComponent::FindFor(this))
@@ -86,6 +103,14 @@ void UMDMapComponent::HandleQuestsChanged()
 	RefreshMarkers();
 }
 
+void UMDMapComponent::HandleLevelMapCaptured(AMDLevelMap* Map)
+{
+	if (Map && Map == LevelMap.Get())
+	{
+		MapTextureCapture = -1; // rebuilt by the next Refresh with the new plan
+	}
+}
+
 void UMDMapComponent::Refresh()
 {
 	const APlayerController* PC = Cast<APlayerController>(GetOwner());
@@ -95,19 +120,25 @@ void UMDMapComponent::Refresh()
 	}
 	BindSources();
 
-	// Keep the last zone while there is no pawn (dead / respawning).
+	// The level map's plan is new (first capture or recapture): rebuild the texture and tell the HUD to feed it again.
+	const AMDLevelMap* Map = LevelMap.Get();
+	if (Map && Map->HasPlan() && Map->GetCaptureCount() != MapTextureCapture)
+	{
+		MapTextureCapture = Map->GetCaptureCount();
+		RebuildGrid();
+		bFogDirty = false;
+		OnLevelMapChanged.Broadcast(LevelMap.Get());
+	}
+
+	// Keep the last zone while there is no pawn (dead / respawning). Zone changes never touch the map.
 	if (const APawn* Pawn = PC->GetPawn())
 	{
 		AMDMapZone* Zone = AMDMapZone::FindZoneAt(this, Pawn->GetActorLocation());
 		if (Zone != CurrentZone.Get())
 		{
 			CurrentZone = Zone;
-			bFogDirty = true;
 			RefreshMarkers();
-			RebuildGrid();
 			OnZoneChanged.Broadcast(Zone);
-			bFogDirty = false;
-			return;
 		}
 	}
 	if (bFogDirty)
@@ -123,22 +154,65 @@ void UMDMapComponent::Refresh()
 
 void UMDMapComponent::RebuildGrid()
 {
-	const AMDMapZone* Zone = CurrentZone.Get();
-	if (!Zone)
+	// Rebuilt from the replicated layout and bits every time (cheap, at most 2 KB), so a server-side reset also clears it here.
+	const UMDFogComponent* Fog = BoundFog.Get();
+	if (!Fog || !Fog->BuildGrid(FogGrid))
 	{
 		FogGrid = FMDFogGrid();
-		return;
-	}
-	// Rebuilt from the replicated bits every time (cheap, at most 512 bytes), so a server-side fog reset also clears it here.
-	FogGrid.Init(Zone->GetMapBounds(), Zone->GetFogCellSize());
-	TArray<uint8> Bits;
-	const UMDFogComponent* Fog = BoundFog.Get();
-	if (Fog && Fog->GetZoneBits(Zone->ZoneIndex, Bits))
-	{
-		FogGrid.MergeBits(Bits);
 	}
 	RebuildFogTexture();
+	RebuildMapTexture();
 	OnFogUpdated.Broadcast();
+}
+
+void UMDMapComponent::RebuildMapTexture()
+{
+	const AMDLevelMap* Map = LevelMap.Get();
+	if (!Map || !Map->HasPlan())
+	{
+		return;
+	}
+	const int32 Size = Map->GetPlanSize();
+	TArray<FColor> Pixels;
+	const FColor FogColor = UMDUIStatics::GetColor(EMDColor::Bg0).ToFColor(true);
+	if (!FMDMapPlanRules::ComposeFog(Map->GetPlanPixels(), Size, FogGrid, FogColor, Pixels))
+	{
+		return;
+	}
+
+	if (!MapTexture || MapTexture->GetSizeX() != Size || MapTexture->GetSizeY() != Size)
+	{
+		// First upload (or a new resolution): fill the mip and create the resource.
+		MapTexture = UTexture2D::CreateTransient(Size, Size, PF_B8G8R8A8, TEXT("MDLevelMinimap"));
+		if (!MapTexture)
+		{
+			return;
+		}
+		MapTexture->SRGB = true;
+		MapTexture->NeverStream = true;
+		MapTexture->Filter = TF_Bilinear;
+		MapTexture->AddressX = TA_Clamp;
+		MapTexture->AddressY = TA_Clamp;
+		MapTexture->LODGroup = TEXTUREGROUP_UI;
+		FTexture2DMipMap& Mip = MapTexture->GetPlatformData()->Mips[0];
+		void* Data = Mip.BulkData.Lock(LOCK_READ_WRITE);
+		FMemory::Memcpy(Data, Pixels.GetData(), Pixels.Num() * sizeof(FColor));
+		Mip.BulkData.Unlock();
+		MapTexture->UpdateResource();
+		return;
+	}
+
+	// Same object, new pixels: async region update, no render-thread flush, the ProHUD brush keeps pointing at it.
+	const uint32 Pitch = static_cast<uint32>(Size) * sizeof(FColor);
+	uint8* Buffer = static_cast<uint8*>(FMemory::Malloc(Pitch * Size));
+	FMemory::Memcpy(Buffer, Pixels.GetData(), Pitch * Size);
+	FUpdateTextureRegion2D* Region = new FUpdateTextureRegion2D(0, 0, 0, 0, Size, Size);
+	MapTexture->UpdateTextureRegions(0, 1, Region, Pitch, sizeof(FColor), Buffer,
+		[](uint8* SrcData, const FUpdateTextureRegion2D* Regions)
+		{
+			FMemory::Free(SrcData);
+			delete Regions;
+		});
 }
 
 void UMDMapComponent::RebuildFogTexture()
@@ -208,16 +282,10 @@ TArray<AMDObjectiveMarker*> UMDMapComponent::GetObjectiveMarkers() const
 	return Result;
 }
 
-UTexture* UMDMapComponent::GetMapTexture() const
-{
-	const AMDMapZone* Zone = CurrentZone.Get();
-	return Zone ? Zone->GetMapTexture() : nullptr;
-}
-
 FVector2D UMDMapComponent::WorldToMapUV(FVector World) const
 {
-	const AMDMapZone* Zone = CurrentZone.Get();
-	return Zone ? Zone->WorldToMapUV(World) : FVector2D::ZeroVector;
+	const AMDLevelMap* Map = LevelMap.Get();
+	return Map ? Map->WorldToMapUV(World) : FVector2D::ZeroVector;
 }
 
 bool UMDMapComponent::IsMinimapNorthUp() const
@@ -255,21 +323,22 @@ float UMDMapComponent::GetMinimapRadiusUU() const
 	return Settings ? FMath::Max(Settings->MinimapRadiusUU, 100.0f) : 3000.0f;
 }
 
-void UMDMapComponent::ForceRecaptureCurrentZone()
+void UMDMapComponent::ForceRecaptureLevelMap()
 {
-	if (AMDMapZone* Zone = CurrentZone.Get())
+	if (AMDLevelMap* Map = LevelMap.IsValid() ? LevelMap.Get() : AMDLevelMap::FindLevelMap(this))
 	{
-		Zone->ForceRecapture();
+		Map->Recapture();
 	}
 }
 
 FString UMDMapComponent::BuildDump() const
 {
 	const AMDMapZone* Zone = CurrentZone.Get();
-	const UTexture* Map = GetMapTexture();
-	return FString::Printf(TEXT("Map: zone %s (index %d), map texture %s (%s), fog grid %dx%d cell %.0f, revealed %.0f%%, shared fog bits %s, markers %d, minimap %s"),
-		*GetNameSafe(Zone), Zone ? Zone->ZoneIndex : 0, *GetNameSafe(Map),
-		Zone && Zone->HasRuntimeMap() ? TEXT("runtime capture") : TEXT("baked or none"),
+	const AMDLevelMap* Map = LevelMap.Get();
+	return FString::Printf(TEXT("Map: %s | minimap texture %s %dx%d (plan capture %d) | zone %s (index %d) | fog grid %dx%d cell %.0f, revealed %.0f%%, shared fog %s | markers %d | minimap %s"),
+		Map ? *Map->BuildDump() : TEXT("NO level map in this world"),
+		*GetNameSafe(MapTexture), MapTexture ? MapTexture->GetSizeX() : 0, MapTexture ? MapTexture->GetSizeY() : 0, MapTextureCapture,
+		*GetNameSafe(Zone), Zone ? Zone->ZoneIndex : 0,
 		FogGrid.Width, FogGrid.Height, FogGrid.CellSize, FogGrid.GetRevealedFraction() * 100.0f,
 		BoundFog.IsValid() ? TEXT("bound") : TEXT("not bound"), CachedMarkers.Num(),
 		IsMinimapNorthUp() ? TEXT("north-up") : TEXT("rotates with camera"));

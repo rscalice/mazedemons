@@ -78,23 +78,33 @@ struct MAZEDEMONS_API FMDQuestProgress
 	int32 Required = 1;
 };
 
-// One zone's fog bits as replicated by UMDFogComponent (one bit per cell, row-major, max 64x64 cells = 512 bytes).
+// The level fog as replicated by UMDFogComponent: the grid layout plus one bit per cell (row-major, max 128x128 cells =
+// 2 KB). Clients build their grid from this layout, so they never depend on their own copy of the level map actor.
 USTRUCT(BlueprintType)
-struct MAZEDEMONS_API FMDFogZoneBits
+struct MAZEDEMONS_API FMDFogLevelBits
 {
 	GENERATED_BODY()
 
-	UPROPERTY(BlueprintReadOnly, Category = "Fog")
-	int32 ZoneIndex = 0;
+	UPROPERTY()
+	FVector2D BoundsMin = FVector2D::ZeroVector;
+
+	UPROPERTY()
+	FVector2D BoundsMax = FVector2D::ZeroVector;
+
+	UPROPERTY()
+	float CellSize = 0.0f;
 
 	UPROPERTY()
 	TArray<uint8> Bits;
+
+	bool HasLayout() const { return CellSize > 0.0f && BoundsMax.X > BoundsMin.X && BoundsMax.Y > BoundsMin.Y; }
 };
 
 // Plain fog-of-war grid: reveal-only bits over a 2D world box. World-free and pure, so it is unit tested.
 struct MAZEDEMONS_API FMDFogGrid
 {
-	static constexpr int32 MaxCellsPerAxis = 64;
+	// 128 x 128 bits = 2 KB, replicated only when a bit changes. A 15k-unit level at 200 units per cell is 75 x 75.
+	static constexpr int32 MaxCellsPerAxis = 128;
 
 	// Any bounds are accepted: a zero, negative or non-finite size becomes 1 unit, and the cell size is raised so that
 	// neither axis exceeds MaxCellsPerAxis cells.
@@ -120,6 +130,9 @@ struct MAZEDEMONS_API FMDFogGrid
 
 	// ORs Other into this grid; never hides a cell. Only the overlapping byte range is merged. True when a bit changed.
 	bool MergeBits(const TArray<uint8>& Other);
+
+	// Same cell count, cell size and bounds (to 1 unit), i.e. bits of one grid line up with the other.
+	bool HasSameLayout(const FMDFogGrid& Other) const;
 
 	bool IsValid() const { return Width > 0 && Height > 0; }
 	int32 GetNumCells() const { return Width * Height; }

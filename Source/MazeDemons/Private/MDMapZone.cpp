@@ -1,122 +1,27 @@
 #include "MDMapZone.h"
 
 #include "Components/BoxComponent.h"
-#include "Components/SceneCaptureComponent2D.h"
 #include "EngineUtils.h"
 #include "Engine/Engine.h"
-#include "Engine/Texture2D.h"
-#include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
-#include "MDQuestTypes.h"
-#include "MDUISettings.h"
 
 AMDMapZone::AMDMapZone()
 {
 	PrimaryActorTick.bCanEverTick = false;
-	bReplicates = false; // every machine captures and queries its own copy
+	bReplicates = false; // every machine queries its own copy
 
 	ZoneBox = CreateDefaultSubobject<UBoxComponent>(TEXT("ZoneBox"));
 	ZoneBox->SetBoxExtent(FVector(2000.0f, 2000.0f, 500.0f));
 	ZoneBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	ZoneBox->SetGenerateOverlapEvents(false);
 	SetRootComponent(ZoneBox);
-
-	Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("Capture"));
-	Capture->SetupAttachment(ZoneBox);
-	Capture->bCaptureEveryFrame = false;
-	Capture->bCaptureOnMovement = false;
-	Capture->ProjectionType = ECameraProjectionMode::Orthographic;
 }
 
-void AMDMapZone::BeginPlay()
-{
-	Super::BeginPlay();
-	if (bCaptureOnBeginPlay && GetNetMode() != NM_DedicatedServer)
-	{
-		CaptureMap();
-	}
-}
-
-void AMDMapZone::CaptureMap()
-{
-	if (!bCaptured)
-	{
-		DoCapture();
-	}
-}
-
-void AMDMapZone::ForceRecapture()
-{
-	DoCapture();
-}
-
-void AMDMapZone::DoCapture()
-{
-	if (!Capture || !ZoneBox || GetNetMode() == NM_DedicatedServer)
-	{
-		return;
-	}
-	const int32 Resolution = FMath::Clamp(CaptureResolution, 64, 4096);
-	if (!RuntimeMap || RuntimeMap->SizeX != Resolution)
-	{
-		RuntimeMap = NewObject<UTextureRenderTarget2D>(this);
-		RuntimeMap->InitAutoFormat(Resolution, Resolution);
-		RuntimeMap->UpdateResourceImmediate(true);
-	}
-
-	const FBox2D MapBounds = GetMapBounds();
-	const FVector2D Centre = (MapBounds.Min + MapBounds.Max) * 0.5;
-	const float BoxZ = ZoneBox->GetComponentLocation().Z;
-	const float BoxHalfZ = ZoneBox->GetScaledBoxExtent().Z;
-	const bool bInside = CaptureEyeHeight > 0.0f;
-	const float EyeZ = bInside ? BoxZ - BoxHalfZ + CaptureEyeHeight : BoxZ + BoxHalfZ + CaptureHeightAboveBox;
-
-	// Pitch -90 looks straight down; yaw -90 puts +X on the right and +Y down in the image (U follows X, V follows Y).
-	Capture->SetWorldLocationAndRotation(FVector(Centre.X, Centre.Y, EyeZ), FRotator(-90.0f, -90.0f, 0.0f));
-	Capture->ProjectionType = ECameraProjectionMode::Orthographic;
-	Capture->OrthoWidth = static_cast<float>(MapBounds.Max.X - MapBounds.Min.X);
-	// With the camera inside the zone, clip right at the camera so ceilings above it are not drawn.
-	Capture->bAutoCalculateOrthoPlanes = !bInside;
-	Capture->bOverride_CustomNearClippingPlane = bInside;
-	Capture->CustomNearClippingPlane = 1.0f;
-	Capture->CaptureSource = CaptureSource;
-	Capture->TextureTarget = RuntimeMap;
-	Capture->ShowFlags.SetPostProcessing(false);
-	Capture->ShowFlags.SetDynamicShadows(false);
-	Capture->CaptureScene();
-	bCaptured = true;
-}
-
-UTexture* AMDMapZone::GetMapTexture() const
-{
-	if (RuntimeMap)
-	{
-		return RuntimeMap;
-	}
-	return BakedMap;
-}
-
-FBox2D AMDMapZone::GetMapBounds() const
+FBox2D AMDMapZone::GetZoneBounds() const
 {
 	const FVector Centre = ZoneBox ? ZoneBox->GetComponentLocation() : GetActorLocation();
 	const FVector Extent = ZoneBox ? ZoneBox->GetScaledBoxExtent() : FVector(2000.0, 2000.0, 500.0);
-	const double Half = FMath::Max(FMath::Max(Extent.X, Extent.Y), 1.0);
-	return FBox2D(FVector2D(Centre.X - Half, Centre.Y - Half), FVector2D(Centre.X + Half, Centre.Y + Half));
-}
-
-float AMDMapZone::GetFogCellSize() const
-{
-	if (FogCellSize > 0.0f)
-	{
-		return FogCellSize;
-	}
-	const UMDUISettings* Settings = GetDefault<UMDUISettings>();
-	return Settings ? Settings->FogCellSize : 400.0f;
-}
-
-FVector2D AMDMapZone::WorldToMapUV(FVector World) const
-{
-	return UMDQuestRules::WorldToMapUV(FVector2D(World.X, World.Y), GetMapBounds());
+	return FBox2D(FVector2D(Centre.X - Extent.X, Centre.Y - Extent.Y), FVector2D(Centre.X + Extent.X, Centre.Y + Extent.Y));
 }
 
 bool AMDMapZone::ContainsXY(FVector Location) const
@@ -146,7 +51,7 @@ AMDMapZone* AMDMapZone::FindZoneAt(const UObject* WorldContextObject, FVector Lo
 		{
 			continue;
 		}
-		const FBox2D Bounds = Zone->GetMapBounds();
+		const FBox2D Bounds = Zone->GetZoneBounds();
 		const double Area = (Bounds.Max.X - Bounds.Min.X) * (Bounds.Max.Y - Bounds.Min.Y);
 		if (!Best || Area < BestArea)
 		{

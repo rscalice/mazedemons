@@ -6,6 +6,7 @@
 #include "MDQuestTypes.h"
 #include "MDMapComponent.generated.h"
 
+class AMDLevelMap;
 class AMDMapZone;
 class AMDObjectiveMarker;
 class UMDFogComponent;
@@ -15,10 +16,12 @@ class UTexture2D;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMDMapZoneChanged, AMDMapZone*, Zone);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDMapFogUpdated);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMDLevelMapChanged, AMDLevelMap*, Map);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDMinimapOptionsChanged);
 
-// Local minimap state on the player controller (not replicated). Follows the pawn into its map zone, turns the party's shared fog
-// bits (UMDFogComponent) into a 1-pixel-per-cell texture (red = revealed) and holds the per-user minimap options.
+// Local minimap state on the player controller (not replicated). Owns the one minimap texture of the whole level: the level map's
+// floor plan (AMDLevelMap) with the party's shared fog (UMDFogComponent) composed in on the CPU, updated in place so the ProHUD
+// brush never changes. Also follows the pawn into its map zone (labels, tracker) and holds the per-user minimap options.
 UCLASS(ClassGroup = (UI), meta = (BlueprintSpawnableComponent))
 class MAZEDEMONS_API UMDMapComponent : public UActorComponent
 {
@@ -38,15 +41,20 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Map")
 	AMDMapZone* GetCurrentZone() const { return CurrentZone.Get(); }
 
-	// Runtime capture of the current zone, else its baked texture (may be null).
+	// The level map this component draws (null until one exists in the world).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Map")
-	UTexture* GetMapTexture() const;
+	AMDLevelMap* GetLevelMap() const { return LevelMap.Get(); }
 
-	// 1 pixel per fog cell, red channel 1 = revealed, 0 = hidden. Null until the player is in a zone.
+	// The whole-level minimap: floor plan with the fog applied. The same object is updated in place on fog changes and recaptures.
+	// Null until the level map has captured.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Map")
+	UTexture2D* GetMapTexture() const { return MapTexture; }
+
+	// 1 pixel per fog cell, red channel 1 = revealed, 0 = hidden. Null until the fog has a layout.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Map")
 	UTexture2D* GetFogTexture() const { return FogTexture; }
 
-	// World position to 0..1 UV of the current zone's map (0,0 when there is no zone).
+	// World position to 0..1 UV of the level map (0,0 when there is none).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Map")
 	FVector2D WorldToMapUV(FVector World) const;
 
@@ -74,13 +82,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Map")
 	float GetMinimapRadiusUU() const;
 
-	// Local debug: re-renders the current zone's map capture.
-	void ForceRecaptureCurrentZone();
+	// Local debug: re-renders the level map.
+	void ForceRecaptureLevelMap();
 
 	// Multi-line summary for DumpMap.
 	FString BuildDump() const;
 
-	// The pawn entered another zone (null = left every zone).
+	// The level map was found or recaptured: feed GetMapTexture to the minimap and place the corners again.
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Map")
+	FMDLevelMapChanged OnLevelMapChanged;
+
+	// The pawn entered another zone (null = left every zone). Labels / tracker only: the map never changes with the zone.
 	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Map")
 	FMDMapZoneChanged OnZoneChanged;
 
@@ -104,13 +116,18 @@ protected:
 	UFUNCTION()
 	void HandleQuestsChanged();
 
+	UFUNCTION()
+	void HandleLevelMapCaptured(AMDLevelMap* Map);
+
 private:
 	void BindSources();
 	void RebuildGrid();
 	void RebuildFogTexture();
+	void RebuildMapTexture();
 	void RefreshMarkers();
 
 	TWeakObjectPtr<AMDMapZone> CurrentZone;
+	TWeakObjectPtr<AMDLevelMap> LevelMap;
 	TWeakObjectPtr<UMDFogComponent> BoundFog;
 	TWeakObjectPtr<UMDQuestComponent> BoundQuests;
 
@@ -118,6 +135,12 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> FogTexture;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> MapTexture;
+
+	// Capture count of the plan in MapTexture (-1 = none yet).
+	int32 MapTextureCapture = -1;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<AMDObjectiveMarker>> CachedMarkers;

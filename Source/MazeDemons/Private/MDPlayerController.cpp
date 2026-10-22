@@ -8,6 +8,7 @@
 #include "MDMapComponent.h"
 #include "MDMapZone.h"
 #include "MDQuestComponent.h"
+#include "MDQuestSetData.h"
 #include "MDPlayerState.h"
 #include "MDInventoryComponent.h"
 #include "MDPerkCatalog.h"
@@ -1302,8 +1303,8 @@ void AMDPlayerController::Server_RevealMap_Implementation()
 #if !UE_BUILD_SHIPPING
 	if (UMDFogComponent* Fog = UMDFogComponent::FindFor(this))
 	{
-		Fog->RevealAllZones();
-		UE_LOG(LogMDInventory, Warning, TEXT("RevealMap: shared fog revealed"));
+		Fog->RevealAll();
+		UE_LOG(LogMDInventory, Warning, TEXT("RevealMap: shared level fog revealed"));
 	}
 #endif
 }
@@ -1320,8 +1321,8 @@ void AMDPlayerController::Server_ResetFog_Implementation()
 #if !UE_BUILD_SHIPPING
 	if (UMDFogComponent* Fog = UMDFogComponent::FindFor(this))
 	{
-		Fog->ResetAllZones();
-		UE_LOG(LogMDInventory, Warning, TEXT("ResetFog: shared fog cleared"));
+		Fog->ResetFog();
+		UE_LOG(LogMDInventory, Warning, TEXT("ResetFog: shared level fog cleared"));
 	}
 #endif
 }
@@ -1331,7 +1332,7 @@ void AMDPlayerController::CaptureMap()
 #if !UE_BUILD_SHIPPING
 	if (MapComponent)
 	{
-		MapComponent->ForceRecaptureCurrentZone();
+		MapComponent->ForceRecaptureLevelMap();
 		UE_LOG(LogMDInventory, Warning, TEXT("CaptureMap: %s"), *MapComponent->BuildDump());
 	}
 #endif

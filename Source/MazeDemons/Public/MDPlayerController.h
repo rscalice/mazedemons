@@ -364,25 +364,25 @@ public:
 	UFUNCTION(Exec)
 	void DumpQuests();
 
-	// Reveals the whole shared fog for the party (server).
+	// Reveals the whole shared level fog for the party (server).
 	UFUNCTION(Exec)
 	void RevealMap();
 
 	UFUNCTION(Server, Reliable)
 	void Server_RevealMap();
 
-	// Hides the whole shared fog again (server).
+	// Hides the whole shared level fog again (server).
 	UFUNCTION(Exec)
 	void ResetFog();
 
 	UFUNCTION(Server, Reliable)
 	void Server_ResetFog();
 
-	// Local: re-renders the map capture of the zone you stand in.
+	// Local: re-renders the whole-level map (AMDLevelMap) and logs the result.
 	UFUNCTION(Exec)
 	void CaptureMap();
 
-	// Local: logs the map zone, textures, fog grid and minimap option.
+	// Local: logs the level map (bounds, floor height, plan classes), minimap texture, zone, fog grid and minimap option.
 	UFUNCTION(Exec)
 	void DumpMap();
 

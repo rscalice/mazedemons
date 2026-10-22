@@ -4,6 +4,7 @@
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
 #include "MDMapComponent.h"
+#include "MDLevelMap.h"
 #include "MDMapZone.h"
 #include "MDQuestComponent.h"
 #include "MDPerkComponent.h"
@@ -65,6 +66,7 @@ void UMDHUDWidget::Unbind()
 	if (UMDMapComponent* Map = BoundMap.Get())
 	{
 		Map->OnZoneChanged.RemoveDynamic(this, &UMDHUDWidget::HandleMapZoneChanged);
+		Map->OnLevelMapChanged.RemoveDynamic(this, &UMDHUDWidget::HandleLevelMapChanged);
 	}
 	BoundQuests.Reset();
 	BoundMap.Reset();
@@ -81,6 +83,11 @@ void UMDHUDWidget::TryBindQuests()
 		{
 			BoundMap = Map;
 			Map->OnZoneChanged.AddUniqueDynamic(this, &UMDHUDWidget::HandleMapZoneChanged);
+			Map->OnLevelMapChanged.AddUniqueDynamic(this, &UMDHUDWidget::HandleLevelMapChanged);
+			if (Map->GetLevelMap() && Map->GetMapTexture())
+			{
+				OnLevelMapReady(Map->GetLevelMap());
+			}
 			if (AMDMapZone* Zone = Map->GetCurrentZone())
 			{
 				OnMapZoneChanged(Zone);
@@ -142,6 +149,11 @@ void UMDHUDWidget::HandleQuestsChanged()
 void UMDHUDWidget::HandleMapZoneChanged(AMDMapZone* Zone)
 {
 	OnMapZoneChanged(Zone);
+}
+
+void UMDHUDWidget::HandleLevelMapChanged(AMDLevelMap* LevelMap)
+{
+	OnLevelMapReady(LevelMap);
 }
 
 void UMDHUDWidget::TryBind()

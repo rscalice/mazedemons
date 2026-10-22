@@ -23,6 +23,13 @@ void FMDFogGrid::Init(const FBox2D& InBounds, float InCellSize)
 	Bits.Init(0, (Width * Height + 7) / 8);
 }
 
+bool FMDFogGrid::HasSameLayout(const FMDFogGrid& Other) const
+{
+	return IsValid() && Other.IsValid() && Width == Other.Width && Height == Other.Height
+		&& FMath::IsNearlyEqual(CellSize, Other.CellSize, 0.01f) && Bounds.Min.Equals(Other.Bounds.Min, 1.0)
+		&& Bounds.Max.Equals(Other.Bounds.Max, 1.0);
+}
+
 int32 FMDFogGrid::WorldToCell(const FVector2D& Pos) const
 {
 	if (!IsValid() || Pos.X < Bounds.Min.X || Pos.Y < Bounds.Min.Y || Pos.X > Bounds.Max.X || Pos.Y > Bounds.Max.Y)
