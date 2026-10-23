@@ -78,6 +78,10 @@ bool UMDComboSet::Validate(TArray<FString>& OutErrors) const
 		{
 			OutErrors.Add(FString::Printf(TEXT("%s: %s HitStopFrames %d is outside 0..12"), *Name, *Label, Step.HitStopFrames));
 		}
+		if (Step.Hand != EMDWeaponHand::Main && !bDualWield)
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s: %s uses the off hand or both hands but the set is not bDualWield"), *Name, *Label));
+		}
 		if (Step.ComboWindowStart > Step.ComboWindowEnd)
 		{
 			OutErrors.Add(FString::Printf(TEXT("%s: %s combo window start is after its end"), *Name, *Label));

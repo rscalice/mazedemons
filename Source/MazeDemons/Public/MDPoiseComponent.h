@@ -26,7 +26,7 @@ struct FMDPoiseHitResult
 // Hidden poise meter for players, the test dummy and enemies (Decision 3: a replicated component, not a GAS attribute).
 // Hits drain poise; at 0 the target is stunned (State.Staggered) and cannot act; poise refills after RegenDelay without hits.
 // The server decides; everyone plays the reaction from the replicated LastHit and sees bStunned.
-UCLASS(ClassGroup = (Gameplay), meta = (BlueprintSpawnableComponent))
+UCLASS(Blueprintable, ClassGroup = (Gameplay), meta = (BlueprintSpawnableComponent))
 class MAZEDEMONS_API UMDPoiseComponent : public UActorComponent
 {
 	GENERATED_BODY()

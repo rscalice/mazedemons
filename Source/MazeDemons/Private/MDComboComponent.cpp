@@ -491,6 +491,12 @@ bool UMDComboComponent::GetActiveStep(FMDAttackStep& OutStep) const
 	return true;
 }
 
+EMDWeaponHand UMDComboComponent::GetActiveStepHand() const
+{
+	FMDAttackStep Step;
+	return GetActiveStep(Step) ? Step.Hand : EMDWeaponHand::Main;
+}
+
 bool UMDComboComponent::TryRegisterSwingHit(const AActor* Target)
 {
 	if (!Target)

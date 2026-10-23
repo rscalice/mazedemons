@@ -102,6 +102,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
 	bool GetActiveStep(FMDAttackStep& OutStep) const;
 
+	// Which hand(s) the swing in progress uses (Main when idle). AC_Combat traces these.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
+	EMDWeaponHand GetActiveStepHand() const;
+
 	// Counts a hit on Target for the current swing. False when the step's MaxHitsPerTarget is already used up.
 	bool TryRegisterSwingHit(const AActor* Target);
 

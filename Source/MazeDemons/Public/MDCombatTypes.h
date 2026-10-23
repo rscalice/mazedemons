@@ -50,6 +50,15 @@ enum class EMDComboInput : uint8
 	Dodge
 };
 
+// Which hand swings a combo step (dual wield). Main = 0 so every existing step stays a main-hand swing.
+UENUM(BlueprintType)
+enum class EMDWeaponHand : uint8
+{
+	Main = 0,
+	Off,
+	Both
+};
+
 // What the combo state machine wants done next (output of UMDCombatRules::Advance).
 UENUM(BlueprintType)
 enum class EMDComboAction : uint8
@@ -104,6 +113,10 @@ struct MAZEDEMONS_API FMDAttackStep
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step", meta = (ClampMin = "0.1"))
 	float PlayRate = 1.0f;
+
+	// Which weapon(s) trace during this step. Off / Both are only valid in a dual-wield set (UMDComboSet::bDualWield).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
+	EMDWeaponHand Hand = EMDWeaponHand::Main;
 
 	// Multiplier on the attacker's AttackPower.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step", meta = (ClampMin = "0"))

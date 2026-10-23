@@ -448,6 +448,19 @@ bool FMDComboSetValidationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("bad hit-stop and dodge montage count are rejected"), Bad->Validate(Errors));
 	TestEqual(TEXT("two errors"), Errors.Num(), 2);
 
+	// A Both / Off step is only valid in a dual set.
+	UMDComboSet* Dual = NewObject<UMDComboSet>(GetTransientPackage());
+	Dual->LightChain = { MakeStep(), MakeStep() };
+	Dual->LightChain[1].Hand = EMDWeaponHand::Off;
+	Dual->Heavy = MakeStep();
+	Dual->Heavy.Hand = EMDWeaponHand::Both;
+	Errors.Reset();
+	TestFalse(TEXT("off/both steps in a single-weapon set are rejected"), Dual->Validate(Errors));
+	TestEqual(TEXT("two errors for the two steps"), Errors.Num(), 2);
+	Dual->bDualWield = true;
+	Errors.Reset();
+	TestTrue(TEXT("the same steps validate in a dual set"), Dual->Validate(Errors));
+
 	FMDAttackStep Fallback;
 	TestFalse(TEXT("no dodge attack and no chain: no step"), Empty->GetStep(EMDAttackKind::DodgeAttack, 0, Fallback));
 	TestEqual(TEXT("tuning follows the chain length"), Good->MakeTuning().LightCount, 3);

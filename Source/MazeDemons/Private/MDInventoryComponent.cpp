@@ -635,6 +635,12 @@ UMDComboSet* UMDInventoryComponent::GetItemComboSet(FName ItemRowName) const
 	return Stats ? Stats->ComboSet.LoadSynchronous() : nullptr;
 }
 
+UMDComboSet* UMDInventoryComponent::GetItemDualComboSet(FName ItemRowName) const
+{
+	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
+	return Stats ? Stats->DualComboSet.LoadSynchronous() : nullptr;
+}
+
 int32 UMDInventoryComponent::GetItemMaxDurability(FName ItemRowName) const
 {
 	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);

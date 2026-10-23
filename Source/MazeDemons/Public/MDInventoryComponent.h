@@ -131,6 +131,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	UMDComboSet* GetItemComboSet(FName ItemRowName) const;
 
+	// C1 dual wield: DT_ItemStats.DualComboSet of a weapon row (null when empty).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	UMDComboSet* GetItemDualComboSet(FName ItemRowName) const;
+
 	// ---- Durability / upgrades (DT_ItemStats columns; condition and upgrade level are per equipped slot) ----
 	// Max durability of a row (0 = none). Rows with durability never stack.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")

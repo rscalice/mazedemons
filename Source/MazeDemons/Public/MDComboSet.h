@@ -17,6 +17,10 @@ class MAZEDEMONS_API UMDComboSet : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	// True for a dual-wield set: steps may use Hand = Off or Both. Used when the same weapon type is in both hands.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Steps")
+	bool bDualWield = false;
+
 	// The light chain (3-5 steps). Pressing light inside a step's combo window plays the next one; after the last it wraps.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Steps")
 	TArray<FMDAttackStep> LightChain;

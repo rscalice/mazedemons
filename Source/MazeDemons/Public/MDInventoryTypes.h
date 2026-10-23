@@ -61,6 +61,11 @@ struct MAZEDEMONS_API FMDItemStatsRow : public FTableRowBase
 	// (UMDInventoryComponent::GetItemComboSet -> UMDComboComponent::SetComboSet).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	TSoftObjectPtr<UMDComboSet> ComboSet;
+
+	// C1 dual wield: used instead of ComboSet when the same weapon type is equipped in both hands (main + off-hand slot).
+	// Empty = no dual set: the main-hand ComboSet is used as normal.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	TSoftObjectPtr<UMDComboSet> DualComboSet;
 };
 
 // Row of DT_ItemDisplay (same row names as DT_Items): player-facing text. Kept in C++ because S_ItemInfo cannot be edited via tools.
