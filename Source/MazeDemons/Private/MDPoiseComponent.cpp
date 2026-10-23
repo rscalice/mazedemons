@@ -175,7 +175,7 @@ FMDPoiseHitResult UMDPoiseComponent::ApplyHit(const FMDHitContext& Context, cons
 		Rep.Direction = Result.Direction;
 		Rep.ImpactPoint = Context.ImpactPoint;
 		Rep.ImpactTag = Context.ImpactTag;
-		Rep.Surface = Context.PhysMaterial ? Context.PhysMaterial->SurfaceType : SurfaceType_Default;
+		Rep.Surface = Context.PhysMaterial ? Context.PhysMaterial->SurfaceType.GetValue() : static_cast<EPhysicalSurface>(SurfaceType_Default);
 		Rep.bCrit = Damage.bCrit;
 		Rep.Damage = Damage.Damage;
 		Rep.Instigator = Context.Instigator;
