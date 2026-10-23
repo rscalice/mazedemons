@@ -343,7 +343,7 @@ void AMDPlayerController::OpenMenuTab(int32 TabNumber)
 
 void AMDPlayerController::OnQuickSlot1(const FInputActionValue& Value)
 {
-	if (bShowMouseCursor)
+	if (IsAnyMenuOpen())
 	{
 		return; // a menu is open (matches BP_Player's IsMenuOpen gate)
 	}
@@ -352,7 +352,7 @@ void AMDPlayerController::OnQuickSlot1(const FInputActionValue& Value)
 
 void AMDPlayerController::OnQuickSlot2(const FInputActionValue& Value)
 {
-	if (bShowMouseCursor)
+	if (IsAnyMenuOpen())
 	{
 		return; // a menu is open (matches BP_Player's IsMenuOpen gate)
 	}

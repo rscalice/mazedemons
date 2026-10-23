@@ -78,6 +78,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
 	bool IsGameMenuOpen() const { return bGameMenuOpen && GameMenuWidget != nullptr; }
 
+	// True while any menu owns the player's input: game menu, pause menu, station panel, or any widget showing the cursor.
+	// Local only (menus never replicate). Quick slots and the melee gate use it.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|UI")
+	bool IsAnyMenuOpen() const { return IsGameMenuOpen() || IsPauseMenuOpen() || bStationOpen || bShowMouseCursor; }
+
 	// Console / debug: `OpenMenu` toggles; `OpenMenuTab 2` opens Perks (1 Inventory, 2 Perks, 3 Run).
 	UFUNCTION(Exec)
 	void OpenMenu();

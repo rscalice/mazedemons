@@ -190,6 +190,58 @@ FString UMD_BlueprintCommentLibrary::AddCommentBox(UBlueprint* Blueprint, FName 
 	return Comment->GetName();
 }
 
+namespace MD_CommentLib
+{
+	/** Lower-cased copy with every whitespace character removed. */
+	static FString Normalize(const FString& In)
+	{
+		FString Out;
+		Out.Reserve(In.Len());
+		for (const TCHAR C : In)
+		{
+			if (!FChar::IsWhitespace(C))
+			{
+				Out.AppendChar(FChar::ToLower(C));
+			}
+		}
+		return Out;
+	}
+}
+
+bool UMD_BlueprintCommentLibrary::CommentTextMatches(const FString& Existing, const FString& Needle)
+{
+	const FString NeedleNorm = MD_CommentLib::Normalize(Needle);
+	return !NeedleNorm.IsEmpty() && MD_CommentLib::Normalize(Existing).Contains(NeedleNorm);
+}
+
+int32 UMD_BlueprintCommentLibrary::SetCommentBoxText(UBlueprint* Blueprint, FName GraphName, const FString& OldTextContains, const FString& NewText)
+{
+	UEdGraph* Graph = MD_CommentLib::FindGraph(Blueprint, GraphName);
+	if (!Graph)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MD_Comment] Graph '%s' not found"), *GraphName.ToString());
+		return 0;
+	}
+
+	int32 Changed = 0;
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		UEdGraphNode_Comment* Comment = Cast<UEdGraphNode_Comment>(Node);
+		if (!Comment || !CommentTextMatches(Comment->NodeComment, OldTextContains))
+		{
+			continue;
+		}
+		Comment->Modify();
+		Comment->NodeComment = NewText;
+		++Changed;
+	}
+	if (Changed > 0)
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	}
+	return Changed;
+}
+
 TArray<FString> UMD_BlueprintCommentLibrary::ListGraphNodes(UBlueprint* Blueprint, FName GraphName)
 {
 	return MD_CommentLib::ListNodes(Blueprint, GraphName, false);

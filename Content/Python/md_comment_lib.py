@@ -8,6 +8,14 @@ BOXES = {
     ],
 }
 
+REPLACE = {
+    "/Game/Path/To/Blueprint": [
+        (graph_name, old_contains, new_text),   # rewrites an existing comment box whose text contains old_contains
+    ],
+}
+Replacements run before the boxes for that Blueprint, so a replaced box is not duplicated by BOXES. Pass them with
+main(BOXES, REPLACE=REPLACE). A Blueprint may appear only in REPLACE.
+
 Defensive and idempotent: a box whose text already exists in the graph is not added again.
 Run via Tools > Execute Python Script, then read the Output Log for lines tagged [MD_Comment].
 """
@@ -38,13 +46,31 @@ def parse(lines):
     return out
 
 
-def process(path, boxes):
+def apply_replacements(bp, short, replacements):
+    """Applies (graph, old_contains, new_text) tuples; returns how many boxes were rewritten."""
+    done = 0
+    for graph, old_contains, new_text in replacements:
+        try:
+            n = LIB.set_comment_box_text(bp, graph, old_contains, new_text)
+        except Exception as e:
+            unreal.log_warning("%s %s/%s: set_comment_box_text failed (%s)" % (TAG, short, graph, e))
+            continue
+        if n > 0:
+            done += n
+            unreal.log("%s %s/%s: REPLACED %d box(es) containing '%s'" % (TAG, short, graph, n, old_contains[:40]))
+        else:
+            unreal.log_warning("%s %s/%s: no comment box contains '%s' (already replaced?)" % (TAG, short, graph, old_contains[:40]))
+    return done
+
+
+def process(path, boxes, replacements=()):
     added = 0
     bp = unreal.load_asset(path)
     if not bp:
-        unreal.log_warning("%s MISSING asset %s (skipped %d boxes)" % (TAG, path, len(boxes)))
+        unreal.log_warning("%s MISSING asset %s (skipped %d boxes, %d replacements)" % (TAG, path, len(boxes), len(replacements)))
         return 0
     short = path.split("/")[-1]
+    added += apply_replacements(bp, short, replacements)
     for graph, text, colour, patterns in boxes:
         try:
             nodes = parse(LIB.list_graph_nodes_ex(bp, graph))
@@ -84,12 +110,14 @@ def process(path, boxes):
     return added
 
 
-def main(boxes_by_path, label="run"):
+def main(boxes_by_path, label="run", REPLACE=None):
     total = 0
-    for path, boxes in boxes_by_path.items():
+    replace_by_path = REPLACE or {}
+    paths = list(boxes_by_path.keys()) + [p for p in replace_by_path if p not in boxes_by_path]
+    for path in paths:
         try:
-            total += process(path, boxes)
+            total += process(path, boxes_by_path.get(path, []), replace_by_path.get(path, []))
         except Exception as e:
             unreal.log_warning("%s %s: unexpected error (%s)" % (TAG, path, e))
-    unreal.log("%s %s DONE: %d comment boxes added" % (TAG, label, total))
+    unreal.log("%s %s DONE: %d comment boxes added or replaced" % (TAG, label, total))
     return total
