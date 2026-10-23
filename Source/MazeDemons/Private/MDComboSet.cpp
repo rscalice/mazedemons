@@ -2,6 +2,19 @@
 
 #include "Animation/AnimMontage.h"
 
+UMDComboSet* UMDComboSet::ChooseForLoadout(UMDComboSet* TwoHandedSet, bool bHasTwoHanded, UMDComboSet* MainSet, UMDComboSet* MainDualSet, UMDComboSet* OffDualSet)
+{
+	if (bHasTwoHanded)
+	{
+		return TwoHandedSet;
+	}
+	if (MainDualSet && MainDualSet == OffDualSet)
+	{
+		return MainDualSet;
+	}
+	return MainSet;
+}
+
 FMDComboTuning UMDComboSet::MakeTuning() const
 {
 	FMDComboTuning Tuning;

@@ -461,6 +461,18 @@ bool FMDComboSetValidationTest::RunTest(const FString& Parameters)
 	Errors.Reset();
 	TestTrue(TEXT("the same steps validate in a dual set"), Dual->Validate(Errors));
 
+	// Loadout rule: two-hander wins, a matching dual pair uses the dual set, a lone sword keeps its own set.
+	UMDComboSet* SwordSet = NewObject<UMDComboSet>(GetTransientPackage());
+	UMDComboSet* ClaySet = NewObject<UMDComboSet>(GetTransientPackage());
+	UMDComboSet* DualSet = NewObject<UMDComboSet>(GetTransientPackage());
+	UMDComboSet* OtherDual = NewObject<UMDComboSet>(GetTransientPackage());
+	TestTrue(TEXT("two-hander wins"), UMDComboSet::ChooseForLoadout(ClaySet, true, SwordSet, DualSet, DualSet) == ClaySet);
+	TestTrue(TEXT("sword in both hands: dual set"), UMDComboSet::ChooseForLoadout(nullptr, false, SwordSet, DualSet, DualSet) == DualSet);
+	TestTrue(TEXT("lone sword: its own set"), UMDComboSet::ChooseForLoadout(nullptr, false, SwordSet, DualSet, nullptr) == SwordSet);
+	TestTrue(TEXT("mismatched off hand: main set"), UMDComboSet::ChooseForLoadout(nullptr, false, SwordSet, DualSet, OtherDual) == SwordSet);
+	TestTrue(TEXT("no dual configured: main set"), UMDComboSet::ChooseForLoadout(nullptr, false, SwordSet, nullptr, nullptr) == SwordSet);
+	TestTrue(TEXT("empty hands: none"), UMDComboSet::ChooseForLoadout(nullptr, false, nullptr, nullptr, nullptr) == nullptr);
+
 	FMDAttackStep Fallback;
 	TestFalse(TEXT("no dodge attack and no chain: no step"), Empty->GetStep(EMDAttackKind::DodgeAttack, 0, Fallback));
 	TestEqual(TEXT("tuning follows the chain length"), Good->MakeTuning().LightCount, 3);

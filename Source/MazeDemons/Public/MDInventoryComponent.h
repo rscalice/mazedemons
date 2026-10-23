@@ -135,6 +135,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	UMDComboSet* GetItemDualComboSet(FName ItemRowName) const;
 
+	// C1: the combo set for what is equipped right now (reads the Equipped array, so call it after the array changed).
+	// Two-hander: its ComboSet. Main hand + off hand whose rows share the same non-empty DualComboSet: that dual set.
+	// Otherwise the main hand's ComboSet. Null = old DoLightAttack path. Call on every machine that plays montages.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	UMDComboSet* ResolveEquippedComboSet() const;
+
 	// ---- Durability / upgrades (DT_ItemStats columns; condition and upgrade level are per equipped slot) ----
 	// Max durability of a row (0 = none). Rows with durability never stack.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")

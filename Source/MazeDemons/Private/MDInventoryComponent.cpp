@@ -641,6 +641,19 @@ UMDComboSet* UMDInventoryComponent::GetItemDualComboSet(FName ItemRowName) const
 	return Stats ? Stats->DualComboSet.LoadSynchronous() : nullptr;
 }
 
+UMDComboSet* UMDInventoryComponent::ResolveEquippedComboSet() const
+{
+	const FMDEquippedSlot* Two = FindEquippedSlot(MDItemType::TwoHanded);
+	const FMDEquippedSlot* Main = FindEquippedSlot(MDItemType::MainHand);
+	const FMDEquippedSlot* Off = FindEquippedSlot(MDItemType::OffHand);
+	return UMDComboSet::ChooseForLoadout(
+		Two ? GetItemComboSet(Two->ItemRowName) : nullptr,
+		Two != nullptr,
+		Main ? GetItemComboSet(Main->ItemRowName) : nullptr,
+		Main ? GetItemDualComboSet(Main->ItemRowName) : nullptr,
+		Off ? GetItemDualComboSet(Off->ItemRowName) : nullptr);
+}
+
 int32 UMDInventoryComponent::GetItemMaxDurability(FName ItemRowName) const
 {
 	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);

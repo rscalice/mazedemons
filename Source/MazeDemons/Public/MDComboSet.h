@@ -73,6 +73,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dodge", meta = (ClampMin = "0"))
 	float DodgeIFrames = 0.25f;
 
+	// Which combo set a loadout uses (pure rule, see UMDInventoryComponent::ResolveEquippedComboSet):
+	// two-hander wins; else the main hand's DualComboSet when the off hand holds the SAME dual set (two matching swords);
+	// else the main hand's ComboSet; else null (old DoLightAttack path).
+	static UMDComboSet* ChooseForLoadout(UMDComboSet* TwoHandedSet, bool bHasTwoHanded, UMDComboSet* MainSet, UMDComboSet* MainDualSet, UMDComboSet* OffDualSet);
+
 	FMDComboTuning MakeTuning() const;
 
 	// Kind + index -> step. Index is only used for Light. False when the step does not exist.
