@@ -2,7 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataTable.h"
+#include "UObject/SoftObjectPtr.h"
 #include "MDInventoryTypes.generated.h"
+
+class UMDComboSet;
 
 // Why a consumable use was refused (server decides, owning client shows a toast).
 UENUM(BlueprintType)
@@ -53,6 +56,11 @@ struct MAZEDEMONS_API FMDItemStatsRow : public FTableRowBase
 	// True if a station can upgrade the slot while this item is equipped.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
 	bool bUpgradeable = false;
+
+	// C1: the weapon's combo data (DA_Combo_*). Empty = the weapon uses the old DoLightAttack montage array. Set on equip
+	// (UMDInventoryComponent::GetItemComboSet -> UMDComboComponent::SetComboSet).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	TSoftObjectPtr<UMDComboSet> ComboSet;
 };
 
 // Row of DT_ItemDisplay (same row names as DT_Items): player-facing text. Kept in C++ because S_ItemInfo cannot be edited via tools.

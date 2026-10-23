@@ -9,6 +9,7 @@
 class APawn;
 class UDataTable;
 class UMDAbilitySystemComponent;
+class UMDComboSet;
 
 MAZEDEMONS_API DECLARE_LOG_CATEGORY_EXTERN(LogMDInventory, Log, All);
 
@@ -124,6 +125,11 @@ public:
 	// Attack power bonus of a weapon row from DT_ItemStats (0 if the table or row is missing).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	float GetItemAttackBonus(FName ItemRowName) const;
+
+	// C1: the combo data of a weapon row from DT_ItemStats.ComboSet (loads it; null if the table, row or field is empty, which
+	// means the weapon keeps the old DoLightAttack path).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	UMDComboSet* GetItemComboSet(FName ItemRowName) const;
 
 	// ---- Durability / upgrades (DT_ItemStats columns; condition and upgrade level are per equipped slot) ----
 	// Max durability of a row (0 = none). Rows with durability never stack.

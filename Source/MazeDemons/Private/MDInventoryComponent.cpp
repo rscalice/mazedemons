@@ -5,6 +5,7 @@
 #include "GameFramework/PlayerState.h"
 #include "MDAbilitySystemComponent.h"
 #include "MDBalanceData.h"
+#include "MDComboSet.h"
 #include "MDGameplayStatics.h"
 #include "MDGameSettings.h"
 #include "MDPerkComponent.h"
@@ -626,6 +627,12 @@ float UMDInventoryComponent::GetItemAttackBonus(FName ItemRowName) const
 {
 	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
 	return Stats ? Stats->AttackPowerBonus : 0.0f;
+}
+
+UMDComboSet* UMDInventoryComponent::GetItemComboSet(FName ItemRowName) const
+{
+	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
+	return Stats ? Stats->ComboSet.LoadSynchronous() : nullptr;
 }
 
 int32 UMDInventoryComponent::GetItemMaxDurability(FName ItemRowName) const

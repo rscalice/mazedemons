@@ -1,5 +1,7 @@
 #include "MDCombatStatics.h"
 
+#include "Abilities/GameplayAbility.h"
+#include "AbilitySystemComponent.h"
 #include "MDAbilitySystemComponent.h"
 #include "MDCombatDebug.h"
 #include "MDCombatFeedbackComponent.h"
@@ -119,6 +121,29 @@ bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHi
 		Feedback->Client_ConfirmHit(Confirm);
 	}
 	return true;
+}
+
+void UMDCombatStatics::ReleaseAbilityInput(AActor* Avatar, TSubclassOf<UGameplayAbility> AbilityClass)
+{
+	UAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(Avatar);
+	if (!ASC || !AbilityClass)
+	{
+		return;
+	}
+	for (const FGameplayAbilitySpec& Spec : ASC->GetActivatableAbilities())
+	{
+		if (!Spec.Ability || !Spec.Ability->IsA(AbilityClass) || !Spec.IsActive())
+		{
+			continue;
+		}
+		for (UGameplayAbility* Instance : Spec.GetAbilityInstances())
+		{
+			if (Instance && Instance->IsActive())
+			{
+				Instance->InputReleased(Spec.Handle, ASC->AbilityActorInfo.Get(), Instance->GetCurrentActivationInfo());
+			}
+		}
+	}
 }
 
 bool UMDCombatStatics::ShouldDrawTraces()

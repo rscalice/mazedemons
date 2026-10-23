@@ -4,6 +4,7 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "MDCombatStatics.generated.h"
 
+class UGameplayAbility;
 class UMDLocalSettings;
 
 UCLASS()
@@ -19,6 +20,12 @@ public:
 	// Returns true when damage was applied.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
 	static bool ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHitResult& Hit);
+
+	// The Heavy button was released. The melee abilities are granted with no GAS input id and the BP_Player input events are not
+	// bound to the ability system, so GAS never calls InputReleased by itself: this does, on the avatar's active instance of
+	// AbilityClass (GA_PlayerHeavy). No-op when the ability is not active. Call on the owning client.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
+	static void ReleaseAbilityInput(AActor* Avatar, TSubclassOf<UGameplayAbility> AbilityClass);
 
 	// md.Combat.DrawTraces, for AC_Combat's trace to draw its debug lines.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
