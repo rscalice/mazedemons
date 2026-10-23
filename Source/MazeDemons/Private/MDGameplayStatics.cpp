@@ -11,6 +11,7 @@
 #include "MDGameState.h"
 #include "MDInventoryComponent.h"
 #include "MDPlayerState.h"
+#include "MDPoiseComponent.h"
 #include "MDPerkCatalog.h"
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
@@ -134,7 +135,7 @@ FText UMDGameplayStatics::FormatDeltaText(float Current, float New, bool bPercen
 	return FText::FromString(FString::Printf(TEXT("%s%d"), *Sign, Magnitude));
 }
 
-EMDAttackBlock UMDGameplayStatics::EvaluateAttackGate(bool bHasPawn, bool bDead, bool bLocal, bool bMenuOpen, bool bHasCombat)
+EMDAttackBlock UMDGameplayStatics::EvaluateAttackGate(bool bHasPawn, bool bDead, bool bLocal, bool bMenuOpen, bool bHasCombat, bool bStaggered)
 {
 	if (!bHasPawn)
 	{
@@ -143,6 +144,10 @@ EMDAttackBlock UMDGameplayStatics::EvaluateAttackGate(bool bHasPawn, bool bDead,
 	if (bDead)
 	{
 		return EMDAttackBlock::Dead;
+	}
+	if (bStaggered)
+	{
+		return EMDAttackBlock::Staggered;
 	}
 	if (bLocal && bMenuOpen)
 	{
@@ -192,7 +197,7 @@ UActorComponent* UMDGameplayStatics::FindCombatComponent(const AActor* Actor)
 bool UMDGameplayStatics::CanPawnAttack(const APawn* Pawn, EMDAttackBlock& OutReason)
 {
 	OutReason = EvaluateAttackGate(Pawn != nullptr, IsPawnDead(Pawn), Pawn && Pawn->IsLocallyControlled(),
-		IsLocalMenuBlockingPawn(Pawn), FindCombatComponent(Pawn) != nullptr);
+		IsLocalMenuBlockingPawn(Pawn), FindCombatComponent(Pawn) != nullptr, UMDPoiseComponent::IsActorStunned(Pawn));
 	return OutReason == EMDAttackBlock::None;
 }
 

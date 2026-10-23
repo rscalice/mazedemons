@@ -65,7 +65,8 @@ enum class EMDAttackBlock : uint8
 	NoPawn,
 	Dead,
 	MenuOpen,
-	NoCombatComponent
+	NoCombatComponent,
+	Staggered // C1: the pawn's poise broke and it is stunned (blocks attack, heavy and dodge)
 };
 
 // One row of the Character panel's "Active effects" list: a perk rank, an upgrade bonus, worn gear or Exhausted.
@@ -190,10 +191,11 @@ public:
 	static FText FormatDeltaText(float Current, float New, bool bPercent);
 
 	// ---- Combat gate (U5) ----
-	// Pure truth table behind CanPawnAttack. Order: no pawn, dead, menu (local controllers only: menus never replicate),
+	// Pure truth table behind CanPawnAttack. Order: no pawn, dead, staggered, menu (local controllers only: menus never replicate),
 	// no combat component. Returns None when the attack may start.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
-	static EMDAttackBlock EvaluateAttackGate(bool bHasPawn, bool bDead, bool bLocal, bool bMenuOpen, bool bHasCombat);
+	// bStaggered (C1): stunned by a poise break; refused right after Dead, before the menu check (stun is replicated, menus are not).
+	static EMDAttackBlock EvaluateAttackGate(bool bHasPawn, bool bDead, bool bLocal, bool bMenuOpen, bool bHasCombat, bool bStaggered = false);
 
 	// Whether Pawn may start a melee attack right now; OutReason says why not. Works on clients and the server: the menu
 	// check applies only when the pawn is locally controlled, the server checks pawn, dead and combat component.

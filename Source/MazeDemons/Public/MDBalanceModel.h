@@ -59,6 +59,13 @@ public:
 	// AttackPower * (1 + AttackPowerPct) * (1 + Crit * (CritDamage - 1)) * (1 + ExecutionerPct * ExecutionerShare) / AttackInterval.
 	static float ExpectedDPS(float AttackPower, const FMDPerkModifiers& Mods, float ExecutionerShare, float AttackInterval);
 
+	// Average DPS of a whole attack chain (C1): AttackPower x sum(DamageMults) over the chain's total time, with the same perk
+	// modifiers as ExpectedDPS. StepIntervals[i] is the time from the start of step i to the start of the next (the last step's is
+	// its recovery before the chain can repeat). Equals ExpectedDPS with interval = total time / total multiplier; 0 for an empty or
+	// non-positive chain. Extra entries in the longer array are ignored.
+	static float ChainAverageDPS(float AttackPower, const FMDPerkModifiers& Mods, float ExecutionerShare,
+		const TArray<float>& DamageMults, const TArray<float>& StepIntervals);
+
 	// Reference cycle: sprint Max / Drain seconds, then recover for RegenDelay + RefillFraction * Max / Regen seconds.
 	// Returns sprint / (sprint + recover), or 0 when the inputs cannot sprint. With RefillFraction 1: bare 100 / 15 = 6.67 s
 	// against 1 + 100 / 20 = 6 s gives 52.6%; max Movement (150, drain 10.5, regen 29, delay 0.5) 14.3 s against 5.67 s gives 71.6%.

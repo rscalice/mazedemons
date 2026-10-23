@@ -30,6 +30,24 @@ float UMDBalanceModel::ExpectedDPS(float AttackPower, const FMDPerkModifiers& Mo
 	return AttackPower * (1.0f + Mods.AttackPowerPct) * CritFactor * ExecFactor / Interval;
 }
 
+float UMDBalanceModel::ChainAverageDPS(float AttackPower, const FMDPerkModifiers& Mods, float ExecutionerShare,
+	const TArray<float>& DamageMults, const TArray<float>& StepIntervals)
+{
+	const int32 Count = FMath::Min(DamageMults.Num(), StepIntervals.Num());
+	float TotalMult = 0.0f;
+	float TotalTime = 0.0f;
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		TotalMult += FMath::Max(DamageMults[Index], 0.0f);
+		TotalTime += FMath::Max(StepIntervals[Index], 0.0f);
+	}
+	if (TotalMult <= 0.0f || TotalTime <= 0.0f)
+	{
+		return 0.0f;
+	}
+	return ExpectedDPS(AttackPower, Mods, ExecutionerShare, TotalTime / TotalMult);
+}
+
 float UMDBalanceModel::SprintUptime(float MaxStamina, float RegenPerSec, float RegenDelay, float DrainPerSec, float RefillFraction)
 {
 	if (MaxStamina <= 0.0f || DrainPerSec <= 0.0f || RegenPerSec <= 0.0f)

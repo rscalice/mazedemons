@@ -8,6 +8,7 @@
 
 class UMDAbilitySystemComponent;
 class UMDAttributeSet;
+class UMDPoiseComponent;
 class UCapsuleComponent;
 class USkeletalMesh;
 class USkeletalMeshComponent;
@@ -70,6 +71,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMDAttributeSet> Attributes;
+
+	// C1: poise and hit reactions. Assign DA_Poise_Dummy to its Profile in the Blueprint.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMDPoiseComponent> Poise;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Test Dummy", meta = (ClampMin = "1"))
 	float StartingMaxHealth = 100.0f;

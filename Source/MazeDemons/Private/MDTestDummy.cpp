@@ -3,6 +3,7 @@
 #include "MDAbilitySystemComponent.h"
 #include "MDAttributeSet.h"
 #include "MDGameplayStatics.h"
+#include "MDPoiseComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "Components/CapsuleComponent.h"
@@ -50,6 +51,8 @@ AMDTestDummy::AMDTestDummy()
 	BootsMesh = MakeArmorComponent(TEXT("BootsMesh"));
 
 	bReplicates = true;
+
+	Poise = CreateDefaultSubobject<UMDPoiseComponent>(TEXT("Poise"));
 
 	AbilitySystem = CreateDefaultSubobject<UMDAbilitySystemComponent>(TEXT("AbilitySystem"));
 	AbilitySystem->SetIsReplicated(true);
@@ -162,6 +165,11 @@ void AMDTestDummy::UnequipAllArmor()
 void AMDTestDummy::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (Poise)
+	{
+		Poise->SetReactionMesh(Body);
+	}
 
 	if (AbilitySystem)
 	{
