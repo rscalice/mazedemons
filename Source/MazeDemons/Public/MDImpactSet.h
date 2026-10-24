@@ -31,6 +31,10 @@ struct MAZEDEMONS_API FMDImpactEntry
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact")
 	FVector DecalSize = FVector(8.0f, 24.0f, 24.0f);
+
+	// Multiplies the VFX scale (Reduced effects level scales it further).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact", meta = (ClampMin = "0"))
+	float VFXScale = 1.0f;
 };
 
 // Per weapon class impact effects (DA_Impact_Blade / Blunt / Heavy). Data only; the feedback component's Blueprint events use it.

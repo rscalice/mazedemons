@@ -4,8 +4,17 @@
 #include "MDCombatRules.h"
 #include "MDComboComponent.h"
 #include "MDDamageNumberWidget.h"
+#include "MDImpactMath.h"
 #include "MDImpactSet.h"
 #include "MDPoiseComponent.h"
+#include "MDPoiseProfile.h"
+#include "NiagaraComponent.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "Components/DecalComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "Particles/ParticleSystem.h"
+#include "Sound/SoundBase.h"
 #include "MDUISettings.h"
 #include "Camera/CameraShakeBase.h"
 #include "Camera/PlayerCameraManager.h"
@@ -232,6 +241,11 @@ void UMDCombatFeedbackComponent::NotifyReactionObserved(AActor* Victim, const FM
 	const UMDLocalSettings* Settings = GetDefault<UMDLocalSettings>();
 
 	PlayHitFlash(Victim);
+	if (bNativeImpact)
+	{
+		PlayNativeImpact(Victim, Hit);
+		PlayHurtSound(Victim, Hit);
+	}
 	OnImpact(Hit, DefaultImpactSet);
 
 	if (Victim == LocalPawn)
@@ -249,6 +263,88 @@ void UMDCombatFeedbackComponent::NotifyReactionObserved(AActor* Victim, const FM
 		ShowDamageNumber(Hit.Damage, Hit.bCrit, FVector(Hit.ImpactPoint));
 		OnHitNumber(Hit.Damage, Hit.bCrit, FVector(Hit.ImpactPoint));
 	}
+}
+
+void UMDCombatFeedbackComponent::PlayNativeImpact(AActor* Victim, const FMDHitResultRep& Hit)
+{
+	UWorld* World = GetWorld();
+	if (!World || !Victim)
+	{
+		return;
+	}
+	const UMDImpactSet* Set = DefaultImpactSet;
+	if (!Set)
+	{
+		return;
+	}
+	const FMDImpactEntry Entry = Set->FindEntry(Hit.Surface);
+	const EMDVFXLevel Level = GetDefault<UMDLocalSettings>()->VFXLevel;
+
+	FVector Point = FVector(Hit.ImpactPoint);
+	if (Point.IsNearlyZero())
+	{
+		Point = Victim->GetActorLocation();
+	}
+	const AActor* Attacker = Hit.Instigator;
+	// The replicated hit carries no normal: point the effect from attacker to victim.
+	const FVector Dir = MDImpactMath::ImpactDirection(FVector::ZeroVector, Attacker ? Attacker->GetActorLocation() : Point, Victim->GetActorLocation());
+	const FRotator Rot = Dir.Rotation();
+
+	if (Entry.VFX)
+	{
+		const FVector Scale(MDImpactMath::VFXScaleForLevel(Entry.VFXScale, Level));
+		if (UNiagaraSystem* Niagara = Cast<UNiagaraSystem>(Entry.VFX))
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAtLocation(World, Niagara, Point, Rot, Scale, true, true, ENCPoolMethod::AutoRelease);
+		}
+		else if (UParticleSystem* Cascade = Cast<UParticleSystem>(Entry.VFX))
+		{
+			UGameplayStatics::SpawnEmitterAtLocation(World, Cascade, Point, Rot, Scale, true);
+		}
+	}
+
+	if (Entry.Sound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(World, Entry.Sound, Point, FMath::FRandRange(0.95f, 1.05f), FMath::FRandRange(0.95f, 1.05f));
+	}
+
+	// Decals only on world geometry (anything that is not a pawn) and not on Reduced effects.
+	if (Entry.Decal && MDImpactMath::AllowDecals(Level) && !Victim->IsA<APawn>())
+	{
+		ActiveDecals.RemoveAll([](const TWeakObjectPtr<UDecalComponent>& D) { return !D.IsValid(); });
+		const int32 Evict = MDImpactMath::DecalsToEvict(ActiveDecals.Num(), Set->MaxDecalsPerZone);
+		for (int32 i = 0; i < Evict && ActiveDecals.Num() > 0; ++i)
+		{
+			if (UDecalComponent* Old = ActiveDecals[0].Get())
+			{
+				Old->DestroyComponent();
+			}
+			ActiveDecals.RemoveAt(0);
+		}
+		if (Set->MaxDecalsPerZone > 0)
+		{
+			if (UDecalComponent* Decal = UGameplayStatics::SpawnDecalAtLocation(World, Entry.Decal, Entry.DecalSize, Point, Rot, 10.0f))
+			{
+				ActiveDecals.Add(Decal);
+			}
+		}
+	}
+}
+
+void UMDCombatFeedbackComponent::PlayHurtSound(AActor* Victim, const FMDHitResultRep& Hit)
+{
+	if (!Victim || static_cast<int32>(Hit.Reaction) < static_cast<int32>(EMDHitReaction::Flinch))
+	{
+		return;
+	}
+	const UMDPoiseComponent* Poise = Victim->FindComponentByClass<UMDPoiseComponent>();
+	const UMDPoiseProfile* Profile = Poise ? Poise->GetProfile() : nullptr;
+	if (!Profile || !Profile->HurtSound || !MDImpactMath::CooldownElapsed(RealNow(), LastHurtSoundTime, 0.2))
+	{
+		return;
+	}
+	LastHurtSoundTime = RealNow();
+	UGameplayStatics::PlaySoundAtLocation(GetWorld(), Profile->HurtSound, Victim->GetActorLocation(), FMath::FRandRange(0.95f, 1.05f), FMath::FRandRange(0.95f, 1.05f));
 }
 
 void UMDCombatFeedbackComponent::PlayHitFlash(AActor* Victim)

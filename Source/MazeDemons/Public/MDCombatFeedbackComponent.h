@@ -159,6 +159,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact")
 	TObjectPtr<UMDImpactSet> DefaultImpactSet;
 
+	// Play impact VFX / sound / decal natively from the impact set (OnImpact is still called afterwards for Blueprint extras).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact")
+	bool bNativeImpact = true;
+
 	// ---- Server -> attacker ----
 	// Unreliable; the attacker's hit-stop, shake, rumble and damage number.
 	UFUNCTION(Client, Unreliable)
@@ -216,6 +220,11 @@ private:
 	void LoadDefaultAssets();
 	void RestoreOverlay(FMDHitFlashState& Flash);
 	void ShowDamageNumber(float Damage, bool bCrit, const FVector& Location);
+	void PlayNativeImpact(AActor* Victim, const FMDHitResultRep& Hit);
+	void PlayHurtSound(AActor* Victim, const FMDHitResultRep& Hit);
+
+	TArray<TWeakObjectPtr<class UDecalComponent>> ActiveDecals;
+	double LastHurtSoundTime = -1000.0;
 
 	UPROPERTY(Transient)
 	TArray<FMDHitFlashState> Flashes;

@@ -6,6 +6,7 @@
 #include "MDPoiseProfile.generated.h"
 
 class UAnimMontage;
+class USoundBase;
 
 // One reaction montage for a reaction type and hit direction.
 USTRUCT(BlueprintType)
@@ -55,6 +56,10 @@ public:
 	// 0..1, scales knockback strength down.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Poise", meta = (ClampMin = "0", ClampMax = "1"))
 	float KnockbackResist = 0.0f;
+
+	// Optional hurt sound played at the victim on a Flinch or worse (0.2 s cooldown per feedback component). Empty = none.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Reactions")
+	TObjectPtr<USoundBase> HurtSound = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Reactions")
 	TArray<FMDReactionMontage> ReactionMontages;

@@ -23,7 +23,8 @@ public class MazeDemons : ModuleRules
 				"DeveloperSettings",
 				"InputCore",
 				"EnhancedInput",
-				"PhysicsCore"
+				"PhysicsCore",
+				"Niagara"
 			});
 
 		PrivateDependencyModuleNames.Add("AssetRegistry"); // combo set validation test
