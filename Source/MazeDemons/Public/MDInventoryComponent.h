@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "MDCombatTypes.h"
 #include "MDInventoryTypes.h"
 #include "MDUITypes.h"
 #include "MDInventoryComponent.generated.h"
@@ -110,9 +111,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
 	float GetConsumableHeal(FName ItemRowName) const;
 
-	// Equip slot (E_ItemTypes value) for a row, or 255 if not equippable. Public wrapper for UI / stat comparison.
+	// Slot (E_ItemTypes value) the row would be equipped INTO right now, or 255 if not equippable. Public wrapper for UI / stat
+	// comparison. Same as the row's natural slot except for the dual-wield rule (see ResolveEquipSlot): a second matching
+	// sword reports OffHand (1).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
-	uint8 GetItemEquipSlot(FName ItemRowName) const { return GetSlotForItem(ItemRowName); }
+	uint8 GetItemEquipSlot(FName ItemRowName) const { return GetEquipDestinationSlot(ItemRowName); }
+
+	// C1 dual wield, pure rule. A MainHand item goes to the OffHand instead when it has a dual set (NewDual non-null), the main
+	// hand is occupied by an item with the SAME dual set (MainDual == NewDual) and the off hand is empty. Otherwise it keeps
+	// NaturalSlot. So: 2nd matching sword -> OffHand; 3rd (both hands full) -> swaps the MainHand sword; a sword without a
+	// DualComboSet always swaps the MainHand; Claymore / Axe / armor are never redirected.
+	static uint8 ResolveEquipSlot(uint8 NaturalSlot, const UMDComboSet* NewDual, const UMDComboSet* MainDual, bool bMainOccupied, bool bOffOccupied);
+
+	// Two-handed exclusivity, pure rule: the slots that cannot stay occupied when an item is equipped into Slot.
+	// MainHand / OffHand / Shield -> {TwoHanded}; TwoHanded -> {MainHand, OffHand, Shield}; any other slot -> {}.
+	// EquipItem returns every occupied conflicting slot to the bag (all-or-nothing on bag room).
+	static TArray<uint8> GetConflictingSlots(uint8 Slot);
+
+	// The slot EquipItem would use for a row given what is equipped now (GetSlotForItem + ResolveEquipSlot).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
+	uint8 GetEquipDestinationSlot(FName ItemRowName) const;
 
 	// ---- Item reads (DT_Items column Rarity_*, ArmorDamageReductionPercent_*; DT_ItemStats) ----
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Inventory")
@@ -140,6 +158,15 @@ public:
 	// Otherwise the main hand's ComboSet. Null = old DoLightAttack path. Call on every machine that plays montages.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	UMDComboSet* ResolveEquippedComboSet() const;
+
+	// Weapon stance pure rule (see EMDWeaponStance): two-hander -> Greatsword; main + off sharing the same non-empty
+	// DualComboSet (bDualPair) -> DualSword; any main or off weapon -> OneHanded; else Unarmed. Crossbow is reserved.
+	static EMDWeaponStance StanceForLoadout(bool bHasTwoHanded, bool bMainOccupied, bool bOffOccupied, bool bDualPair);
+
+	// Stance for what is equipped right now (same loadout reading as ResolveEquippedComboSet). Reads the replicated Equipped
+	// array, so it is valid on every machine. For the anim BP.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
+	EMDWeaponStance GetWeaponStance() const;
 
 	// ---- Durability / upgrades (DT_ItemStats columns; condition and upgrade level are per equipped slot) ----
 	// Max durability of a row (0 = none). Rows with durability never stack.

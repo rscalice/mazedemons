@@ -40,11 +40,41 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
 	static void SweepWeaponHand(AActor* Attacker, AActor* Weapon, UPARAM(ref) FVector& PrevTop, UPARAM(ref) FVector& PrevBottom, UPARAM(ref) TArray<AActor*>& HitThisAttack);
 
+	// Attach-socket names that carry the weapon actor(s) a swing of Hand traces: Main = MainHand + TwoHanded, Off = OffHand,
+	// Both = MainHand + TwoHanded + OffHand.
+	static TArray<FName> TraceSocketsForHand(EMDWeaponHand Hand);
+
+	// Pure rule: which hand(s) a trace window swings. Override != Auto wins (Main / Off / Both). Auto: no combo component -> Both
+	// (every weapon found); a step on Off or Both is used as is; a Main step becomes Both when the loadout is a dual pair
+	// (MainHand and OffHand weapons both attached) and the active combo set is bDualWield; otherwise Main (which also covers the
+	// TwoHanded socket, see TraceSocketsForHand).
+	static EMDWeaponHand ResolveTraceHand(EMDTraceHandOverride Override, bool bHasCombo, EMDWeaponHand StepHand, bool bDualPairAttached, bool bSetDualWield);
+
+	// Per-swing trace state (previous blade position per hand + targets already hit), kept per attacker in C++.
+	// Begin = reset at the start of the trace window, End = clear. Called by UMDANS_WeaponTrace (server).
+	static void BeginWeaponTrace(const AActor* Attacker);
+	static void EndWeaponTrace(const AActor* Attacker);
+
+	// Server: finds the weapon actors attached to Attacker by socket (MainHand / OffHand / TwoHanded), picks the ones the active
+	// combo step swings (all found when there is no combo component) and runs SweepWeaponHand on each. No dependency on AC_Combat.
+	// TraceHand overrides the choice (Auto = ResolveTraceHand). One hit list is shared by both hands in a trace window (a target is
+	// hit at most once per window even if both blades touch it); the previous blade positions are kept per hand. Existing callers
+	// that pass only Attacker keep working (Auto).
+	// Logs once per window which weapons were found and which hands were resolved. Debug: console "md.Combat.DrawTraces 1".
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
+	static void TraceEquippedWeapons(AActor* Attacker, EMDTraceHandOverride TraceHand = EMDTraceHandOverride::Auto);
+
 	// The Heavy button was released. The melee abilities are granted with no GAS input id and the BP_Player input events are not
 	// bound to the ability system, so GAS never calls InputReleased by itself: this does, on the avatar's active instance of
 	// AbilityClass (GA_PlayerHeavy). No-op when the ability is not active. Call on the owning client.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
 	static void ReleaseAbilityInput(AActor* Avatar, TSubclassOf<UGameplayAbility> AbilityClass);
+
+	// The weapon stance of an actor's loadout, for the anim BP (feeds the Chooser Table stance column). Accepts a pawn,
+	// controller or player state (the inventory lives on the PlayerState, see UMDGameplayStatics::GetInventory). Unarmed when
+	// the actor is null or has no inventory. Works on every machine (Equipped is replicated).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
+	static EMDWeaponStance GetWeaponStanceForActor(const AActor* Actor);
 
 	// md.Combat.DrawTraces, for AC_Combat's trace to draw its debug lines.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")

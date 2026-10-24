@@ -19,6 +19,18 @@ enum class EMDAttackKind : uint8
 	DodgeAttack
 };
 
+// Which weapon stance the character is in. Drives motion-matching idles / locomotion (ABP_SandboxCharacter reads it, a Chooser
+// Table enum column is bound to it). Values are stable: Chooser columns store them. Crossbow is reserved (no crossbow item yet).
+UENUM(BlueprintType)
+enum class EMDWeaponStance : uint8
+{
+	Unarmed = 0 UMETA(DisplayName = "Unarmed"),
+	Greatsword UMETA(DisplayName = "Greatsword"),
+	DualSword UMETA(DisplayName = "Dual Sword"),
+	OneHanded UMETA(DisplayName = "One Handed"),
+	Crossbow UMETA(DisplayName = "Crossbow")
+};
+
 UENUM(BlueprintType)
 enum class EMDHitDirection : uint8
 {
@@ -55,6 +67,17 @@ UENUM(BlueprintType)
 enum class EMDWeaponHand : uint8
 {
 	Main = 0,
+	Off,
+	Both
+};
+
+// Per-notify override of which weapon(s) a UMDANS_WeaponTrace window traces. Auto = decide from the active combo step and the
+// loadout (UMDCombatStatics::ResolveTraceHand). Main / Off / Both force it (e.g. one dual montage swinging left then right).
+UENUM(BlueprintType)
+enum class EMDTraceHandOverride : uint8
+{
+	Auto = 0,
+	Main,
 	Off,
 	Both
 };

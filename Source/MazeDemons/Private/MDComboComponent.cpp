@@ -3,6 +3,8 @@
 #include "MDAfterImageComponent.h"
 #include "MDComboSet.h"
 #include "MDGameplayStatics.h"
+#include "MDInventoryComponent.h"
+#include "TimerManager.h"
 #include "MDPoiseComponent.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
@@ -62,6 +64,55 @@ void UMDComboComponent::SetComboSet(UMDComboSet* NewSet)
 	{
 		ComboSet = NewSet;
 		NotifyInterrupted();
+	}
+}
+
+void UMDComboComponent::BeginPlay()
+{
+	Super::BeginPlay();
+	TryBindInventory();
+}
+
+void UMDComboComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(InventoryBindTimer);
+	}
+	if (UMDInventoryComponent* Inventory = BoundInventory.Get())
+	{
+		Inventory->OnEquipmentChanged.RemoveDynamic(this, &UMDComboComponent::HandleEquipmentChanged);
+	}
+	BoundInventory.Reset();
+	Super::EndPlay(EndPlayReason);
+}
+
+void UMDComboComponent::TryBindInventory()
+{
+	UWorld* World = GetWorld();
+	if (!World || BoundInventory.IsValid())
+	{
+		return;
+	}
+	if (UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(GetOwner()))
+	{
+		BoundInventory = Inventory;
+		Inventory->OnEquipmentChanged.AddUniqueDynamic(this, &UMDComboComponent::HandleEquipmentChanged);
+		HandleEquipmentChanged(); // pick up whatever is already equipped
+		return;
+	}
+	// Not there yet (PlayerState / possession arrives late on clients): retry for ~30 seconds.
+	if (++InventoryBindAttempts < 120)
+	{
+		World->GetTimerManager().SetTimer(InventoryBindTimer, this, &UMDComboComponent::TryBindInventory, 0.25f, false);
+	}
+}
+
+void UMDComboComponent::HandleEquipmentChanged()
+{
+	if (const UMDInventoryComponent* Inventory = BoundInventory.Get())
+	{
+		SetComboSet(Inventory->ResolveEquippedComboSet());
 	}
 }
 

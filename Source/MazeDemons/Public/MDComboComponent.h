@@ -136,8 +136,20 @@ public:
 	static UMDComboComponent* FindFor(const AActor* Actor);
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	// Keeps ComboSet in sync with the equipped loadout on every machine (the inventory lives on the PlayerState and may
+	// replicate after this pawn, so the bind retries on a short timer until it is found).
+	void TryBindInventory();
+	UFUNCTION()
+	void HandleEquipmentChanged();
+
+	TWeakObjectPtr<class UMDInventoryComponent> BoundInventory;
+	FTimerHandle InventoryBindTimer;
+	int32 InventoryBindAttempts = 0;
+
 	UFUNCTION(Server, Reliable)
 	void Server_RequestInput(EMDComboInput Input, float HeldSeconds);
 

@@ -9,6 +9,7 @@
 #include "MDComboComponent.h"
 #include "MDComboSet.h"
 #include "MDGameplayStatics.h"
+#include "MDInventoryComponent.h"
 #include "MDPoiseComponent.h"
 #include "MDPoiseProfile.h"
 #include "MDUISettings.h"
@@ -209,10 +210,6 @@ void UMDCombatStatics::SweepWeaponHand(AActor* Attacker, AActor* Weapon, FVector
 		return;
 	}
 	const bool bDraw = MDCombatDebug::ShouldDrawTraces();
-	if (bDraw)
-	{
-		DrawDebugLine(World, Bottom, Top, FColor::Cyan, false, 0.1f, 0, 1.5f);
-	}
 
 	const FVector PrevMid = (StartTop + StartBottom) * 0.5;
 	const FVector Mid = (Top + Bottom) * 0.5;
@@ -225,7 +222,31 @@ void UMDCombatStatics::SweepWeaponHand(AActor* Attacker, AActor* Weapon, FVector
 	Params.AddIgnoredActors(HitThisAttack);
 
 	FHitResult Hit;
-	if (!World->SweepSingleByChannel(Hit, PrevMid, Mid, Rotation, ECC_Visibility, FCollisionShape::MakeBox(FVector(Length * 0.5f, 10.0f, 10.0f)), Params))
+	const bool bHit = World->SweepSingleByChannel(Hit, PrevMid, Mid, Rotation, ECC_Visibility, FCollisionShape::MakeBox(FVector(Length * 0.5f, 10.0f, 10.0f)), Params);
+	if (bDraw)
+	{
+		// Mirrors Kismet's DrawDebugBoxTraceSingle: start/end boxes, connecting corner lines, red miss / green hit.
+		const float DrawTime = 1.0f;
+		const FVector HalfExtent(Length * 0.5f, 10.0f, 10.0f);
+		const FColor SweepColor = bHit ? FColor::Green : FColor::Red;
+		DrawDebugBox(World, PrevMid, HalfExtent, Rotation, SweepColor, false, DrawTime);
+		DrawDebugBox(World, Mid, HalfExtent, Rotation, SweepColor, false, DrawTime);
+		for (int32 Corner = 0; Corner < 8; ++Corner)
+		{
+			const FVector Offset(
+				(Corner & 1) ? HalfExtent.X : -HalfExtent.X,
+				(Corner & 2) ? HalfExtent.Y : -HalfExtent.Y,
+				(Corner & 4) ? HalfExtent.Z : -HalfExtent.Z);
+			const FVector Local = Rotation.RotateVector(Offset);
+			DrawDebugLine(World, PrevMid + Local, Mid + Local, SweepColor, false, DrawTime);
+		}
+		DrawDebugLine(World, PrevMid, Mid, SweepColor, false, DrawTime);
+		if (bHit)
+		{
+			DrawDebugBox(World, Hit.ImpactPoint, FVector(8.0f), FColor::Orange, false, DrawTime);
+		}
+	}
+	if (!bHit)
 	{
 		return;
 	}
@@ -235,10 +256,6 @@ void UMDCombatStatics::SweepWeaponHand(AActor* Attacker, AActor* Weapon, FVector
 		return; // only the server applies hits
 	}
 	HitThisAttack.AddUnique(Victim);
-	if (bDraw)
-	{
-		DrawDebugBox(World, Hit.ImpactPoint, FVector(8.0f), FColor::Orange, false, 0.5f);
-	}
 
 	UMDAbilitySystemComponent* VictimASC = UMDGameplayStatics::GetMDAbilitySystemComponent(Victim);
 	if (VictimASC)
@@ -255,6 +272,167 @@ void UMDCombatStatics::SweepWeaponHand(AActor* Attacker, AActor* Weapon, FVector
 	if (AttackerASC && AttackerASC->GetAttackPower() > 0.0f)
 	{
 		UGameplayStatics::ApplyDamage(Victim, AttackerASC->GetAttackPower(), AttackerPawn ? AttackerPawn->GetController() : nullptr, Attacker, UDamageType::StaticClass());
+	}
+}
+
+namespace MDCombatTraceLocal
+{
+	struct FHandTraceState
+	{
+		FVector PrevTop = FVector::ZeroVector;
+		FVector PrevBottom = FVector::ZeroVector;
+	};
+
+	struct FSwingTraceState
+	{
+		FHandTraceState Hands[2]; // 0 = main side (MainHand / TwoHanded), 1 = off hand
+		TArray<AActor*> HitThisAttack; // shared by both hands: a target is hit once per trace window
+		bool bLogged = false;
+	};
+
+	static TMap<TWeakObjectPtr<const AActor>, FSwingTraceState>& States()
+	{
+		static TMap<TWeakObjectPtr<const AActor>, FSwingTraceState> Map;
+		return Map;
+	}
+
+	static const FName MainHandSocket(TEXT("MainHand"));
+	static const FName OffHandSocket(TEXT("OffHand"));
+	static const FName TwoHandedSocket(TEXT("TwoHanded"));
+}
+
+TArray<FName> UMDCombatStatics::TraceSocketsForHand(EMDWeaponHand Hand)
+{
+	using namespace MDCombatTraceLocal;
+	switch (Hand)
+	{
+	case EMDWeaponHand::Off:
+		return { OffHandSocket };
+	case EMDWeaponHand::Both:
+		return { MainHandSocket, TwoHandedSocket, OffHandSocket };
+	case EMDWeaponHand::Main:
+	default:
+		return { MainHandSocket, TwoHandedSocket };
+	}
+}
+
+EMDWeaponHand UMDCombatStatics::ResolveTraceHand(EMDTraceHandOverride Override, bool bHasCombo, EMDWeaponHand StepHand, bool bDualPairAttached, bool bSetDualWield)
+{
+	switch (Override)
+	{
+	case EMDTraceHandOverride::Main:
+		return EMDWeaponHand::Main;
+	case EMDTraceHandOverride::Off:
+		return EMDWeaponHand::Off;
+	case EMDTraceHandOverride::Both:
+		return EMDWeaponHand::Both;
+	case EMDTraceHandOverride::Auto:
+	default:
+		break;
+	}
+	if (!bHasCombo)
+	{
+		return EMDWeaponHand::Both; // no combo component: trace every weapon found
+	}
+	if (StepHand != EMDWeaponHand::Main)
+	{
+		return StepHand;
+	}
+	return (bDualPairAttached && bSetDualWield) ? EMDWeaponHand::Both : EMDWeaponHand::Main;
+}
+
+void UMDCombatStatics::BeginWeaponTrace(const AActor* Attacker)
+{
+	if (Attacker)
+	{
+		MDCombatTraceLocal::States().Add(Attacker, MDCombatTraceLocal::FSwingTraceState());
+	}
+}
+
+void UMDCombatStatics::EndWeaponTrace(const AActor* Attacker)
+{
+	auto& Map = MDCombatTraceLocal::States();
+	if (Attacker)
+	{
+		Map.Remove(Attacker);
+	}
+	for (auto It = Map.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid())
+		{
+			It.RemoveCurrent();
+		}
+	}
+}
+
+void UMDCombatStatics::TraceEquippedWeapons(AActor* Attacker, EMDTraceHandOverride TraceHand)
+{
+	using namespace MDCombatTraceLocal;
+	if (!IsValid(Attacker) || !Attacker->HasAuthority())
+	{
+		return;
+	}
+	FSwingTraceState& State = States().FindOrAdd(Attacker);
+
+	// Weapon actors by the socket they are attached to on their parent.
+	TArray<AActor*> Attached;
+	Attacker->GetAttachedActors(Attached, true);
+	AActor* Found[3] = { nullptr, nullptr, nullptr }; // MainHand, TwoHanded, OffHand
+	for (AActor* Actor : Attached)
+	{
+		if (!IsValid(Actor))
+		{
+			continue;
+		}
+		const FName Socket = Actor->GetAttachParentSocketName();
+		if (Socket == MainHandSocket)
+		{
+			Found[0] = Actor;
+		}
+		else if (Socket == TwoHandedSocket)
+		{
+			Found[1] = Actor;
+		}
+		else if (Socket == OffHandSocket)
+		{
+			Found[2] = Actor;
+		}
+	}
+
+	const UMDComboComponent* Combo = UMDComboComponent::FindFor(Attacker);
+	const EMDWeaponHand StepHand = Combo ? Combo->GetActiveStepHand() : EMDWeaponHand::Main;
+	const bool bDualPair = Found[0] != nullptr && Found[2] != nullptr;
+	const bool bSetDual = Combo && Combo->ComboSet && Combo->ComboSet->bDualWield;
+	const EMDWeaponHand Hand = ResolveTraceHand(TraceHand, Combo != nullptr, StepHand, bDualPair, bSetDual);
+	const TArray<FName> Sockets = TraceSocketsForHand(Hand);
+
+	if (!State.bLogged)
+	{
+		State.bLogged = true;
+		UE_LOG(LogTemp, Log, TEXT("TraceEquippedWeapons %s: resolved hand=%d (override=%d stepHand=%d dualPair=%d setDualWield=%d) found MainHand=%s TwoHanded=%s OffHand=%s (attached actors: %d)%s"),
+			*GetNameSafe(Attacker), static_cast<int32>(Hand), static_cast<int32>(TraceHand), static_cast<int32>(StepHand), bDualPair ? 1 : 0, bSetDual ? 1 : 0,
+			*GetNameSafe(Found[0]), *GetNameSafe(Found[1]), *GetNameSafe(Found[2]), Attached.Num(),
+			(!Found[0] && !Found[1] && !Found[2]) ? TEXT(" -- NO WEAPON FOUND, nothing will trace") : TEXT(""));
+	}
+
+	auto Trace = [&](AActor* Weapon, FHandTraceState& Hs)
+	{
+		if (Weapon)
+		{
+			SweepWeaponHand(Attacker, Weapon, Hs.PrevTop, Hs.PrevBottom, State.HitThisAttack);
+		}
+	};
+	if (Sockets.Contains(MainHandSocket))
+	{
+		Trace(Found[0], State.Hands[0]);
+	}
+	if (Sockets.Contains(TwoHandedSocket))
+	{
+		Trace(Found[1], State.Hands[0]);
+	}
+	if (Sockets.Contains(OffHandSocket))
+	{
+		Trace(Found[2], State.Hands[1]);
 	}
 }
 
@@ -279,6 +457,12 @@ void UMDCombatStatics::ReleaseAbilityInput(AActor* Avatar, TSubclassOf<UGameplay
 			}
 		}
 	}
+}
+
+EMDWeaponStance UMDCombatStatics::GetWeaponStanceForActor(const AActor* Actor)
+{
+	const UMDInventoryComponent* Inv = UMDGameplayStatics::GetInventory(Actor);
+	return Inv ? Inv->GetWeaponStance() : EMDWeaponStance::Unarmed;
 }
 
 bool UMDCombatStatics::ShouldDrawTraces()

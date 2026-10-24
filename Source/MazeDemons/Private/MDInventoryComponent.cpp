@@ -641,6 +641,43 @@ UMDComboSet* UMDInventoryComponent::GetItemDualComboSet(FName ItemRowName) const
 	return Stats ? Stats->DualComboSet.LoadSynchronous() : nullptr;
 }
 
+uint8 UMDInventoryComponent::ResolveEquipSlot(uint8 NaturalSlot, const UMDComboSet* NewDual, const UMDComboSet* MainDual, bool bMainOccupied, bool bOffOccupied)
+{
+	if (NaturalSlot == MDItemType::MainHand && NewDual && NewDual == MainDual && bMainOccupied && !bOffOccupied)
+	{
+		return MDItemType::OffHand;
+	}
+	return NaturalSlot;
+}
+
+TArray<uint8> UMDInventoryComponent::GetConflictingSlots(uint8 Slot)
+{
+	switch (Slot)
+	{
+	case MDItemType::MainHand:
+	case MDItemType::OffHand:
+	case MDItemType::Shield:
+		return { MDItemType::TwoHanded };
+	case MDItemType::TwoHanded:
+		return { MDItemType::MainHand, MDItemType::OffHand, MDItemType::Shield };
+	default:
+		return {};
+	}
+}
+
+uint8 UMDInventoryComponent::GetEquipDestinationSlot(FName ItemRowName) const
+{
+	const uint8 Natural = GetSlotForItem(ItemRowName);
+	if (Natural != MDItemType::MainHand)
+	{
+		return Natural;
+	}
+	const FMDEquippedSlot* Main = FindEquippedSlot(MDItemType::MainHand);
+	const FMDEquippedSlot* Off = FindEquippedSlot(MDItemType::OffHand);
+	return ResolveEquipSlot(Natural, GetItemDualComboSet(ItemRowName),
+		Main ? GetItemDualComboSet(Main->ItemRowName) : nullptr, Main != nullptr, Off != nullptr);
+}
+
 UMDComboSet* UMDInventoryComponent::ResolveEquippedComboSet() const
 {
 	const FMDEquippedSlot* Two = FindEquippedSlot(MDItemType::TwoHanded);
@@ -652,6 +689,34 @@ UMDComboSet* UMDInventoryComponent::ResolveEquippedComboSet() const
 		Main ? GetItemComboSet(Main->ItemRowName) : nullptr,
 		Main ? GetItemDualComboSet(Main->ItemRowName) : nullptr,
 		Off ? GetItemDualComboSet(Off->ItemRowName) : nullptr);
+}
+
+EMDWeaponStance UMDInventoryComponent::StanceForLoadout(bool bHasTwoHanded, bool bMainOccupied, bool bOffOccupied, bool bDualPair)
+{
+	if (bHasTwoHanded)
+	{
+		return EMDWeaponStance::Greatsword;
+	}
+	if (bMainOccupied && bOffOccupied && bDualPair)
+	{
+		return EMDWeaponStance::DualSword;
+	}
+	if (bMainOccupied || bOffOccupied)
+	{
+		return EMDWeaponStance::OneHanded;
+	}
+	return EMDWeaponStance::Unarmed;
+}
+
+EMDWeaponStance UMDInventoryComponent::GetWeaponStance() const
+{
+	const FMDEquippedSlot* Two = FindEquippedSlot(MDItemType::TwoHanded);
+	const FMDEquippedSlot* Main = FindEquippedSlot(MDItemType::MainHand);
+	const FMDEquippedSlot* Off = FindEquippedSlot(MDItemType::OffHand);
+	const UMDComboSet* MainDual = Main ? GetItemDualComboSet(Main->ItemRowName) : nullptr;
+	const UMDComboSet* OffDual = Off ? GetItemDualComboSet(Off->ItemRowName) : nullptr;
+	const bool bDualPair = MainDual != nullptr && MainDual == OffDual;
+	return StanceForLoadout(Two != nullptr, Main != nullptr, Off != nullptr, bDualPair);
 }
 
 int32 UMDInventoryComponent::GetItemMaxDurability(FName ItemRowName) const
@@ -987,13 +1052,82 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 	{
 		return;
 	}
-	const uint8 Slot = GetSlotForItem(NewRow);
+	const uint8 Slot = GetEquipDestinationSlot(NewRow); // dual wield: a 2nd matching sword goes to the off hand
 	if (Slot >= GoldSlot)
 	{
 		return;
 	}
 
+	// Two-handed exclusivity: gather the equipped items that conflict with the destination slot and make sure the bag can
+	// take all of them (plus the swapped-out item) BEFORE changing anything. Simulated on a copy: the new item's unit leaves
+	// the bag first, then every returning item is added the way AddItemInstance would add it.
+	TArray<uint8> ToClear;
+	for (const uint8 ConflictSlot : GetConflictingSlots(Slot))
+	{
+		if (FindEquippedSlot(ConflictSlot))
+		{
+			ToClear.Add(ConflictSlot);
+		}
+	}
+	{
+		TArray<FName> Returning;
+		for (const uint8 ClearSlot : ToClear)
+		{
+			Returning.Add(FindEquippedSlot(ClearSlot)->ItemRowName);
+		}
+		if (const FMDEquippedSlot* Swapped = FindEquippedSlot(Slot))
+		{
+			Returning.Add(Swapped->ItemRowName);
+		}
+		if (Returning.Num() > 0)
+		{
+			TArray<FMDItemStack> Sim = Items;
+			if (Sim[Index].Quantity <= 1)
+			{
+				Sim.RemoveAt(Index);
+			}
+			else
+			{
+				Sim[Index].Quantity -= 1;
+			}
+			for (const FName ReturnRow : Returning)
+			{
+				bool bPlaced = false;
+				if (GetItemMaxDurability(ReturnRow) <= 0) // plain items top up existing stacks first
+				{
+					const int32 MaxStack = GetMaxStackForItem(ReturnRow);
+					for (FMDItemStack& Stack : Sim)
+					{
+						if (Stack.ItemRowName == ReturnRow && Stack.Quantity < MaxStack)
+						{
+							Stack.Quantity += 1;
+							bPlaced = true;
+							break;
+						}
+					}
+				}
+				if (!bPlaced)
+				{
+					if (Sim.Num() >= MaxSlots)
+					{
+						return; // not enough bag room for everything that comes off: change nothing
+					}
+					FMDItemStack& NewStack = Sim.AddDefaulted_GetRef();
+					NewStack.ItemRowName = ReturnRow;
+					NewStack.Quantity = 1;
+				}
+			}
+		}
+	}
+
 	BindToASC(); // idempotent; guarantees armor wear is wired for whoever equips
+
+	// Return the conflicting items to the bag (durability travels, bonuses and armor come off, K2_ClearEquipment fires).
+	// Done before Existing is looked up: it edits Equipped. Room was verified above.
+	for (const uint8 ClearSlot : ToClear)
+	{
+		UnequipSlot_Impl(ClearSlot);
+	}
 
 	FMDEquippedSlot* Existing = Equipped.FindByPredicate([Slot](const FMDEquippedSlot& E) { return E.Slot == Slot; });
 	const FName PreviousRow = Existing ? Existing->ItemRowName : NAME_None;
@@ -1004,10 +1138,7 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 
 	// Take one unit out of the stack.
 	const bool bStackEmptied = Items[Index].Quantity <= 1;
-	if (!PreviousRow.IsNone() && !bStackEmptied && !HasRoomForItem(PreviousRow, 1))
-	{
-		return; // no room to swap the old item back in
-	}
+	// Room for the swapped-out item was verified in the simulation above.
 	if (bStackEmptied)
 	{
 		Items.RemoveAt(Index);

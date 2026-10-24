@@ -1,5 +1,6 @@
 #include "MDCombatNotifies.h"
 
+#include "MDCombatStatics.h"
 #include "MDComboComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDPoiseComponent.h"
@@ -32,7 +33,14 @@ void UMDANS_WeaponTrace::NotifyBegin(USkeletalMeshComponent* MeshComp, UAnimSequ
 	const AActor* Owner = MeshComp ? MeshComp->GetOwner() : nullptr;
 	if (Owner && Owner->HasAuthority())
 	{
-		MDCombatNotifyLocal::CallCombatFunction(Owner, BeginFunctionName);
+		if (bUseCppTrace)
+		{
+			UMDCombatStatics::BeginWeaponTrace(Owner);
+		}
+		else
+		{
+			MDCombatNotifyLocal::CallCombatFunction(Owner, BeginFunctionName);
+		}
 	}
 }
 
@@ -42,7 +50,14 @@ void UMDANS_WeaponTrace::NotifyTick(USkeletalMeshComponent* MeshComp, UAnimSeque
 	const AActor* Owner = MeshComp ? MeshComp->GetOwner() : nullptr;
 	if (Owner && Owner->HasAuthority())
 	{
-		MDCombatNotifyLocal::CallCombatFunction(Owner, TickFunctionName);
+		if (bUseCppTrace)
+		{
+			UMDCombatStatics::TraceEquippedWeapons(const_cast<AActor*>(Owner), TraceHand);
+		}
+		else
+		{
+			MDCombatNotifyLocal::CallCombatFunction(Owner, TickFunctionName);
+		}
 	}
 }
 
@@ -52,7 +67,14 @@ void UMDANS_WeaponTrace::NotifyEnd(USkeletalMeshComponent* MeshComp, UAnimSequen
 	const AActor* Owner = MeshComp ? MeshComp->GetOwner() : nullptr;
 	if (Owner && Owner->HasAuthority())
 	{
-		MDCombatNotifyLocal::CallCombatFunction(Owner, EndFunctionName);
+		if (bUseCppTrace)
+		{
+			UMDCombatStatics::EndWeaponTrace(Owner);
+		}
+		else
+		{
+			MDCombatNotifyLocal::CallCombatFunction(Owner, EndFunctionName);
+		}
 	}
 }
 

@@ -2,6 +2,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "MDCombatStatics.h"
 #include "MDGameplayStatics.h"
 #include "MDPlayerController.h"
 
@@ -116,4 +117,42 @@ bool FMDDeltaTextRoundingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDTraceHandsTest, "MazeDemons.Combat.TraceHands", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDTraceHandsTest::RunTest(const FString& Parameters)
+{
+	const FName MainHand(TEXT("MainHand"));
+	const FName OffHand(TEXT("OffHand"));
+	const FName TwoHanded(TEXT("TwoHanded"));
+
+	const TArray<FName> Main = UMDCombatStatics::TraceSocketsForHand(EMDWeaponHand::Main);
+	TestEqual(TEXT("main: two sockets"), Main.Num(), 2);
+	TestTrue(TEXT("main: MainHand"), Main.Contains(MainHand));
+	TestTrue(TEXT("main: TwoHanded"), Main.Contains(TwoHanded));
+	TestFalse(TEXT("main: not OffHand"), Main.Contains(OffHand));
+
+	const TArray<FName> Off = UMDCombatStatics::TraceSocketsForHand(EMDWeaponHand::Off);
+	TestEqual(TEXT("off: one socket"), Off.Num(), 1);
+	TestTrue(TEXT("off: OffHand"), Off.Contains(OffHand));
+
+	const TArray<FName> Both = UMDCombatStatics::TraceSocketsForHand(EMDWeaponHand::Both);
+	TestEqual(TEXT("both: three sockets"), Both.Num(), 3);
+	TestTrue(TEXT("both: all present"), Both.Contains(MainHand) && Both.Contains(OffHand) && Both.Contains(TwoHanded));
+
+	// Resolution rule: (override, hasCombo, stepHand, dualPairAttached, setDualWield).
+	using EOv = EMDTraceHandOverride;
+	using EH = EMDWeaponHand;
+	auto Resolve = [](EOv Ov, bool bCombo, EH Step, bool bPair, bool bSet) { return static_cast<int32>(UMDCombatStatics::ResolveTraceHand(Ov, bCombo, Step, bPair, bSet)); };
+	TestEqual(TEXT("override Main wins over an Off step"), Resolve(EOv::Main, true, EH::Off, true, true), static_cast<int32>(EH::Main));
+	TestEqual(TEXT("override Off wins over a Main step on a dual pair"), Resolve(EOv::Off, true, EH::Main, true, true), static_cast<int32>(EH::Off));
+	TestEqual(TEXT("override Both wins with no combo"), Resolve(EOv::Both, false, EH::Main, false, false), static_cast<int32>(EH::Both));
+	TestEqual(TEXT("auto: Main step + dual pair + dual set -> Both"), Resolve(EOv::Auto, true, EH::Main, true, true), static_cast<int32>(EH::Both));
+	TestEqual(TEXT("auto: Main step, dual pair but set not dual -> Main"), Resolve(EOv::Auto, true, EH::Main, true, false), static_cast<int32>(EH::Main));
+	TestEqual(TEXT("auto: Main step, dual set but only one weapon -> Main"), Resolve(EOv::Auto, true, EH::Main, false, true), static_cast<int32>(EH::Main));
+	TestEqual(TEXT("auto: Off step -> Off"), Resolve(EOv::Auto, true, EH::Off, true, true), static_cast<int32>(EH::Off));
+	TestEqual(TEXT("auto: Both step -> Both"), Resolve(EOv::Auto, true, EH::Both, true, true), static_cast<int32>(EH::Both));
+	TestEqual(TEXT("auto: no combo component -> Both (all found weapons)"), Resolve(EOv::Auto, false, EH::Main, false, false), static_cast<int32>(EH::Both));
+	const EH TwoHander = UMDCombatStatics::ResolveTraceHand(EOv::Auto, true, EH::Main, false, false);
+	TestTrue(TEXT("two-hander: resolves to Main, whose sockets include TwoHanded"), TwoHander == EH::Main && UMDCombatStatics::TraceSocketsForHand(TwoHander).Contains(TwoHanded));
+	return true;
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

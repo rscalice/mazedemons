@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Animation/AnimNotifies/AnimNotifyState.h"
+#include "MDCombatTypes.h"
 #include "MDCombatNotifies.generated.h"
 
 // Weapon trace window. On the server it calls AC_Combat's trace function (default DoWeaponTrace, which must take no parameters)
@@ -16,8 +17,19 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Trace")
 	FName BeginFunctionName = NAME_None;
 
+	// True (default): the trace runs fully in C++ (UMDCombatStatics::TraceEquippedWeapons) on the server and the Begin / Tick / End
+	// function names below are ignored. False: legacy path, calls the named AC_Combat functions instead.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Trace")
-	FName TickFunctionName = TEXT("DoWeaponTrace");
+	bool bUseCppTrace = true;
+
+	// Which weapon this window traces. Auto (default, so old notifies are unchanged) follows the active combo step and the loadout;
+	// Main / Off / Both force it. Use two windows in one montage (one Off, one Main) when a single montage swings both blades in turn.
+	// Only used by the C++ trace.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Trace")
+	EMDTraceHandOverride TraceHand = EMDTraceHandOverride::Auto;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Trace")
+	FName TickFunctionName = NAME_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Trace")
 	FName EndFunctionName = NAME_None;
