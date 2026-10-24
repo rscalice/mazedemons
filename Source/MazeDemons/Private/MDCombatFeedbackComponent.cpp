@@ -3,6 +3,7 @@
 #include "MDCombatDebug.h"
 #include "MDCombatRules.h"
 #include "MDComboComponent.h"
+#include "MDDamageNumberWidget.h"
 #include "MDImpactSet.h"
 #include "MDPoiseComponent.h"
 #include "MDUISettings.h"
@@ -18,9 +19,34 @@
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Blueprint/UserWidget.h"
+#include "UObject/SoftObjectPath.h"
+
+namespace MDFeedbackLocal
+{
+	// Default asset locations. Loaded lazily (BeginPlay) so a missing asset is a quiet no-op instead of a startup error.
+	const TCHAR* const LightShakePath = TEXT("/Game/Data/Combat/CS_Hit_Light.CS_Hit_Light_C");
+	const TCHAR* const HeavyShakePath = TEXT("/Game/Data/Combat/CS_Hit_Heavy.CS_Hit_Heavy_C");
+	const TCHAR* const LightRumblePath = TEXT("/Game/Data/Combat/FFE_Hit_Light.FFE_Hit_Light");
+	const TCHAR* const HeavyRumblePath = TEXT("/Game/Data/Combat/FFE_Hit_Heavy.FFE_Hit_Heavy");
+	const TCHAR* const FlashOverlayPath = TEXT("/Game/Materials/Combat/M_HitFlashOverlay.M_HitFlashOverlay");
+	const TCHAR* const BladeImpactPath = TEXT("/Game/Data/Combat/DA_Impact_Blade.DA_Impact_Blade");
+
+	template <typename T>
+	T* LoadAsset(const TCHAR* Path)
+	{
+		return Cast<T>(FSoftObjectPath(Path).TryLoad());
+	}
+
+	TSubclassOf<UCameraShakeBase> LoadShake(const TCHAR* Path)
+	{
+		return Cast<UClass>(FSoftObjectPath(Path).TryLoad());
+	}
+}
 
 UMDCombatFeedbackComponent::UMDCombatFeedbackComponent()
 {
+	DamageNumberClass = UMDDamageNumberWidget::StaticClass();
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = true;
 	PrimaryComponentTick.bTickEvenWhenPaused = false;
@@ -116,17 +142,83 @@ void UMDCombatFeedbackComponent::Client_ConfirmHit_Implementation(const FMDHitCo
 
 	if (Settings->DamageNumberMode != EMDDamageNumberMode::Off && Confirm.Damage > 0.0f)
 	{
+		ShowDamageNumber(Confirm.Damage, Confirm.bCrit, Confirm.Location);
 		OnHitNumber(Confirm.Damage, Confirm.bCrit, Confirm.Location);
 	}
 
-	if (Confirm.HitStopFrames > 0)
+	const int32 Frames = UMDCombatRules::EffectiveHitStopFrames(Confirm.HitStopFrames, Confirm.Kind, LightHitStopMinFrames, HeavyHitStopMinFrames);
+	if (Frames > 0)
 	{
-		ApplyHitStop(PC->GetPawn(), Confirm.Victim, UMDCombatRules::HitStopSeconds(Confirm.HitStopFrames, 1.0f));
+		ApplyHitStop(PC->GetPawn(), Confirm.Victim, UMDCombatRules::HitStopSeconds(Frames, 1.0f));
 	}
 
 	const bool bHeavy = Confirm.Kind == EMDAttackKind::Heavy || Confirm.Kind == EMDAttackKind::Charged;
 	StartShake(bHeavy && HeavyShake ? HeavyShake : LightShake, Confirm.ShakeScale);
-	PlayRumble(HitRumble);
+	PlayRumble(bHeavy && HeavyRumble ? HeavyRumble : HitRumble);
+}
+
+void UMDCombatFeedbackComponent::LoadDefaultAssets()
+{
+	using namespace MDFeedbackLocal;
+	if (!LightShake) { LightShake = LoadShake(LightShakePath); }
+	if (!HeavyShake) { HeavyShake = LoadShake(HeavyShakePath); }
+	if (!VictimShake) { VictimShake = LightShake; }
+	if (!HitRumble) { HitRumble = LoadAsset<UForceFeedbackEffect>(LightRumblePath); }
+	if (!HeavyRumble) { HeavyRumble = LoadAsset<UForceFeedbackEffect>(HeavyRumblePath); }
+	if (!StaggerRumble) { StaggerRumble = HeavyRumble; }
+	if (!HitFlashOverlayMaterial) { HitFlashOverlayMaterial = LoadAsset<UMaterialInterface>(FlashOverlayPath); }
+	if (!DefaultImpactSet) { DefaultImpactSet = LoadAsset<UMDImpactSet>(BladeImpactPath); }
+}
+
+void UMDCombatFeedbackComponent::BeginPlay()
+{
+	Super::BeginPlay();
+	const UWorld* World = GetWorld();
+	if (World && World->GetNetMode() != NM_DedicatedServer)
+	{
+		LoadDefaultAssets();
+	}
+}
+
+void UMDCombatFeedbackComponent::ShowDamageNumber(float Damage, bool bCrit, const FVector& Location)
+{
+	APlayerController* PC = GetLocalController();
+	if (!bNativeDamageNumbers || !PC || !DamageNumberClass)
+	{
+		return;
+	}
+	UMDDamageNumberWidget* Widget = nullptr;
+	for (UMDDamageNumberWidget* Pooled : DamageNumberPool)
+	{
+		if (Pooled && !Pooled->IsActive())
+		{
+			Widget = Pooled;
+			break;
+		}
+	}
+	if (!Widget && DamageNumberPool.Num() < DamageNumberPoolSize)
+	{
+		Widget = CreateWidget<UMDDamageNumberWidget>(PC, DamageNumberClass);
+		if (Widget)
+		{
+			DamageNumberPool.Add(Widget);
+		}
+	}
+	if (!Widget)
+	{
+		// Pool exhausted: recycle the oldest.
+		for (UMDDamageNumberWidget* Pooled : DamageNumberPool)
+		{
+			if (Pooled && (!Widget || Pooled->GetStartTime() < Widget->GetStartTime()))
+			{
+				Widget = Pooled;
+			}
+		}
+	}
+	if (Widget)
+	{
+		Widget->Start(PC, Location + FVector(0.0f, 0.0f, 40.0f), Damage, bCrit);
+	}
 }
 
 void UMDCombatFeedbackComponent::NotifyReactionObserved(AActor* Victim, const FMDHitResultRep& Hit)
@@ -154,6 +246,7 @@ void UMDCombatFeedbackComponent::NotifyReactionObserved(AActor* Victim, const FM
 	// "All" mode also shows other people's numbers; the attacker's own come from Client_ConfirmHit.
 	if (Settings->DamageNumberMode == EMDDamageNumberMode::All && Hit.Instigator != LocalPawn && Hit.Damage > 0.0f)
 	{
+		ShowDamageNumber(Hit.Damage, Hit.bCrit, FVector(Hit.ImpactPoint));
 		OnHitNumber(Hit.Damage, Hit.bCrit, FVector(Hit.ImpactPoint));
 	}
 }
@@ -179,6 +272,22 @@ void UMDCombatFeedbackComponent::PlayHitFlash(AActor* Victim)
 		State = &Flashes.AddDefaulted_GetRef();
 		State->Actor = Victim;
 		TInlineComponentArray<USkeletalMeshComponent*> Meshes(Victim);
+		if (HitFlashOverlayMaterial)
+		{
+			// Overlay path: one MID per victim, laid over every skeletal mesh (body, armor, weapons). The previous overlay is kept
+			// and restored when the flash ends.
+			State->OverlayMID = UMaterialInstanceDynamic::Create(HitFlashOverlayMaterial, this);
+			for (USkeletalMeshComponent* Mesh : Meshes)
+			{
+				if (Mesh && Mesh->GetSkeletalMeshAsset())
+				{
+					State->OverlayMeshes.Add(Mesh);
+					State->PreviousOverlays.Add(Mesh->GetOverlayMaterial());
+					Mesh->SetOverlayMaterial(State->OverlayMID);
+				}
+			}
+			Meshes.Reset();
+		}
 		for (USkeletalMeshComponent* Mesh : Meshes)
 		{
 			const int32 SlotCount = Mesh->GetNumMaterials();
@@ -254,6 +363,20 @@ void UMDCombatFeedbackComponent::ApplyHitStop(AActor* A, AActor* B, float Second
 	}
 }
 
+void UMDCombatFeedbackComponent::RestoreOverlay(FMDHitFlashState& Flash)
+{
+	for (int32 Index = 0; Index < Flash.OverlayMeshes.Num(); ++Index)
+	{
+		USkeletalMeshComponent* Mesh = Flash.OverlayMeshes[Index];
+		if (IsValid(Mesh) && Mesh->GetOverlayMaterial() == Flash.OverlayMID)
+		{
+			Mesh->SetOverlayMaterial(Flash.PreviousOverlays.IsValidIndex(Index) ? Flash.PreviousOverlays[Index].Get() : nullptr);
+		}
+	}
+	Flash.OverlayMeshes.Reset();
+	Flash.PreviousOverlays.Reset();
+}
+
 void UMDCombatFeedbackComponent::RestoreAll()
 {
 	for (const FHitStopEntry& Entry : HitStops)
@@ -263,6 +386,7 @@ void UMDCombatFeedbackComponent::RestoreAll()
 	HitStops.Reset();
 	for (FMDHitFlashState& Flash : Flashes)
 	{
+		RestoreOverlay(Flash);
 		for (UMaterialInstanceDynamic* Material : Flash.Materials)
 		{
 			if (Material)
@@ -312,8 +436,16 @@ void UMDCombatFeedbackComponent::TickComponent(float DeltaTime, ELevelTick TickT
 			float Value = 0.0f;
 			if (!bDone)
 			{
-				Value = HitFlashCurve ? HitFlashCurve->GetFloatValue(T) : FMath::Square(1.0f - T);
+				Value = HitFlashCurve ? HitFlashCurve->GetFloatValue(T) : UMDCombatRules::HitFlashEnvelope(T);
 				Value *= Peak;
+			}
+			if (Flash.OverlayMID)
+			{
+				Flash.OverlayMID->SetScalarParameterValue(HitFlashParameter, Value);
+			}
+			if (bDone)
+			{
+				RestoreOverlay(Flash);
 			}
 			for (UMaterialInstanceDynamic* Material : Flash.Materials)
 			{

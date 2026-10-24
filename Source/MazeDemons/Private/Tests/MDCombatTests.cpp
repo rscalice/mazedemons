@@ -560,4 +560,29 @@ bool FMDComboDPSCeilingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// C1 WP6: hit-stop floors and the hit flash envelope.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDFeelHitStopFloorsTest, "MazeDemons.Combat.Feel.HitStopFloors",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDFeelHitStopFloorsTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("light raised to the floor"), UMDCombatRules::EffectiveHitStopFrames(2, EMDAttackKind::Light, 4, 7), 4);
+	TestEqual(TEXT("heavy raised to the floor"), UMDCombatRules::EffectiveHitStopFrames(3, EMDAttackKind::Heavy, 4, 7), 7);
+	TestEqual(TEXT("charged uses the heavy floor"), UMDCombatRules::EffectiveHitStopFrames(1, EMDAttackKind::Charged, 4, 7), 7);
+	TestEqual(TEXT("longer step keeps its frames"), UMDCombatRules::EffectiveHitStopFrames(9, EMDAttackKind::Light, 4, 7), 9);
+	TestEqual(TEXT("zero opts out"), UMDCombatRules::EffectiveHitStopFrames(0, EMDAttackKind::Heavy, 4, 7), 0);
+	TestTrue(TEXT("7 frames fits under the 120 ms cap"), UMDCombatRules::HitStopSeconds(7) < UMDCombatRules::MaxHitStopSeconds);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDFeelFlashEnvelopeTest, "MazeDemons.Combat.Feel.FlashEnvelope",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDFeelFlashEnvelopeTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("full at the start"), UMDCombatRules::HitFlashEnvelope(0.0f), 1.0f, 0.0001f);
+	TestEqual(TEXT("quarter at the middle"), UMDCombatRules::HitFlashEnvelope(0.5f), 0.25f, 0.0001f);
+	TestEqual(TEXT("gone at the end"), UMDCombatRules::HitFlashEnvelope(1.0f), 0.0f, 0.0001f);
+	TestEqual(TEXT("zero before the start"), UMDCombatRules::HitFlashEnvelope(-0.2f), 0.0f, 0.0001f);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

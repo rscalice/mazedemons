@@ -8,6 +8,7 @@
 class AActor;
 class UAnimMontage;
 class UPhysicalMaterial;
+class USoundBase;
 
 // What kind of swing a step is.
 UENUM(BlueprintType)
@@ -164,6 +165,10 @@ struct MAZEDEMONS_API FMDAttackStep
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
 	FGameplayTag ImpactTag;
+
+	// Swing whoosh played when the step starts (every machine). Empty = silent; fill from the "General Whoosh SFX" pack.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
+	TObjectPtr<USoundBase> SwingSound = nullptr;
 
 	// Data fallback for the combo window (fraction of the montage section, 0..1). Montage notify states win when present.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step", meta = (ClampMin = "0", ClampMax = "1"))

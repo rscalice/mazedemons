@@ -10,6 +10,8 @@
 #include "Animation/AnimMontage.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
@@ -407,6 +409,11 @@ void UMDComboComponent::StartStep(EMDAttackKind Kind, int32 Index)
 		}
 	}
 
+	if (ActiveStep.SwingSound && GetOwner())
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, ActiveStep.SwingSound, GetOwner()->GetActorLocation()); // swing whoosh hook (data only)
+	}
+
 	OnStepStarted.Broadcast(ActiveStep, Kind, Index);
 
 	if (IsAuthority())
@@ -446,6 +453,10 @@ void UMDComboComponent::Multicast_PlayStep_Implementation(EMDAttackKind Kind, in
 		{
 			AfterImage->StartTrail(FallbackStepDuration);
 		}
+	}
+	if (Step.SwingSound && GetOwner())
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, Step.SwingSound, GetOwner()->GetActorLocation());
 	}
 	OnStepStarted.Broadcast(Step, Kind, Index);
 }

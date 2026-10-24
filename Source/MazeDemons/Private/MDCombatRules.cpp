@@ -240,6 +240,25 @@ float UMDCombatRules::HitStopSeconds(int32 Frames, float Scale, float MaxSeconds
 	return FMath::Clamp(Seconds, 0.0f, FMath::Max(MaxSeconds, 0.0f));
 }
 
+int32 UMDCombatRules::EffectiveHitStopFrames(int32 StepFrames, EMDAttackKind Kind, int32 LightMin, int32 HeavyMin)
+{
+	if (StepFrames <= 0)
+	{
+		return 0;
+	}
+	const bool bHeavy = Kind == EMDAttackKind::Heavy || Kind == EMDAttackKind::Charged;
+	return FMath::Max(StepFrames, bHeavy ? HeavyMin : LightMin);
+}
+
+float UMDCombatRules::HitFlashEnvelope(float NormalizedTime)
+{
+	if (NormalizedTime < 0.0f || NormalizedTime >= 1.0f)
+	{
+		return 0.0f;
+	}
+	return FMath::Square(1.0f - NormalizedTime);
+}
+
 EMDDodgeDirection UMDCombatRules::DodgeDirectionFromInput(const FVector& WorldInput, const FVector& Forward)
 {
 	FVector Input = WorldInput;

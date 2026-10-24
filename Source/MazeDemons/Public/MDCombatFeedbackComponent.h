@@ -9,8 +9,10 @@ class APlayerController;
 class UCameraShakeBase;
 class UCurveFloat;
 class UForceFeedbackEffect;
+class UMDDamageNumberWidget;
 class UMDImpactSet;
 class UMaterialInstanceDynamic;
+class UMaterialInterface;
 class USkeletalMeshComponent;
 class UWorld;
 
@@ -54,6 +56,17 @@ struct FMDHitFlashState
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials;
 
+	// Per-victim overlay material instance (drives the HitFlash scalar on the overlay).
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> OverlayMID;
+
+	// Meshes the overlay was put on and what overlay they had before.
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<USkeletalMeshComponent>> OverlayMeshes;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> PreviousOverlays;
+
 	TWeakObjectPtr<AActor> Actor;
 	double StartTime = 0.0;
 };
@@ -79,6 +92,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hit Stop")
 	bool bUseActorTimeDilation = false;
 
+	// Floors applied to the combo step's HitStopFrames (60 fps frames) so hits are always felt. Still capped at 120 ms.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hit Stop", meta = (ClampMin = "0", ClampMax = "7"))
+	int32 LightHitStopMinFrames = 4;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hit Stop", meta = (ClampMin = "0", ClampMax = "7"))
+	int32 HeavyHitStopMinFrames = 7;
+
 	// ---- Camera shake and rumble ----
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shake")
 	TSubclassOf<UCameraShakeBase> LightShake;
@@ -96,6 +116,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rumble")
 	TObjectPtr<UForceFeedbackEffect> HitRumble;
 
+	// Attacker rumble for heavy / charged hits.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rumble")
+	TObjectPtr<UForceFeedbackEffect> HeavyRumble;
+
 	// Played on the victim for a stagger or worse.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rumble")
 	TObjectPtr<UForceFeedbackEffect> StaggerRumble;
@@ -110,6 +134,22 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hit Flash", meta = (ClampMin = "0"))
 	float HitFlashPeak = 1.0f;
+
+	// Overlay material put on every skeletal mesh of the victim for HitFlashDuration (needs a scalar parameter "HitFlash").
+	// When set it replaces the per-slot material parameter approach (which needs every character material to have the parameter).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hit Flash")
+	TObjectPtr<UMaterialInterface> HitFlashOverlayMaterial;
+
+	// ---- Damage numbers (native, pooled, screen projected) ----
+	// Disable if a Blueprint implements OnHitNumber instead.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage Numbers")
+	bool bNativeDamageNumbers = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage Numbers")
+	TSubclassOf<UMDDamageNumberWidget> DamageNumberClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage Numbers", meta = (ClampMin = "1", ClampMax = "64"))
+	int32 DamageNumberPoolSize = 16;
 
 	// Optional shape over normalised time (0..1 -> 0..1). Empty = quadratic falloff.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hit Flash")
@@ -155,6 +195,7 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
@@ -172,9 +213,15 @@ private:
 	void StartShake(TSubclassOf<UCameraShakeBase> Shake, float Scale);
 	void PlayRumble(UForceFeedbackEffect* Effect);
 	void DrawDebug();
+	void LoadDefaultAssets();
+	void RestoreOverlay(FMDHitFlashState& Flash);
+	void ShowDamageNumber(float Damage, bool bCrit, const FVector& Location);
 
 	UPROPERTY(Transient)
 	TArray<FMDHitFlashState> Flashes;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMDDamageNumberWidget>> DamageNumberPool;
 
 	TArray<FHitStopEntry> HitStops;
 };

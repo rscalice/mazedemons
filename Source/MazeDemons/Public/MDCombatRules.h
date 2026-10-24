@@ -111,6 +111,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
 	static float HitStopSeconds(int32 Frames, float Scale = 1.0f, float MaxSeconds = 0.12f);
 
+	// Hit-stop frames actually used: the step's frames raised to the per-kind floor (heavy / charged use HeavyMin, others LightMin).
+	// A step with 0 frames stays 0 (the step opted out).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
+	static int32 EffectiveHitStopFrames(int32 StepFrames, EMDAttackKind Kind, int32 LightMin, int32 HeavyMin);
+
+	// Hit flash strength over normalised time: 1 at T=0 falling quadratically to 0 at T=1 (0 outside 0..1).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
+	static float HitFlashEnvelope(float NormalizedTime);
+
 	// Dodge direction from the movement input relative to the facing. No input = Backward.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Combat")
 	static EMDDodgeDirection DodgeDirectionFromInput(const FVector& WorldInput, const FVector& Forward);

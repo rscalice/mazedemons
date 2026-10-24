@@ -7,7 +7,9 @@
 #include "MDCombatFeedbackComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDGameplayTags.h"
+#include "MDPhysicalHitReactComponent.h"
 #include "MDPoiseProfile.h"
+#include "PhysicsEngine/PhysicsAsset.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -398,6 +400,25 @@ void UMDPoiseComponent::PlayReaction(const FMDHitResultRep& Hit)
 			}
 			// A flinch is additive and must not stop the swing that is playing: do not stop other montages.
 			Anim->Montage_Play(Montage, 1.0f, EMontagePlayReturnType::MontageLength, 0.0f, bFullBody);
+		}
+	}
+
+	// Cosmetic physical flinch, layered under every reaction (flinch and stronger). Local on each machine; the component is
+	// created on first use so no Blueprint needs editing. Skips meshes whose physics asset has no spine body.
+	if (AActor* Owner = GetOwner())
+	{
+		if (Mesh)
+		{
+			UMDPhysicalHitReactComponent* Physical = Owner->FindComponentByClass<UMDPhysicalHitReactComponent>();
+			if (!Physical && Mesh->GetPhysicsAsset())
+			{
+				Physical = NewObject<UMDPhysicalHitReactComponent>(Owner, TEXT("MDPhysicalHitReact"));
+				Physical->RegisterComponent();
+			}
+			if (Physical)
+			{
+				Physical->PlayHitReaction(Mesh, Hit.Direction, Hit.Reaction);
+			}
 		}
 	}
 
