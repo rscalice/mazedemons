@@ -6,6 +6,6 @@ $d = "$p\Saved\ClaudeDump"
 if (Get-Process UnrealEditor -ErrorAction SilentlyContinue) { Write-Host "Unreal Editor is still open. Close it and run this again." -ForegroundColor Yellow; exit 1 }
 if (Test-Path "$d\convertwn.txt") { Remove-Item "$d\convertwn.txt" }
 Write-Host "Converting trail notifies..."
-& $ue "$p\MazeDemons.uproject" -run=pythonscript -script="$d\convertwn.py" -unattended -nosplash -NullRHI *> "$d\convertwn.log"
+& $ue "$p\MazeDemons.uproject" -run=pythonscript -script="$p\Scripts\Python\convertwn.py" -unattended -nosplash -NullRHI *> "$d\convertwn.log"
 Write-Host "`n== Report ==" -ForegroundColor Cyan
 if (Test-Path "$d\convertwn.txt") { Get-Content "$d\convertwn.txt" } else { Write-Host "convertwn.txt missing - see $d\convertwn.log" -ForegroundColor Red }

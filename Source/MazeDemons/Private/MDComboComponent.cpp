@@ -15,6 +15,18 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
+#include "MDWarpTargeting.h"
+#include "MotionWarpingComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Engine/OverlapResult.h"
+#include "CollisionQueryParams.h"
+
+namespace
+{
+	const FName MDAttackWarpTarget(TEXT("AttackTarget"));
+	constexpr float MDWarpConeHalfAngle = 60.0f;
+	constexpr float MDWarpServerTolerance = 150.0f;
+}
 
 UMDComboComponent::UMDComboComponent()
 {
@@ -147,7 +159,8 @@ void UMDComboComponent::RequestInput(EMDComboInput Input, float HeldSeconds)
 	}
 	if (!IsAuthority() && IsOwnerLocal())
 	{
-		Server_RequestInput(Input, HeldSeconds);
+		ClientHint = BuildWarpHint();
+		Server_RequestInput(Input, HeldSeconds, ClientHint.Yaw, ClientHint.Target.Get());
 	}
 	ProcessInput(Input, HeldSeconds);
 }
@@ -162,9 +175,26 @@ void UMDComboComponent::ProcessInput(EMDComboInput Input, float HeldSeconds)
 	Execute(UMDCombatRules::Advance(State, ComboSet->MakeTuning(), EMDComboEvent::Poll, Now()));
 }
 
-void UMDComboComponent::Server_RequestInput_Implementation(EMDComboInput Input, float HeldSeconds)
+void UMDComboComponent::Server_RequestInput_Implementation(EMDComboInput Input, float HeldSeconds, float FacingYaw, AActor* WarpTarget)
 {
+	ClientHint.bValid = FMath::IsFinite(FacingYaw);
+	ClientHint.Yaw = ClientHint.bValid ? FacingYaw : 0.0f;
+	ClientHint.Target = WarpTarget;
+	ClientHint.Time = Now();
 	ProcessInput(Input, FMath::Clamp(HeldSeconds, 0.0f, 5.0f));
+}
+
+void UMDComboComponent::Server_UpdateWarpHint_Implementation(float FacingYaw, AActor* WarpTarget)
+{
+	ClientHint.bValid = FMath::IsFinite(FacingYaw);
+	ClientHint.Yaw = ClientHint.bValid ? FacingYaw : 0.0f;
+	ClientHint.Target = WarpTarget;
+	ClientHint.Time = Now();
+	// The server may already have started that step from the older hint: redo the warp for it.
+	if (ClientHint.bValid && State.bAttacking && bHasActiveStep && Now() - StepStartTime < 0.35)
+	{
+		ApplyWarpHint(ClientHint, ActiveStep);
+	}
 }
 
 void UMDComboComponent::HeavyPressed()
@@ -220,13 +250,18 @@ void UMDComboComponent::HeavyReleased()
 	OnChargeEnded.Broadcast();
 	if (!IsAuthority() && IsOwnerLocal())
 	{
-		Server_HeavyReleased(Held);
+		ClientHint = BuildWarpHint();
+		Server_HeavyReleased(Held, ClientHint.Yaw, ClientHint.Target.Get());
 	}
 	ProcessInput(EMDComboInput::Heavy, Held);
 }
 
-void UMDComboComponent::Server_HeavyReleased_Implementation(float HeldSeconds)
+void UMDComboComponent::Server_HeavyReleased_Implementation(float HeldSeconds, float FacingYaw, AActor* WarpTarget)
 {
+	ClientHint.bValid = FMath::IsFinite(FacingYaw);
+	ClientHint.Yaw = ClientHint.bValid ? FacingYaw : 0.0f;
+	ClientHint.Target = WarpTarget;
+	ClientHint.Time = Now();
 	// Trust the client's hold time only within 0.1 s of what the server measured between press and release.
 	float Held = FMath::Clamp(HeldSeconds, 0.0f, 5.0f);
 	if (ServerHeavyPressTime >= 0.0)
@@ -277,6 +312,7 @@ void UMDComboComponent::NotifyInterrupted()
 	InputLockUntil = 0.0;
 	bHeavyDown = false;
 	SwingHits.Reset();
+	ClearWarp();
 	if (bWasActive)
 	{
 		OnComboReset.Broadcast();
@@ -295,6 +331,7 @@ void UMDComboComponent::BeginDodge(EMDDodgeDirection Direction, float SlideDurat
 	bHasActiveStep = false;
 	bNotifyWindows = false;
 	SwingHits.Reset();
+	ClearWarp();
 	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
 	{
 		if (UAnimMontage* Montage = CurrentMontage.Get())
@@ -385,6 +422,8 @@ void UMDComboComponent::StartStep(EMDAttackKind Kind, int32 Index)
 	SwingHits.Reset();
 	CurrentMontage.Reset();
 
+	ApplyStepWarp(Step); // before the montage so its first root-motion frame is already warped
+
 	if (bPlayMontagesDirectly && Step.Montage)
 	{
 		if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
@@ -466,7 +505,199 @@ void UMDComboComponent::FinishStep()
 	UMDCombatRules::Advance(State, ComboSet ? ComboSet->MakeTuning() : FMDComboTuning(), EMDComboEvent::AttackEnded, Now());
 	StepEndedTime = Now();
 	CurrentMontage.Reset();
+	ClearWarp();
 	OnStepEnded.Broadcast();
+}
+
+// ---- Root motion / motion warping ----
+
+float UMDComboComponent::GetMaxWarpRange() const
+{
+	float Range = 0.0f;
+	if (ComboSet)
+	{
+		for (const FMDAttackStep& Step : ComboSet->LightChain)
+		{
+			Range = FMath::Max(Range, Step.WarpRange);
+		}
+		Range = FMath::Max(Range, FMath::Max(ComboSet->Heavy.WarpRange, ComboSet->Charged.WarpRange));
+		Range = FMath::Max(Range, ComboSet->DodgeAttack.WarpRange);
+	}
+	return Range;
+}
+
+bool UMDComboComponent::IsValidWarpTarget(const AActor* Candidate) const
+{
+	const APawn* Pawn = Cast<APawn>(Candidate);
+	if (!Pawn || Pawn == GetOwner() || UMDGameplayStatics::IsPawnDead(Pawn))
+	{
+		return false;
+	}
+	if (!UMDGameplayStatics::GetMDAbilitySystemComponent(Pawn) && !Pawn->FindComponentByClass<UMDPoiseComponent>())
+	{
+		return false;
+	}
+	return UMDGameplayStatics::GetTeamId(Pawn) != UMDGameplayStatics::GetTeamId(GetOwner()) && UMDGameplayStatics::CanDamage(GetOwner(), Pawn);
+}
+
+AActor* UMDComboComponent::FindWarpTarget(const FVector& Facing, float Range) const
+{
+	UWorld* World = GetWorld();
+	AActor* Owner = GetOwner();
+	if (!World || !Owner || Range <= 0.0f)
+	{
+		return nullptr;
+	}
+	const FVector Origin = Owner->GetActorLocation();
+	TArray<FOverlapResult> Overlaps;
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(MDWarpTarget), false, Owner);
+	World->OverlapMultiByObjectType(Overlaps, Origin, FQuat::Identity, FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(Range), Query);
+
+	TArray<MDWarpTargeting::FCandidate> Candidates;
+	TArray<AActor*> Actors;
+	for (const FOverlapResult& Overlap : Overlaps)
+	{
+		AActor* Actor = Overlap.GetActor();
+		if (Actor && !Actors.Contains(Actor) && IsValidWarpTarget(Actor))
+		{
+			MDWarpTargeting::FCandidate Candidate;
+			Candidate.Id = Actors.Num();
+			Candidate.Location = Actor->GetActorLocation();
+			Candidates.Add(Candidate);
+			Actors.Add(Actor);
+		}
+	}
+	for (const int32 Id : MDWarpTargeting::RankTargets(Origin, Facing, Range, MDWarpConeHalfAngle, Candidates))
+	{
+		AActor* Actor = Actors[Id];
+		FCollisionQueryParams Sight(SCENE_QUERY_STAT(MDWarpSight), false, Owner);
+		Sight.AddIgnoredActor(Actor);
+		if (!World->LineTraceTestByChannel(Origin + FVector(0, 0, 50), Actor->GetActorLocation(), ECC_Visibility, Sight))
+		{
+			return Actor;
+		}
+	}
+	return nullptr;
+}
+
+FMDWarpHint UMDComboComponent::BuildWarpHint() const
+{
+	FMDWarpHint Hint;
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	if (!Pawn)
+	{
+		return Hint;
+	}
+	// Snap to input: the last movement input, else the camera (controller) yaw.
+	FVector Facing = MDWarpTargeting::Planar(Pawn->GetLastMovementInputVector());
+	if (Facing.IsNearlyZero())
+	{
+		Facing = FRotator(0.0, Pawn->GetControlRotation().Yaw, 0.0).Vector();
+	}
+	Hint.bValid = true;
+	Hint.Time = Now();
+	Hint.Yaw = MDWarpTargeting::YawDegrees(Facing);
+	if (AActor* Target = FindWarpTarget(Facing, GetMaxWarpRange()))
+	{
+		Hint.Target = Target;
+		Hint.Yaw = MDWarpTargeting::YawDegrees(Target->GetActorLocation() - Pawn->GetActorLocation());
+	}
+	return Hint;
+}
+
+void UMDComboComponent::ApplyStepWarp(const FMDAttackStep& Step)
+{
+	// Simulated proxies get replicated movement; AI pawns keep their own facing.
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	if (!Pawn || !RunsStateMachine() || !Pawn->IsPlayerControlled())
+	{
+		return;
+	}
+	FMDWarpHint Hint;
+	if (IsOwnerLocal())
+	{
+		if (!IsAuthority() && ClientHint.bValid && Now() - ClientHint.Time < 0.1)
+		{
+			Hint = ClientHint; // just built for this input and already sent
+		}
+		else
+		{
+			Hint = BuildWarpHint(); // host, or a buffered step that starts later than its input
+			if (!IsAuthority())
+			{
+				ClientHint = Hint;
+				Server_UpdateWarpHint(Hint.Yaw, Hint.Target.Get());
+			}
+		}
+	}
+	else
+	{
+		Hint = (ClientHint.bValid && Now() - ClientHint.Time < 1.0) ? ClientHint : BuildWarpHint();
+	}
+	ApplyWarpHint(Hint, Step);
+}
+
+void UMDComboComponent::ApplyWarpHint(const FMDWarpHint& Hint, const FMDAttackStep& Step)
+{
+	ACharacter* Character = Cast<ACharacter>(GetOwner());
+	if (!Character || !Hint.bValid)
+	{
+		return;
+	}
+	const FVector Origin = Character->GetActorLocation();
+	AActor* Target = Hint.Target.Get();
+	if (Target)
+	{
+		const float Tolerance = IsOwnerLocal() ? 0.0f : MDWarpServerTolerance; // the server's position lags the client's
+		if (!IsValidWarpTarget(Target) || !MDWarpTargeting::IsTargetWithinReach(Origin, Target->GetActorLocation(), Step.WarpRange, Tolerance))
+		{
+			Target = nullptr;
+		}
+	}
+	float Yaw = Hint.Yaw;
+	if (Target)
+	{
+		Yaw = MDWarpTargeting::YawDegrees(Target->GetActorLocation() - Origin);
+	}
+	FRotator Rotation = Character->GetActorRotation();
+	Rotation.Yaw = Yaw;
+	Character->SetActorRotation(Rotation);
+
+	UMotionWarpingComponent* Warping = Character->FindComponentByClass<UMotionWarpingComponent>();
+	if (Target && Warping)
+	{
+		const UCapsuleComponent* Capsule = Target->FindComponentByClass<UCapsuleComponent>();
+		const float Radius = Capsule ? Capsule->GetScaledCapsuleRadius() : 0.0f;
+		const FVector Point = MDWarpTargeting::ComputeWarpPoint(Origin, Target->GetActorLocation(), Radius, Step.WarpStopDistance);
+		Warping->AddOrUpdateWarpTargetFromLocationAndRotation(MDAttackWarpTarget, Point, FRotator(0.0, Yaw, 0.0));
+		Character->SetAnimRootMotionTranslationScale(1.0f);
+	}
+	else
+	{
+		if (Warping)
+		{
+			Warping->RemoveWarpTarget(MDAttackWarpTarget);
+		}
+		Character->SetAnimRootMotionTranslationScale(FMath::Max(Step.RootMotionScale, 0.0f));
+	}
+	bWarpApplied = true;
+}
+
+void UMDComboComponent::ClearWarp()
+{
+	if (!bWarpApplied)
+	{
+		return;
+	}
+	bWarpApplied = false;
+	if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
+	{
+		Character->SetAnimRootMotionTranslationScale(1.0f);
+		if (UMotionWarpingComponent* Warping = Character->FindComponentByClass<UMotionWarpingComponent>())
+		{
+			Warping->RemoveWarpTarget(MDAttackWarpTarget);
+		}
+	}
 }
 
 void UMDComboComponent::UpdateFallbackWindows()

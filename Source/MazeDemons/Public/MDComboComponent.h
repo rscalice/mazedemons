@@ -9,6 +9,16 @@
 class UAnimMontage;
 class UMDComboSet;
 class USkeletalMeshComponent;
+class AActor;
+
+// What the owning client chose for a swing (facing yaw + warp target); sent to the server so both run the same root motion.
+struct FMDWarpHint
+{
+	bool bValid = false;
+	float Yaw = 0.0f;
+	TWeakObjectPtr<AActor> Target;
+	double Time = -1000.0;
+};
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FMDComboStepSignature, const FMDAttackStep&, Step, EMDAttackKind, Kind, int32, Index);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDComboSimpleSignature);
@@ -150,14 +160,31 @@ private:
 	FTimerHandle InventoryBindTimer;
 	int32 InventoryBindAttempts = 0;
 
+	// FacingYaw / WarpTarget: the owning client's swing hint (see FMDWarpHint). The server validates the target.
 	UFUNCTION(Server, Reliable)
-	void Server_RequestInput(EMDComboInput Input, float HeldSeconds);
+	void Server_RequestInput(EMDComboInput Input, float HeldSeconds, float FacingYaw, AActor* WarpTarget);
 
 	UFUNCTION(Server, Reliable)
 	void Server_HeavyPressed();
 
 	UFUNCTION(Server, Reliable)
-	void Server_HeavyReleased(float HeldSeconds);
+	void Server_HeavyReleased(float HeldSeconds, float FacingYaw, AActor* WarpTarget);
+
+	// A buffered step started later than its input: the client re-sends the hint it used for the step.
+	UFUNCTION(Server, Reliable)
+	void Server_UpdateWarpHint(float FacingYaw, AActor* WarpTarget);
+
+	// ---- Root motion / motion warping ----
+	FMDWarpHint BuildWarpHint() const;
+	float GetMaxWarpRange() const;
+	bool IsValidWarpTarget(const AActor* Candidate) const;
+	AActor* FindWarpTarget(const FVector& Facing, float Range) const;
+	void ApplyStepWarp(const FMDAttackStep& Step);
+	void ApplyWarpHint(const FMDWarpHint& Hint, const FMDAttackStep& Step);
+	void ClearWarp();
+
+	FMDWarpHint ClientHint; // client: the hint it sent last; server: the hint it received last
+	bool bWarpApplied = false;
 
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_PlayStep(EMDAttackKind Kind, int32 Index);

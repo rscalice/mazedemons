@@ -181,8 +181,22 @@ struct MAZEDEMONS_API FMDAttackStep
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step", meta = (ClampMin = "0", ClampMax = "1"))
 	float CancelWindowStart = 0.6f;
 
+	// Unused (kept so saved data still loads). Root motion is now always on; use RootMotionScale.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
 	bool bRootMotion = false;
+
+	// Multiplier on the montage's root-motion translation when there is no warp target (0 = swing in place, 1 = as authored).
+	// With a warp target the scale is 1 and the motion is skew-warped onto the target instead.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step|Warp", meta = (ClampMin = "0", ClampMax = "2"))
+	float RootMotionScale = 1.0f;
+
+	// Max distance (cm) to an enemy this swing may warp toward.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step|Warp", meta = (ClampMin = "0"))
+	float WarpRange = 500.0f;
+
+	// The warp stops this far (cm) in front of the target, added to the target's capsule radius.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step|Warp", meta = (ClampMin = "0"))
+	float WarpStopDistance = 90.0f;
 
 	// Leave a ghost trail while this step plays (fast attacks).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
