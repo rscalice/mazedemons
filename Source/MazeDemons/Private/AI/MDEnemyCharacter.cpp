@@ -1,0 +1,221 @@
+#include "AI/MDEnemyCharacter.h"
+
+#include "AI/MDEnemyArchetype.h"
+#include "AI/MDEnemyAttributeSet.h"
+#include "AI/MDEnemyController.h"
+#include "AI/MDTargetableComponent.h"
+#include "MDAbilitySystemComponent.h"
+#include "MDBlinkComponent.h"
+#include "MDCombatFeedbackComponent.h"
+#include "MDGameplayStatics.h"
+#include "MDPlayerState.h"
+#include "MDPoiseComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/Controller.h"
+#include "Net/UnrealNetwork.h"
+
+AMDEnemyCharacter::AMDEnemyCharacter()
+{
+	bReplicates = true;
+	AIControllerClass = AMDEnemyController::StaticClass();
+	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
+
+	bUseControllerRotationYaw = false;
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		Move->bOrientRotationToMovement = true;
+		Move->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+	}
+
+	// The weapon sweep (UMDCombatStatics::SweepWeaponHand) traces the Visibility channel, which the Pawn profile ignores.
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	GetMesh()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+
+	AbilitySystem = CreateDefaultSubobject<UMDAbilitySystemComponent>(TEXT("AbilitySystem"));
+	AbilitySystem->SetIsReplicated(true);
+	AbilitySystem->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
+
+	Attributes = CreateDefaultSubobject<UMDEnemyAttributeSet>(TEXT("EnemyAttributes"));
+
+	Poise = CreateDefaultSubobject<UMDPoiseComponent>(TEXT("Poise"));
+	Blink = CreateDefaultSubobject<UMDBlinkComponent>(TEXT("Blink"));
+	Feedback = CreateDefaultSubobject<UMDCombatFeedbackComponent>(TEXT("Feedback"));
+	Targetable = CreateDefaultSubobject<UMDTargetableComponent>(TEXT("Targetable"));
+}
+
+void AMDEnemyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME_CONDITION(AMDEnemyCharacter, Archetype, COND_InitialOnly);
+	DOREPLIFETIME(AMDEnemyCharacter, ReplicatedIntent);
+}
+
+UAbilitySystemComponent* AMDEnemyCharacter::GetAbilitySystemComponent() const
+{
+	return AbilitySystem;
+}
+
+FGenericTeamId AMDEnemyCharacter::GetGenericTeamId() const
+{
+	return FGenericTeamId(MDTeams::Demons);
+}
+
+void AMDEnemyCharacter::GetOwnedGameplayTags(FGameplayTagContainer& TagContainer) const
+{
+	// Read by the ASC's kill report (U4): the quest matches kills by this tag.
+	if (Archetype)
+	{
+		TagContainer.AppendTags(Archetype->GetVictimTags());
+	}
+}
+
+void AMDEnemyCharacter::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	if (AbilitySystem)
+	{
+		AbilitySystem->InitAbilityActorInfo(this, this);
+		AbilitySystem->RegisterAttributeSet(Attributes);
+		AbilitySystem->OnDeath.AddUniqueDynamic(this, &AMDEnemyCharacter::HandleDeath);
+	}
+	if (Poise)
+	{
+		Poise->SetReactionMesh(GetMesh());
+		Poise->OnReaction.AddUniqueDynamic(this, &AMDEnemyCharacter::HandleReaction);
+	}
+}
+
+void AMDEnemyCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+	if (Archetype)
+	{
+		ApplyArchetype(Archetype);
+	}
+}
+
+void AMDEnemyCharacter::OnRep_Archetype()
+{
+	if (Archetype)
+	{
+		ApplyArchetype(Archetype);
+	}
+}
+
+void AMDEnemyCharacter::ApplyArchetype(UMDEnemyArchetype* InArchetype)
+{
+	Archetype = InArchetype;
+	if (!Archetype)
+	{
+		return;
+	}
+
+	if (Poise)
+	{
+		Poise->Profile = Archetype->ResolvePoiseProfile(this);
+	}
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		Move->MaxWalkSpeed = Archetype->MoveSpeed;
+	}
+
+	if (HasAuthority())
+	{
+		if (AbilitySystem)
+		{
+			AbilitySystem->InitializeStats(Archetype->MaxHealth, Archetype->AttackPower, Archetype->BaseDefense);
+		}
+		if (Attributes)
+		{
+			Attributes->SetMaxPoise(Archetype->MaxPoise);
+			Attributes->SetPoise(Archetype->MaxPoise);
+		}
+		if (Poise)
+		{
+			Poise->ResetState();
+		}
+	}
+}
+
+float AMDEnemyCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+{
+	const float Damage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+	if (AbilitySystem && Damage > 0.0f)
+	{
+		AActor* DamageInstigator = nullptr;
+		if (EventInstigator)
+		{
+			DamageInstigator = EventInstigator->GetPawn() ? static_cast<AActor*>(EventInstigator->GetPawn()) : static_cast<AActor*>(EventInstigator);
+		}
+		else if (DamageCauser)
+		{
+			DamageInstigator = DamageCauser->GetInstigator() ? static_cast<AActor*>(DamageCauser->GetInstigator()) : DamageCauser;
+		}
+		AbilitySystem->ApplyDamage(Damage, DamageInstigator, DamageCauser);
+	}
+	return Damage;
+}
+
+int32 AMDEnemyCharacter::GetKillGoldAward() const
+{
+	return Archetype ? Archetype->GetKillGold() : 0;
+}
+
+const AController* AMDEnemyCharacter::GetKillerController(const AActor* LastDamageInstigator)
+{
+	if (const APawn* KillerPawn = Cast<APawn>(LastDamageInstigator))
+	{
+		return KillerPawn->GetController();
+	}
+	return Cast<AController>(LastDamageInstigator);
+}
+
+void AMDEnemyCharacter::AwardKillRewards()
+{
+	if (!HasAuthority() || !AbilitySystem)
+	{
+		return;
+	}
+	// The U2 split: even among players within the kill-gold radius, remainder to the killer. Not re-implemented here.
+	UMDGameplayStatics::AwardKillGold(this, GetKillerController(AbilitySystem->GetLastDamageInstigator()), GetKillGoldAward());
+}
+
+void AMDEnemyCharacter::HandleReaction(const FMDHitResultRep& Hit)
+{
+	// Keep the replicated poise mirror in step with the component (the component stays the source of truth).
+	if (HasAuthority() && Attributes && Poise && !bDeathHandled)
+	{
+		Attributes->SetPoise(Poise->GetPoiseFraction() * Poise->GetMaxPoise());
+	}
+}
+
+void AMDEnemyCharacter::HandleDeath()
+{
+	if (bDeathHandled)
+	{
+		return;
+	}
+	bDeathHandled = true;
+
+	if (Targetable)
+	{
+		Targetable->bTargetable = false;
+	}
+
+	if (HasAuthority())
+	{
+		AwardKillRewards();
+		// Quest credit needs nothing here: the ASC's kill report already ran (it reads GetOwnedGameplayTags).
+		DetachFromControllerPendingDestroy();
+		if (CorpseLifetime > 0.0f)
+		{
+			SetLifeSpan(CorpseLifetime);
+		}
+	}
+
+	// Same local ragdoll the players use, on every machine.
+	AMDPlayerState::RagdollPawn(this);
+}

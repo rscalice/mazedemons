@@ -72,6 +72,9 @@ public:
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+	// Ragdolls Character locally (movement off, capsule off, body simulating). Players call it from HandleDeath; AMDEnemyCharacter reuses it.
+	static void RagdollPawn(APawn* Pawn);
+
 protected:
 	UFUNCTION()
 	void OnRep_RunStats();
@@ -112,7 +115,6 @@ protected:
 	void HandleDeath();
 
 private:
-	void RagdollPawn(APawn* Pawn);
 
 	bool bStatsInitialized = false;
 	bool bDeathBound = false;

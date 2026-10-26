@@ -20,6 +20,11 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Objective_Zone1_Shrine, "Objective.Zone1.Shrine");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Objective_Zone3_Key, "Objective.Zone3.Key");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Objective_Zone4_Altar, "Objective.Zone4.Altar");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_Ghoul, "Enemy.Ghoul");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_BoneArcher, "Enemy.BoneArcher");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_GraveBrute, "Enemy.GraveBrute");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_Cultist, "Enemy.Cultist");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_Revenant, "Enemy.Revenant");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_Werewolf, "Enemy.Werewolf");
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Objective, "Map.Marker.Objective");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Gate, "Map.Marker.Gate");

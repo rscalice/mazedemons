@@ -31,6 +31,13 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone3_Key);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone4_Altar);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Ghoul);
 
+// V1 enemy archetype tags (one per UMDEnemyArchetype::ArchetypeTag; kill credit and spawning match on them).
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_BoneArcher);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_GraveBrute);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Cultist);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Revenant);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Werewolf);
+
 // Minimap marker kinds (mirrors EMDMapMarkerType; usable as widget lookup keys).
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Objective);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Gate);
