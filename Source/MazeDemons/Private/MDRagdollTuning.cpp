@@ -16,9 +16,9 @@ namespace MDRagdollTuningPrivate
 	TAutoConsoleVariable<float> CVarPlayerJointDamping(TEXT("md.Combat.RagdollJointDamping"), 75.0f,
 		TEXT("Angular drive damping on a dead player's joints."), ECVF_Default);
 
-	TAutoConsoleVariable<float> CVarEnemyLinear(TEXT("md.Combat.RagdollEnemyLinearDamping"), 0.05f,
+	TAutoConsoleVariable<float> CVarEnemyLinear(TEXT("md.Combat.RagdollEnemyLinearDamping"), 0.025f,
 		TEXT("Linear damping on a dead enemy's ragdoll bodies."), ECVF_Default);
-	TAutoConsoleVariable<float> CVarEnemyAngular(TEXT("md.Combat.RagdollEnemyAngularDamping"), 0.4f,
+	TAutoConsoleVariable<float> CVarEnemyAngular(TEXT("md.Combat.RagdollEnemyAngularDamping"), 0.2f,
 		TEXT("Angular damping on a dead enemy's ragdoll bodies."), ECVF_Default);
 	TAutoConsoleVariable<float> CVarEnemyStiffness(TEXT("md.Combat.RagdollEnemyJointStiffness"), 0.0f,
 		TEXT("Weak angular drive stiffness (muscle tone) on a dead enemy's joints. 0 = fully limp."), ECVF_Default);

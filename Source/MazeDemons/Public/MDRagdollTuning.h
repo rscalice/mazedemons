@@ -6,7 +6,7 @@ class USkeletalMeshComponent;
 
 // Death-ragdoll feel, tunable live through console variables (read when the pawn dies, so change them and kill something again):
 //   md.Combat.RagdollLinearDamping / AngularDamping / JointStiffness / JointDamping           players   (defaults 0.5 / 4 / 200 / 50)
-//   md.Combat.RagdollEnemyLinearDamping / AngularDamping / JointStiffness / JointDamping      enemies   (defaults 0.05 / 0.4 / 0 / 0, floppy)
+//   md.Combat.RagdollEnemyLinearDamping / AngularDamping / JointStiffness / JointDamping      enemies   (defaults 0.025 / 0.2 / 0 / 0, floppy)
 // Damping is applied to every simulated body. The joint drive is a weak SLERP orientation + velocity drive on every constraint that
 // pulls each joint back toward its rest pose (muscle tone), so the body collapses and settles instead of folding like jelly.
 // A JointStiffness of 0 turns the drive off.
