@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "MDAbilitySystemComponent.h"
+#include "MDComboSet.h"
 #include "MDGameplayStatics.h"
 #include "MDGameSettings.h"
 #include "MDInventoryComponent.h"
@@ -550,7 +551,8 @@ bool FMDWearTargetsTest::RunTest(const FString& Parameters)
 	UMDInventoryComponent::NotifyHitLanded(nullptr, Dummy);
 	TestEqual(TEXT("environment damage does not wear the weapon"), FMDUpgradeTestAccess::Condition(Inv, MDItemType::MainHand), 49);
 
-	// The two-handed weapon leads when equipped.
+	// The two-handed weapon leads when equipped. Both are put in place through the test accessor (the equip path now keeps
+	// the two-hander exclusive); this only checks which weapon wears.
 	FMDUpgradeTestAccess::SetEquipped(Inv, MDItemType::TwoHanded, TestClaymore, 50);
 	UMDInventoryComponent::NotifyHitLanded(Wearer, Dummy);
 	TestEqual(TEXT("claymore wears"), FMDUpgradeTestAccess::Condition(Inv, MDItemType::TwoHanded), 49);
@@ -702,6 +704,198 @@ bool FMDShardStackTest::RunTest(const FString& Parameters)
 	{
 		AddInfo(TEXT("DT_Items has no UpgradeShard row yet (WP2); shard stack size not checked"));
 	}
+	return true;
+}
+
+// ---- C1 dual wield: which slot an equipped sword goes to ----
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDDualWieldSlotRuleTest, "MazeDemons.DualWield.SlotRule", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDDualWieldSlotRuleTest::RunTest(const FString& Parameters)
+{
+	const UMDComboSet* DualA = NewObject<UMDComboSet>(GetTransientPackage());
+	const UMDComboSet* DualB = NewObject<UMDComboSet>(GetTransientPackage());
+	const uint8 Main = MDItemType::MainHand;
+	const uint8 Off = MDItemType::OffHand;
+	const uint8 Two = MDItemType::TwoHanded;
+
+	TestEqual(TEXT("first sword: main hand"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Main, DualA, nullptr, false, false)), static_cast<int32>(Main));
+	TestEqual(TEXT("second matching sword: off hand"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Main, DualA, DualA, true, false)), static_cast<int32>(Off));
+	TestEqual(TEXT("third sword (both hands full): swaps the main hand"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Main, DualA, DualA, true, true)), static_cast<int32>(Main));
+	TestEqual(TEXT("different dual set in the main hand: swaps the main hand"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Main, DualA, DualB, true, false)), static_cast<int32>(Main));
+	TestEqual(TEXT("sword without a dual set: swaps the main hand"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Main, nullptr, DualA, true, false)), static_cast<int32>(Main));
+	TestEqual(TEXT("two null dual sets never match"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Main, nullptr, nullptr, true, false)), static_cast<int32>(Main));
+	TestEqual(TEXT("claymore stays two-handed"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Two, DualA, DualA, true, false)), static_cast<int32>(Two));
+	TestEqual(TEXT("an off-hand item stays off hand"), static_cast<int32>(UMDInventoryComponent::ResolveEquipSlot(Off, DualA, DualA, true, false)), static_cast<int32>(Off));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDDualWieldEquipTest, "MazeDemons.DualWield.Equip", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDDualWieldEquipTest::RunTest(const FString& Parameters)
+{
+	FUpgradeFixture Fx;
+	if (!Fx.Init(*this, 1, true))
+	{
+		return false;
+	}
+	UMDInventoryComponent* Inv = Fx.Inv();
+	const FName Sword(TEXT("Sword"));
+	const FName Claymore(TEXT("Claymore"));
+	if (!Fx.ItemTable->FindRowUnchecked(Sword) || !Fx.ItemTable->FindRowUnchecked(Claymore))
+	{
+		AddWarning(TEXT("DT_Items has no Sword / Claymore row; skipping"));
+		return true;
+	}
+
+	UMDComboSet* SwordSet = NewObject<UMDComboSet>(GetTransientPackage());
+	UMDComboSet* DualSet = NewObject<UMDComboSet>(GetTransientPackage());
+	UMDComboSet* ClaySet = NewObject<UMDComboSet>(GetTransientPackage());
+	SwordSet->AddToRoot();
+	DualSet->AddToRoot();
+	ClaySet->AddToRoot();
+
+	FMDItemStatsRow SwordStats = MakeStats(40, 100, true);
+	SwordStats.ComboSet = TSoftObjectPtr<UMDComboSet>(SwordSet);
+	SwordStats.DualComboSet = TSoftObjectPtr<UMDComboSet>(DualSet);
+	Fx.Stats->AddRow(Sword, SwordStats);
+	FMDItemStatsRow ClayStats = MakeStats(60, 100, true);
+	ClayStats.ComboSet = TSoftObjectPtr<UMDComboSet>(ClaySet);
+	Fx.Stats->AddRow(Claymore, ClayStats);
+
+	auto SlotRow = [Inv](uint8 Slot) -> FName
+	{
+		for (const FMDEquippedSlot& E : Inv->GetEquipped())
+		{
+			if (E.Slot == Slot)
+			{
+				return E.ItemRowName;
+			}
+		}
+		return NAME_None;
+	};
+
+	TestTrue(TEXT("3 swords + claymore added"), Inv->AddItem(Sword, 1) && Inv->AddItem(Sword, 1) && Inv->AddItem(Sword, 1) && Inv->AddItem(Claymore, 1));
+	TestEqual(TEXT("with empty hands a sword reports MainHand"), static_cast<int32>(Inv->GetItemEquipSlot(Sword)), static_cast<int32>(MDItemType::MainHand));
+
+	FMDUpgradeTestAccess::ServerEquip(Inv, 0);
+	TestEqual(TEXT("first sword in the main hand"), SlotRow(MDItemType::MainHand), Sword);
+	TestEqual(TEXT("lone sword: its own combo set"), Inv->ResolveEquippedComboSet() == SwordSet, true);
+	TestEqual(TEXT("the next sword reports OffHand"), static_cast<int32>(Inv->GetItemEquipSlot(Sword)), static_cast<int32>(MDItemType::OffHand));
+
+	FMDUpgradeTestAccess::ServerEquip(Inv, 0);
+	TestEqual(TEXT("second sword in the off hand"), SlotRow(MDItemType::OffHand), Sword);
+	TestEqual(TEXT("main hand still holds the first sword"), SlotRow(MDItemType::MainHand), Sword);
+	TestEqual(TEXT("one sword left in the bag (+ claymore)"), Inv->GetItems().Num(), 2);
+	TestEqual(TEXT("off-hand sword tracks durability"), FMDUpgradeTestAccess::Condition(Inv, MDItemType::OffHand), 100);
+	TestTrue(TEXT("two swords: the dual set"), Inv->ResolveEquippedComboSet() == DualSet);
+
+	// Decision: with both hands full a third sword swaps the MAIN hand sword (natural slot); the off hand is left alone.
+	TestEqual(TEXT("with both hands full a sword reports MainHand"), static_cast<int32>(Inv->GetItemEquipSlot(Sword)), static_cast<int32>(MDItemType::MainHand));
+	FMDUpgradeTestAccess::SetCondition(Inv, MDItemType::MainHand, 55);
+	FMDUpgradeTestAccess::ServerEquip(Inv, 0);
+	TestEqual(TEXT("main hand still a sword"), SlotRow(MDItemType::MainHand), Sword);
+	TestEqual(TEXT("off hand untouched"), SlotRow(MDItemType::OffHand), Sword);
+	TestEqual(TEXT("the swapped-out sword is back in the bag"), Inv->GetItems().Num(), 2);
+	bool bFoundWorn = false;
+	for (int32 i = 0; i < Inv->GetItems().Num(); ++i)
+	{
+		int32 Cur = 0;
+		int32 Max = 0;
+		Inv->GetItemDurability(i, Cur, Max);
+		bFoundWorn |= Inv->GetItems()[i].ItemRowName == Sword && Cur == 55;
+	}
+	TestTrue(TEXT("the swapped-out sword kept its condition"), bFoundWorn);
+
+	// Claymore goes to TwoHanded and wins the combo set.
+	int32 ClayIndex = INDEX_NONE;
+	for (int32 i = 0; i < Inv->GetItems().Num(); ++i)
+	{
+		if (Inv->GetItems()[i].ItemRowName == Claymore)
+		{
+			ClayIndex = i;
+		}
+	}
+	TestEqual(TEXT("claymore reports TwoHanded"), static_cast<int32>(Inv->GetItemEquipSlot(Claymore)), static_cast<int32>(MDItemType::TwoHanded));
+	if (ClayIndex == INDEX_NONE)
+	{
+		AddError(TEXT("claymore missing from the bag"));
+		return false;
+	}
+	FMDUpgradeTestAccess::ServerEquip(Inv, ClayIndex);
+	TestEqual(TEXT("claymore in TwoHanded"), SlotRow(MDItemType::TwoHanded), Claymore);
+	TestTrue(TEXT("claymore: the greatsword set"), Inv->ResolveEquippedComboSet() == ClaySet);
+
+	// Two-hander exclusivity (GetConflictingSlots): equipping the claymore unequips BOTH swords back to the bag.
+	TestEqual(TEXT("claymore cleared the main hand"), SlotRow(MDItemType::MainHand), FName(NAME_None));
+	TestEqual(TEXT("claymore cleared the off hand"), SlotRow(MDItemType::OffHand), FName(NAME_None));
+
+	// Put the claymore away, then re-equip two swords (main first, then off hand).
+	FMDUpgradeTestAccess::ServerUnequip(Inv, MDItemType::TwoHanded);
+	TestEqual(TEXT("two-hand slot empty again"), SlotRow(MDItemType::TwoHanded), FName(NAME_None));
+	auto FindInBag = [Inv](FName Row) -> int32
+	{
+		for (int32 i = 0; i < Inv->GetItems().Num(); ++i)
+		{
+			if (Inv->GetItems()[i].ItemRowName == Row)
+			{
+				return i;
+			}
+		}
+		return INDEX_NONE;
+	};
+	const int32 SwordA = FindInBag(Sword);
+	if (SwordA == INDEX_NONE)
+	{
+		AddError(TEXT("no sword in the bag after unequipping the claymore"));
+		return false;
+	}
+	FMDUpgradeTestAccess::ServerEquip(Inv, SwordA);
+	TestEqual(TEXT("sword back in the main hand"), SlotRow(MDItemType::MainHand), Sword);
+	TestEqual(TEXT("the next sword reports OffHand again"), static_cast<int32>(Inv->GetItemEquipSlot(Sword)), static_cast<int32>(MDItemType::OffHand));
+	const int32 SwordB = FindInBag(Sword);
+	if (SwordB == INDEX_NONE)
+	{
+		AddError(TEXT("no second sword in the bag"));
+		return false;
+	}
+	FMDUpgradeTestAccess::ServerEquip(Inv, SwordB);
+	TestEqual(TEXT("second sword in the off hand again"), SlotRow(MDItemType::OffHand), Sword);
+
+	// Unequipping the off-hand sword returns it to the bag and frees the slot.
+	FMDUpgradeTestAccess::ServerUnequip(Inv, MDItemType::OffHand);
+	TestEqual(TEXT("off hand empty again"), SlotRow(MDItemType::OffHand), FName(NAME_None));
+	TestEqual(TEXT("off-hand condition cleared"), FMDUpgradeTestAccess::Condition(Inv, MDItemType::OffHand), static_cast<int32>(MD_NoDurability));
+	TestEqual(TEXT("the next sword is an off-hand sword again"), static_cast<int32>(Inv->GetItemEquipSlot(Sword)), static_cast<int32>(MDItemType::OffHand));
+
+	SwordSet->RemoveFromRoot();
+	DualSet->RemoveFromRoot();
+	ClaySet->RemoveFromRoot();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDDualWieldNoDualSetTest, "MazeDemons.DualWield.NoDualSetSwaps", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDDualWieldNoDualSetTest::RunTest(const FString& Parameters)
+{
+	FUpgradeFixture Fx;
+	if (!Fx.Init(*this, 1, true))
+	{
+		return false;
+	}
+	UMDInventoryComponent* Inv = Fx.Inv();
+	const FName Sword(TEXT("Sword"));
+	if (!Fx.ItemTable->FindRowUnchecked(Sword))
+	{
+		AddWarning(TEXT("DT_Items has no Sword row; skipping"));
+		return true;
+	}
+	Fx.Stats->AddRow(Sword, MakeStats(40, 100, true)); // no DualComboSet
+
+	TestTrue(TEXT("add two"), Inv->AddItem(Sword, 1) && Inv->AddItem(Sword, 1));
+	FMDUpgradeTestAccess::ServerEquip(Inv, 0);
+	TestEqual(TEXT("still reports MainHand"), static_cast<int32>(Inv->GetItemEquipSlot(Sword)), static_cast<int32>(MDItemType::MainHand));
+	FMDUpgradeTestAccess::ServerEquip(Inv, 0);
+	TestEqual(TEXT("one equipped entry: the second sword swapped the first"), Inv->GetEquipped().Num(), 1);
+	TestEqual(TEXT("in the main hand"), static_cast<int32>(Inv->GetEquipped()[0].Slot), static_cast<int32>(MDItemType::MainHand));
+	TestEqual(TEXT("the first sword is back in the bag"), Inv->GetItems().Num(), 1);
 	return true;
 }
 

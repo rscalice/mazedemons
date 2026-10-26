@@ -3,6 +3,11 @@
 #include "MDAbilitySystemComponent.h"
 #include "MDAttributeSet.h"
 #include "MDGameplayStatics.h"
+#include "MDPoiseComponent.h"
+#include "MDPoiseProfile.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequenceBase.h"
+#include "Animation/AnimSingleNodeInstance.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "Components/CapsuleComponent.h"
@@ -50,6 +55,13 @@ AMDTestDummy::AMDTestDummy()
 	BootsMesh = MakeArmorComponent(TEXT("BootsMesh"));
 
 	bReplicates = true;
+
+	Poise = CreateDefaultSubobject<UMDPoiseComponent>(TEXT("Poise"));
+	static ConstructorHelpers::FObjectFinder<UMDPoiseProfile> DummyPoiseProfile(TEXT("/Game/Data/Combat/DA_Poise_Dummy.DA_Poise_Dummy"));
+	if (DummyPoiseProfile.Succeeded())
+	{
+		Poise->Profile = DummyPoiseProfile.Object;
+	}
 
 	AbilitySystem = CreateDefaultSubobject<UMDAbilitySystemComponent>(TEXT("AbilitySystem"));
 	AbilitySystem->SetIsReplicated(true);
@@ -163,6 +175,12 @@ void AMDTestDummy::BeginPlay()
 {
 	Super::BeginPlay();
 
+	if (Poise)
+	{
+		Poise->SetReactionMesh(Body);
+		Poise->OnReaction.AddDynamic(this, &AMDTestDummy::HandleReaction);
+	}
+
 	if (AbilitySystem)
 	{
 		AbilitySystem->InitAbilityActorInfo(this, this);
@@ -212,6 +230,35 @@ float AMDTestDummy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEve
 		AbilitySystem->ApplyDamage(Damage, DamageInstigator, DamageCauser);
 	}
 	return Damage;
+}
+
+void AMDTestDummy::HandleReaction(const FMDHitResultRep& Hit)
+{
+	// With a real anim blueprint the poise component already played the montage in its slot.
+	if (!Body || !Poise || !Cast<UAnimSingleNodeInstance>(Body->GetAnimInstance()))
+	{
+		return;
+	}
+	const UMDPoiseProfile* Profile = Poise->GetProfile();
+	UAnimMontage* Montage = Profile ? Profile->FindMontage(Hit.Reaction, Hit.Direction) : nullptr;
+	UAnimSequenceBase* Sequence = Montage ? Cast<UAnimSequenceBase>(Montage->GetFirstAnimReference()) : nullptr;
+	if (!Sequence)
+	{
+		return;
+	}
+	Body->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	Body->PlayAnimation(Sequence, false);
+	GetWorldTimerManager().SetTimer(ReactionTimer, this, &AMDTestDummy::EndReactionPlayback, FMath::Max(Sequence->GetPlayLength(), 0.1f), false);
+}
+
+void AMDTestDummy::EndReactionPlayback()
+{
+	if (Body)
+	{
+		Body->Stop();
+		Body->SetAnimation(nullptr);
+		Body->InitAnim(true); // back to the reference pose
+	}
 }
 
 void AMDTestDummy::HandleHealthChanged(float OldValue, float NewValue)

@@ -4,10 +4,12 @@
 #include "AbilitySystemInterface.h"
 #include "GameFramework/Actor.h"
 #include "GenericTeamAgentInterface.h"
+#include "MDCombatTypes.h"
 #include "MDTestDummy.generated.h"
 
 class UMDAbilitySystemComponent;
 class UMDAttributeSet;
+class UMDPoiseComponent;
 class UCapsuleComponent;
 class USkeletalMesh;
 class USkeletalMeshComponent;
@@ -71,6 +73,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMDAttributeSet> Attributes;
 
+	// C1: poise and hit reactions. Its Profile defaults to /Game/Data/Combat/DA_Poise_Dummy (set in the constructor).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMDPoiseComponent> Poise;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Test Dummy", meta = (ClampMin = "1"))
 	float StartingMaxHealth = 100.0f;
 
@@ -121,5 +127,12 @@ private:
 	UFUNCTION()
 	void HandleHealthChanged(float OldValue, float NewValue);
 
+	// The dummy body runs a single-node animation (no slot to play montages in): play the reaction montage's sequence instead.
+	UFUNCTION()
+	void HandleReaction(const FMDHitResultRep& Hit);
+
+	void EndReactionPlayback();
+
 	FTimerHandle ResetTimer;
+	FTimerHandle ReactionTimer;
 };

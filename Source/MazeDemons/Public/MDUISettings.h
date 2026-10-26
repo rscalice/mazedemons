@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "MDCombatTypes.h"
 #include "MDUISettings.generated.h"
 
 class UMDUIStyle;
@@ -63,4 +64,25 @@ public:
 	// False (default): the minimap rotates with the camera. True: north is up and the player arrow rotates.
 	UPROPERTY(Config, BlueprintReadOnly, Category = "Minimap")
 	bool bMinimapNorthUp = false;
+
+	// ---- Combat feel (C1, Options > Gameplay). All cosmetic and local. ----
+	// Camera shake strength in percent (0 = off).
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Combat", meta = (ClampMin = "0", ClampMax = "100"))
+	float ShakeScalePercent = 100.0f;
+
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Combat")
+	bool bHitStopEnabled = true;
+
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Combat")
+	bool bRumbleEnabled = true;
+
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Combat")
+	EMDDamageNumberMode DamageNumberMode = EMDDamageNumberMode::Own;
+
+	// Reduced halves the hit flash and tells impact Blueprints to use the cheap effects.
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Combat")
+	EMDVFXLevel VFXLevel = EMDVFXLevel::Full;
+
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Combat")
+	bool bAfterImagesEnabled = true;
 };

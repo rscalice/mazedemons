@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "AbilitySystemComponent.h"
+#include "MDCombatTypes.h"
 #include "MDPerkTypes.h"
 #include "MDAbilitySystemComponent.generated.h"
 
@@ -141,6 +142,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void ApplyDamage(float Damage, AActor* DamageInstigator = nullptr, AActor* DamageCauser = nullptr, bool bAllowCrit = true);
 
+	// C1 melee hit: same rules as the overload above (team check, crit, Executioner, damage effect, stats, kill report, wear,
+	// events), with Damage = Context.BaseDamage * Context.Step.DamageMult and crit allowed. Additionally skipped while the target
+	// has State.Invulnerable (dodge i-frames). Fills OutResult; returns true when Health went down. Server only.
+	bool ApplyDamage(const FMDHitContext& Context, FMDDamageResult& OutResult);
+
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void ApplyHealing(float Amount);
 
@@ -214,6 +220,9 @@ private:
 
 	UFUNCTION()
 	void OnRep_IsDeadState(bool bOldValue);
+
+	// The shared damage path behind both ApplyDamage overloads. OutResult may be null.
+	void ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult);
 
 	void BindAttributeDelegates();
 	bool bDelegatesBound = false;

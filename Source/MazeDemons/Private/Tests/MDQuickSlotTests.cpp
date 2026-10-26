@@ -54,7 +54,7 @@ struct FMDQuickSlotTestAccess
 namespace
 {
 	const FName Potion(TEXT("HealthPotion"));
-	const FName Sword(TEXT("Sword"));
+	const FName QuickSlotSword(TEXT("Sword"));
 
 	struct FQuickSlotScope
 	{
@@ -68,7 +68,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDQuickSlotAssignUseTest, "MazeDemons.QuickSlo
 bool FMDQuickSlotAssignUseTest::RunTest(const FString& Parameters)
 {
 	FQuickSlotScope S;
-	FMDQuickSlotTestAccess::AddStack(S.Inv, Sword, 1);
+	FMDQuickSlotTestAccess::AddStack(S.Inv, QuickSlotSword, 1);
 	FMDQuickSlotTestAccess::AddStack(S.Inv, Potion, 3);
 
 	TestEqual(TEXT("two quick slots"), S.Inv->GetQuickSlots().Num(), UMDInventoryComponent::NumQuickSlots);
@@ -103,7 +103,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDQuickSlotRejectsTest, "MazeDemons.QuickSlot.
 bool FMDQuickSlotRejectsTest::RunTest(const FString& Parameters)
 {
 	FQuickSlotScope S;
-	FMDQuickSlotTestAccess::AddStack(S.Inv, Sword, 1);
+	FMDQuickSlotTestAccess::AddStack(S.Inv, QuickSlotSword, 1);
 	FMDQuickSlotTestAccess::AddStack(S.Inv, Potion, 2);
 
 	AddExpectedMessage(TEXT("AssignQuickSlot rejected"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
@@ -113,12 +113,12 @@ bool FMDQuickSlotRejectsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("quick index 2"), FMDQuickSlotTestAccess::Assign(S.Inv, 2, 1));
 	TestFalse(TEXT("inventory index out of range"), FMDQuickSlotTestAccess::Assign(S.Inv, 0, 5));
 
-	TestFalse(TEXT("pure rule: weapon"), UMDInventoryComponent::IsValidQuickAssignment(Sword, S.Table));
+	TestFalse(TEXT("pure rule: weapon"), UMDInventoryComponent::IsValidQuickAssignment(QuickSlotSword, S.Table));
 	TestFalse(TEXT("pure rule: none"), UMDInventoryComponent::IsValidQuickAssignment(NAME_None, S.Table));
 	TestFalse(TEXT("pure rule: no table"), UMDInventoryComponent::IsValidQuickAssignment(Potion, nullptr));
 	TestTrue(TEXT("pure rule: potion"), UMDInventoryComponent::IsValidQuickAssignment(Potion, S.Table));
 
-	FMDQuickSlotTestAccess::SetSlot(S.Inv, 0, Sword);
+	FMDQuickSlotTestAccess::SetSlot(S.Inv, 0, QuickSlotSword);
 	FMDQuickSlotTestAccess::Validate(S.Inv);
 	TestEqual(TEXT("validate clears a non-consumable"), S.Inv->GetQuickSlotItem(0), NAME_None);
 	return true;

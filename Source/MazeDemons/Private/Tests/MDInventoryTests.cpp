@@ -4,6 +4,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "MDAbilitySystemComponent.h"
+#include "MDCombatStatics.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
 #include "MDPickupBase.h"
@@ -23,6 +24,13 @@ struct FMDInventoryTestAccess
 	static uint8 GetSlot(const UMDInventoryComponent* C, FName Row) { return C->GetSlotForItem(Row); }
 	static int32 GetMaxStack(const UMDInventoryComponent* C, FName Row) { return C->GetMaxStackForItem(Row); }
 	static bool IsValid(const UMDInventoryComponent* C, FName Row) { return C->IsValidRow(Row); }
+
+	static void SetEquippedRaw(UMDInventoryComponent* C, uint8 Slot, FName Row)
+	{
+		FMDEquippedSlot& Entry = C->Equipped.AddDefaulted_GetRef();
+		Entry.Slot = Slot;
+		Entry.ItemRowName = Row;
+	}
 
 	static bool ValidateEquip(UMDInventoryComponent* C, int32 Index) { return C->Server_EquipItem_Validate(Index); }
 	static void ServerEquip(UMDInventoryComponent* C, int32 Index) { C->Server_EquipItem_Implementation(Index); }
@@ -1020,6 +1028,208 @@ bool FMDInvUseRejectReasonTest::RunTest(const FString& Parameters)
 	}
 	Fx.Inv->RequestUseQuickSlot(0);
 	TestEqual(TEXT("empty quick slot changes nothing"), Fx.Inv->GetItems().Num(), 0);
+	return true;
+}
+
+// ---- Two-handed exclusivity ----
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDTwoHandedConflictSetTest, "MazeDemons.Equip.TwoHandedExclusive.ConflictSet", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDTwoHandedConflictSetTest::RunTest(const FString& Parameters)
+{
+	using Inv = UMDInventoryComponent;
+	for (const uint8 One : { uint8(0), uint8(1), uint8(2) })
+	{
+		const TArray<uint8> Set = Inv::GetConflictingSlots(One);
+		TestEqual(TEXT("one-hand slot conflicts with exactly one slot"), Set.Num(), 1);
+		TestTrue(TEXT("...the two-hander"), Set.Contains(3));
+	}
+	const TArray<uint8> TwoSet = Inv::GetConflictingSlots(3);
+	TestEqual(TEXT("two-hander conflicts with three slots"), TwoSet.Num(), 3);
+	TestTrue(TEXT("main"), TwoSet.Contains(0));
+	TestTrue(TEXT("off"), TwoSet.Contains(1));
+	TestTrue(TEXT("shield"), TwoSet.Contains(2));
+	TestEqual(TEXT("armor has no conflicts"), Inv::GetConflictingSlots(5).Num(), 0);
+	TestEqual(TEXT("gold has no conflicts"), Inv::GetConflictingSlots(9).Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDTwoHandedExclusiveTest, "MazeDemons.Equip.TwoHandedExclusive.Equip", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDTwoHandedExclusiveTest::RunTest(const FString& Parameters)
+{
+	// Claymore -> sword: the claymore goes back to the bag.
+	{
+		FMDInvFixture Fx;
+		if (!Fx.Init(*this))
+		{
+			return false;
+		}
+		const FName SwordA = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 0; });
+		const FName Clay = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 3; });
+		if (SwordA.IsNone() || Clay.IsNone())
+		{
+			AddWarning(TEXT("DT_Items needs a slot-0 row and a two-hander; skipping"));
+			return true;
+		}
+
+		// claymore -> sword
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 3, Clay);
+		TestTrue(TEXT("add sword"), Fx.Inv->AddItem(SwordA, 1));
+		FMDInventoryTestAccess::ServerEquip(Fx.Inv, IndexOfRow(Fx.Inv, SwordA));
+		TestNull(TEXT("claymore unequipped"), FindEquipped(Fx.Inv, 3));
+		TestNotNull(TEXT("sword equipped"), FindEquipped(Fx.Inv, 0));
+		TestEqual(TEXT("claymore is in the bag"), TotalOfRow(Fx.Inv, Clay), 1);
+		TestTrue(TEXT("combo set matches the sword"), Fx.Inv->ResolveEquippedComboSet() == Fx.Inv->GetItemComboSet(SwordA));
+	}
+	// sword + shield -> claymore
+	{
+		FMDInvFixture Fx;
+		if (!Fx.Init(*this))
+		{
+			return false;
+		}
+		const FName Sword = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 0; });
+		const FName Clay = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 3; });
+		const FName Shield = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 2; });
+		if (Sword.IsNone() || Clay.IsNone() || Shield.IsNone())
+		{
+			return true;
+		}
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 0, Sword);
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 2, Shield);
+		TestTrue(TEXT("add claymore"), Fx.Inv->AddItem(Clay, 1));
+		FMDInventoryTestAccess::ServerEquip(Fx.Inv, IndexOfRow(Fx.Inv, Clay));
+		TestNotNull(TEXT("claymore equipped"), FindEquipped(Fx.Inv, 3));
+		TestNull(TEXT("main hand cleared"), FindEquipped(Fx.Inv, 0));
+		TestNull(TEXT("shield cleared"), FindEquipped(Fx.Inv, 2));
+		TestEqual(TEXT("sword in bag"), TotalOfRow(Fx.Inv, Sword), 1);
+		TestEqual(TEXT("shield in bag"), TotalOfRow(Fx.Inv, Shield), 1);
+		TestTrue(TEXT("combo set matches the claymore"), Fx.Inv->ResolveEquippedComboSet() == Fx.Inv->GetItemComboSet(Clay));
+	}
+	// two swords -> claymore
+	{
+		FMDInvFixture Fx;
+		if (!Fx.Init(*this))
+		{
+			return false;
+		}
+		const FName Sword = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 0; });
+		const FName Clay = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 3; });
+		if (Sword.IsNone() || Clay.IsNone())
+		{
+			return true;
+		}
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 0, Sword);
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 1, Sword);
+		TestTrue(TEXT("add claymore"), Fx.Inv->AddItem(Clay, 1));
+		FMDInventoryTestAccess::ServerEquip(Fx.Inv, IndexOfRow(Fx.Inv, Clay));
+		TestNotNull(TEXT("claymore equipped"), FindEquipped(Fx.Inv, 3));
+		TestNull(TEXT("main hand cleared"), FindEquipped(Fx.Inv, 0));
+		TestNull(TEXT("off hand cleared"), FindEquipped(Fx.Inv, 1));
+		TestEqual(TEXT("both swords in bag"), TotalOfRow(Fx.Inv, Sword), 2);
+		TestTrue(TEXT("combo set matches the claymore"), Fx.Inv->ResolveEquippedComboSet() == Fx.Inv->GetItemComboSet(Clay));
+	}
+	// full bag: sword + shield equipped, bag holds only the claymore (1 slot). Both would need room: nothing changes.
+	{
+		FMDInvFixture Fx;
+		if (!Fx.Init(*this, 1))
+		{
+			return false;
+		}
+		const FName Sword = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 0; });
+		const FName Clay = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 3; });
+		const FName Shield = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 2; });
+		if (Sword.IsNone() || Clay.IsNone() || Shield.IsNone())
+		{
+			return true;
+		}
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 0, Sword);
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 2, Shield);
+		TestTrue(TEXT("add claymore"), Fx.Inv->AddItem(Clay, 1));
+		FMDInventoryTestAccess::ServerEquip(Fx.Inv, IndexOfRow(Fx.Inv, Clay));
+		TestNull(TEXT("claymore not equipped"), FindEquipped(Fx.Inv, 3));
+		TestNotNull(TEXT("sword still equipped"), FindEquipped(Fx.Inv, 0));
+		TestNotNull(TEXT("shield still equipped"), FindEquipped(Fx.Inv, 2));
+		TestEqual(TEXT("claymore still in the bag"), TotalOfRow(Fx.Inv, Clay), 1);
+		TestEqual(TEXT("bag unchanged"), Fx.Inv->GetItems().Num(), 1);
+		TestTrue(TEXT("combo set still matches the sword"), Fx.Inv->ResolveEquippedComboSet() == Fx.Inv->GetItemComboSet(Sword));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDWeaponStanceRuleTest, "MazeDemons.Combat.WeaponStance.Rule", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDWeaponStanceRuleTest::RunTest(const FString& Parameters)
+{
+	using Inv = UMDInventoryComponent;
+	// (TwoHanded, Main, Off, DualPair) -> stance
+	TestTrue(TEXT("nothing -> Unarmed"), Inv::StanceForLoadout(false, false, false, false) == EMDWeaponStance::Unarmed);
+	TestTrue(TEXT("main only -> OneHanded"), Inv::StanceForLoadout(false, true, false, false) == EMDWeaponStance::OneHanded);
+	TestTrue(TEXT("off only -> OneHanded"), Inv::StanceForLoadout(false, false, true, false) == EMDWeaponStance::OneHanded);
+	TestTrue(TEXT("main + off, no pair -> OneHanded"), Inv::StanceForLoadout(false, true, true, false) == EMDWeaponStance::OneHanded);
+	TestTrue(TEXT("main + off, pair -> DualSword"), Inv::StanceForLoadout(false, true, true, true) == EMDWeaponStance::DualSword);
+	TestTrue(TEXT("pair flag without both hands -> OneHanded"), Inv::StanceForLoadout(false, true, false, true) == EMDWeaponStance::OneHanded);
+	TestTrue(TEXT("pair flag with no hands -> Unarmed"), Inv::StanceForLoadout(false, false, false, true) == EMDWeaponStance::Unarmed);
+	TestTrue(TEXT("two-hander -> Greatsword"), Inv::StanceForLoadout(true, false, false, false) == EMDWeaponStance::Greatsword);
+	TestTrue(TEXT("two-hander wins over hands"), Inv::StanceForLoadout(true, true, true, true) == EMDWeaponStance::Greatsword);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDWeaponStanceLoadoutTest, "MazeDemons.Combat.WeaponStance.Loadout", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDWeaponStanceLoadoutTest::RunTest(const FString& Parameters)
+{
+	// nothing equipped
+	{
+		FMDInvFixture Fx;
+		if (!Fx.Init(*this))
+		{
+			return false;
+		}
+		TestTrue(TEXT("nothing -> Unarmed"), Fx.Inv->GetWeaponStance() == EMDWeaponStance::Unarmed);
+		TestTrue(TEXT("null actor -> Unarmed"), UMDCombatStatics::GetWeaponStanceForActor(nullptr) == EMDWeaponStance::Unarmed);
+	}
+	// claymore
+	{
+		FMDInvFixture Fx;
+		if (!Fx.Init(*this))
+		{
+			return false;
+		}
+		const FName Clay = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 3; });
+		if (!Clay.IsNone())
+		{
+			FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 3, Clay);
+			TestTrue(TEXT("claymore -> Greatsword"), Fx.Inv->GetWeaponStance() == EMDWeaponStance::Greatsword);
+		}
+		else
+		{
+			AddWarning(TEXT("DT_Items needs a two-hander row; skipping the claymore case"));
+		}
+	}
+	// one sword, then two swords
+	{
+		FMDInvFixture Fx;
+		if (!Fx.Init(*this))
+		{
+			return false;
+		}
+		const FName Sword = Fx.FindRow([&Fx](FName R) { return Fx.SlotOf(R) == 0; });
+		if (Sword.IsNone())
+		{
+			AddWarning(TEXT("DT_Items needs a slot-0 row; skipping the sword cases"));
+			return true;
+		}
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 0, Sword);
+		TestTrue(TEXT("one sword -> OneHanded"), Fx.Inv->GetWeaponStance() == EMDWeaponStance::OneHanded);
+
+		FMDInventoryTestAccess::SetEquippedRaw(Fx.Inv, 1, Sword);
+		if (Fx.Inv->GetItemDualComboSet(Sword) != nullptr)
+		{
+			TestTrue(TEXT("two swords -> DualSword"), Fx.Inv->GetWeaponStance() == EMDWeaponStance::DualSword);
+		}
+		else
+		{
+			AddWarning(TEXT("The sword row has no DualComboSet; skipping the DualSword case"));
+		}
+	}
 	return true;
 }
 

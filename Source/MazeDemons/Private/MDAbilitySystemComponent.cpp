@@ -330,6 +330,23 @@ void UMDAbilitySystemComponent::OnRep_BaseStats()
 
 void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit)
 {
+	ApplyDamageCore(Damage, DamageInstigator, DamageCauser, bAllowCrit, nullptr);
+}
+
+bool UMDAbilitySystemComponent::ApplyDamage(const FMDHitContext& Context, FMDDamageResult& OutResult)
+{
+	OutResult = FMDDamageResult();
+	const float Damage = Context.BaseDamage * FMath::Max(Context.Step.DamageMult, 0.0f);
+	ApplyDamageCore(Damage, Context.Instigator, Context.Causer, true, &OutResult);
+	return OutResult.bApplied;
+}
+
+void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult)
+{
+	if (OutResult)
+	{
+		*OutResult = FMDDamageResult();
+	}
 	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
 		UE_LOG(LogMDAbilitySystem, Verbose, TEXT("ApplyDamage ignored on non-authority."));
@@ -349,6 +366,12 @@ void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigat
 	{
 		UE_LOG(LogMDAbilitySystem, Verbose, TEXT("ApplyDamage blocked by team rules: %s -> %s"),
 			*GetNameSafe(DamageInstigator), *GetNameSafe(Target));
+		return;
+	}
+
+	// Dodge i-frames: the hit passes through. Nothing sets this tag outside the dodge ability, so existing callers are unaffected.
+	if (HasMatchingGameplayTag(TAG_State_Invulnerable.GetTag()))
+	{
 		return;
 	}
 
@@ -405,6 +428,13 @@ void UMDAbilitySystemComponent::ApplyDamage(float Damage, AActor* DamageInstigat
 		ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
 
 		const float Applied = HealthBefore - GetHealth();
+		if (OutResult)
+		{
+			OutResult->bApplied = Applied > 0.0f;
+			OutResult->bCrit = bCrit;
+			OutResult->Damage = FinalDamage;
+			OutResult->Applied = FMath::Max(Applied, 0.0f);
+		}
 		if (Applied > 0.0f)
 		{
 			LastDamageTakenTime = GetServerNow(); // the 5 s out-of-combat clock for perk spending and Recovery

@@ -22,7 +22,12 @@ public class MazeDemons : ModuleRules
 				"SlateCore",
 				"DeveloperSettings",
 				"InputCore",
-				"EnhancedInput"
+				"EnhancedInput",
+				"PhysicsCore",
+				"Niagara",
+				"MotionWarping"
 			});
+
+		PrivateDependencyModuleNames.Add("AssetRegistry"); // combo set validation test
 	}
 }

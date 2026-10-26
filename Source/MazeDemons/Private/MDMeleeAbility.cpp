@@ -3,7 +3,11 @@
 #include "Components/ActorComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
+#include "MDComboComponent.h"
 #include "MDGameplayStatics.h"
+#include "MDPoiseComponent.h"
+#include "Engine/World.h"
+#include "TimerManager.h"
 
 UMDMeleeAbility::UMDMeleeAbility()
 {
@@ -55,10 +59,13 @@ bool UMDMeleeAbility::CanActivateAbility(const FGameplayAbilitySpecHandle Handle
 	const APawn* Pawn = Cast<APawn>(Avatar);
 	UActorComponent* CombatComponent = nullptr;
 	UFunction* LightAttackFunction = nullptr;
-	const bool bHasCombat = ResolveCombat(Avatar, CombatComponent, LightAttackFunction);
+	const UMDComboComponent* Combo = UMDComboComponent::FindFor(Avatar);
+	const bool bHasComboSet = Combo && Combo->HasComboSet();
+	const bool bHasCombat = ResolveCombat(Avatar, CombatComponent, LightAttackFunction) || bHasComboSet;
 
 	const EMDAttackBlock Block = UMDGameplayStatics::EvaluateAttackGate(Pawn != nullptr, UMDGameplayStatics::IsPawnDead(Pawn),
-		Pawn && Pawn->IsLocallyControlled(), UMDGameplayStatics::IsLocalMenuBlockingPawn(Pawn), bHasCombat);
+		Pawn && Pawn->IsLocallyControlled(), UMDGameplayStatics::IsLocalMenuBlockingPawn(Pawn), bHasCombat,
+		UMDPoiseComponent::IsActorStunned(Pawn));
 	return Block == EMDAttackBlock::None;
 }
 
@@ -68,6 +75,58 @@ void UMDMeleeAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, c
 	UActorComponent* CombatComponent = nullptr;
 	UFunction* LightAttackFunction = nullptr;
 	AActor* Avatar = GetAvatarActorFromActorInfo();
+
+	// C1 path: the combo component drives the swing.
+	if (UMDComboComponent* Combo = UMDComboComponent::FindFor(Avatar))
+	{
+		if (Combo->HasComboSet())
+		{
+			if (!CommitAbility(Handle, ActorInfo, ActivationInfo))
+			{
+				EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+				return;
+			}
+
+			// Input is processed where the player is; the server gets it from the combo component's own RPC, so the server's
+			// copy of this predicted ability (remote pawn, not locally controlled) has nothing to do.
+			const APawn* Pawn = Cast<APawn>(Avatar);
+			if (!Pawn || !Pawn->IsLocallyControlled())
+			{
+				EndAbility(Handle, ActorInfo, ActivationInfo, false, false);
+				return;
+			}
+
+			switch (InputKind)
+			{
+			case EMDComboInput::Heavy:
+				bHeavyHeld = true;
+				Combo->HeavyPressed();
+				if (const UWorld* World = GetWorld())
+				{
+					World->GetTimerManager().SetTimer(HeavyTimer, this, &UMDMeleeAbility::OnHeavyTimeout, FMath::Max(MaxHeavyHold, 0.5f), false);
+				}
+				return; // stays active until the button is released
+			case EMDComboInput::Dodge:
+				Combo->RequestInput(EMDComboInput::Dodge);
+				break;
+			case EMDComboInput::Light:
+			case EMDComboInput::None:
+			default:
+				Combo->RequestInput(EMDComboInput::Light);
+				break;
+			}
+			EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+			return;
+		}
+	}
+
+	if (InputKind != EMDComboInput::Light)
+	{
+		// Heavy / dodge need a combo set; the old path only knows the light attack.
+		EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+		return;
+	}
+
 	if (!ResolveCombat(Avatar, CombatComponent, LightAttackFunction))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("%s cannot activate melee: no AC_Combat component with DoLightAttack was found."),
@@ -85,4 +144,46 @@ void UMDMeleeAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, c
 	CombatComponent->ProcessEvent(LightAttackFunction, nullptr);
 
 	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+}
+
+void UMDMeleeAbility::InputReleased(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo)
+{
+	Super::InputReleased(Handle, ActorInfo, ActivationInfo);
+	if (bHeavyHeld)
+	{
+		if (UMDComboComponent* Combo = UMDComboComponent::FindFor(GetAvatarActorFromActorInfo()))
+		{
+			bHeavyHeld = false;
+			Combo->HeavyReleased();
+		}
+		EndAbility(Handle, ActorInfo, ActivationInfo, false, false);
+	}
+}
+
+void UMDMeleeAbility::OnHeavyTimeout()
+{
+	if (bHeavyHeld && IsActive())
+	{
+		InputReleased(GetCurrentAbilitySpecHandle(), GetCurrentActorInfo(), GetCurrentActivationInfo());
+	}
+}
+
+void UMDMeleeAbility::EndAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
+{
+	if (const UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(HeavyTimer);
+	}
+	if (bHeavyHeld)
+	{
+		// Cancelled while the button was down (stagger, death): the combo component was reset by the interrupt; just forget the hold.
+		bHeavyHeld = false;
+		if (UMDComboComponent* Combo = UMDComboComponent::FindFor(GetAvatarActorFromActorInfo()))
+		{
+			Combo->NotifyInterrupted();
+		}
+	}
+	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }

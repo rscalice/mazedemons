@@ -4,6 +4,9 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Data_Damage, "Data.Damage");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Exhausted, "State.Exhausted");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Sprinting, "State.Sprinting");
 
+UE_DEFINE_GAMEPLAY_TAG(TAG_State_Staggered, "State.Staggered");
+UE_DEFINE_GAMEPLAY_TAG(TAG_State_Invulnerable, "State.Invulnerable");
+
 UE_DEFINE_GAMEPLAY_TAG(TAG_Data_Perk_MaxHealth, "Data.Perk.MaxHealth");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Data_Perk_MaxStamina, "Data.Perk.MaxStamina");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Data_Perk_StaminaRegen, "Data.Perk.StaminaRegen");

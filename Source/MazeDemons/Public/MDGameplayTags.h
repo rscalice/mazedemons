@@ -10,6 +10,11 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Damage);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Exhausted);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Sprinting);
 
+// C1 combat state, kept as loose tags: Staggered while the poise component is stunned (blocks attack, heavy and dodge),
+// Invulnerable during dodge i-frames (ApplyDamage skips the hit).
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Staggered);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Invulnerable);
+
 // SetByCaller tags feeding UMDPerkEffect (the single infinite perk effect). Magnitudes are deltas from the attribute base.
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Perk_MaxHealth);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Perk_MaxStamina);
