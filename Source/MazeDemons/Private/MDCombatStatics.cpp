@@ -6,6 +6,7 @@
 #include "MDCombatDebug.h"
 #include "MDCombatFeedbackComponent.h"
 #include "MDCombatRules.h"
+#include "MDDamageNumbers.h"
 #include "MDComboComponent.h"
 #include "MDComboSet.h"
 #include "MDGameplayStatics.h"
@@ -24,6 +25,27 @@
 #include "Components/SceneComponent.h"
 #include "GameFramework/DamageType.h"
 #include "Kismet/GameplayStatics.h"
+
+namespace MDCombatNumberLocal
+{
+	// The feedback component that acts for the attacker: on its controller (the player Blueprint), else on the pawn itself.
+	UMDCombatFeedbackComponent* FindFeedback(AActor* Attacker)
+	{
+		UMDCombatFeedbackComponent* Feedback = nullptr;
+		if (const APawn* AttackerPawn = Cast<APawn>(Attacker))
+		{
+			if (const AController* Controller = AttackerPawn->GetController())
+			{
+				Feedback = Controller->FindComponentByClass<UMDCombatFeedbackComponent>();
+			}
+		}
+		if (!Feedback && Attacker)
+		{
+			Feedback = Attacker->FindComponentByClass<UMDCombatFeedbackComponent>();
+		}
+		return Feedback;
+	}
+}
 
 bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHitResult& Hit)
 {
@@ -59,6 +81,7 @@ bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHi
 	Context.ImpactNormal = Hit.ImpactNormal;
 	Context.AttackerLocation = Attacker->GetActorLocation();
 	Context.ImpactTag = Step.ImpactTag;
+	Context.DamageType = MDDamageNumbers::ResolveType(Step.DamageType); // Physical unless the step says otherwise
 	Context.PhysMaterial = Hit.PhysMaterial.Get();
 
 	FMDDamageResult Damage;
@@ -99,18 +122,7 @@ bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHi
 	}
 
 	// Tell the attacker: hit-stop, shake, rumble, damage number.
-	UMDCombatFeedbackComponent* Feedback = nullptr;
-	if (const APawn* AttackerPawn = Cast<APawn>(Attacker))
-	{
-		if (const AController* Controller = AttackerPawn->GetController())
-		{
-			Feedback = Controller->FindComponentByClass<UMDCombatFeedbackComponent>();
-		}
-	}
-	if (!Feedback)
-	{
-		Feedback = Attacker->FindComponentByClass<UMDCombatFeedbackComponent>();
-	}
+	UMDCombatFeedbackComponent* Feedback = MDCombatNumberLocal::FindFeedback(Attacker);
 	if (Feedback)
 	{
 		const float StopScale = (Combo && Combo->ComboSet) ? Combo->ComboSet->HitStopScale : 1.0f;
@@ -118,11 +130,40 @@ bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHi
 		Confirm.Victim = Victim;
 		Confirm.Damage = Damage.Applied;
 		Confirm.bCrit = Damage.bCrit;
+		Confirm.DamageType = Damage.DamageType;
 		Confirm.Location = Context.ImpactPoint;
 		Confirm.HitStopFrames = FMath::RoundToInt(static_cast<float>(Step.HitStopFrames) * StopScale);
 		Confirm.ShakeScale = Step.ShakeScale;
 		Confirm.Kind = Context.Kind;
 		Confirm.Reaction = Reaction;
+		Feedback->Client_ConfirmHit(Confirm);
+	}
+	return true;
+}
+
+bool UMDCombatStatics::ApplyTypedDamage(AActor* Instigator, AActor* Victim, float Damage, FGameplayTag DamageType, FVector Location)
+{
+	if (!Victim || !Victim->HasAuthority() || Damage <= 0.0f || !MDDamageNumbers::IsEligibleVictim(Victim))
+	{
+		return false;
+	}
+	UMDAbilitySystemComponent* VictimASC = UMDGameplayStatics::GetMDAbilitySystemComponent(Victim);
+	const float HealthBefore = VictimASC->GetHealth();
+	VictimASC->ApplyDamage(Damage, Instigator, Instigator, false); // team rules, i-frames and kill credit; a tick never crits
+	const float Applied = HealthBefore - VictimASC->GetHealth();
+	if (Applied <= 0.0f)
+	{
+		return false;
+	}
+
+	if (UMDCombatFeedbackComponent* Feedback = MDCombatNumberLocal::FindFeedback(Instigator))
+	{
+		FMDHitConfirm Confirm;
+		Confirm.Victim = Victim;
+		Confirm.Damage = Applied;
+		Confirm.DamageType = MDDamageNumbers::ResolveType(DamageType);
+		Confirm.Location = Location.IsNearlyZero() ? Victim->GetActorLocation() : Location;
+		Confirm.bNumberOnly = true;
 		Feedback->Client_ConfirmHit(Confirm);
 	}
 	return true;

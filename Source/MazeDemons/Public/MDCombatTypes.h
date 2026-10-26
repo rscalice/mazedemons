@@ -166,6 +166,10 @@ struct MAZEDEMONS_API FMDAttackStep
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
 	FGameplayTag ImpactTag;
 
+	// Damage.Type.* of this step's hit (decides the floating number's color). Empty = Physical.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
+	FGameplayTag DamageType;
+
 	// Swing whoosh played when the step starts (every machine). Empty = silent; fill from the "General Whoosh SFX" pack.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
 	TObjectPtr<USoundBase> SwingSound = nullptr;
@@ -250,6 +254,10 @@ struct MAZEDEMONS_API FMDHitContext
 	UPROPERTY(BlueprintReadWrite, Category = "Hit")
 	FGameplayTag ImpactTag;
 
+	// Damage.Type.* of the hit; empty = Physical. Copied to FMDDamageResult, the hit confirm and the replicated hit record.
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	FGameplayTag DamageType;
+
 	UPROPERTY(BlueprintReadWrite, Category = "Hit")
 	TObjectPtr<UPhysicalMaterial> PhysMaterial = nullptr;
 };
@@ -279,6 +287,9 @@ struct MAZEDEMONS_API FMDHitResultRep
 	bool bCrit = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Hit")
+	FGameplayTag DamageType;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Hit")
 	float Damage = 0.0f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Hit")
@@ -300,4 +311,5 @@ struct FMDDamageResult
 	bool bCrit = false;
 	float Damage = 0.0f;     // raw damage handed to the damage effect (after multiplier, crit and Executioner)
 	float Applied = 0.0f;    // Health actually removed
+	FGameplayTag DamageType; // Damage.Type.* of the hit (Physical when it carried none)
 };

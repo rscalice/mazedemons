@@ -2,6 +2,7 @@
 
 #include "MDAttributeSet.h"
 #include "MDDamageEffect.h"
+#include "MDDamageNumbers.h"
 #include "MDGameplayStatics.h"
 #include "MDGameplayTags.h"
 #include "MDGameSettings.h"
@@ -338,6 +339,7 @@ bool UMDAbilitySystemComponent::ApplyDamage(const FMDHitContext& Context, FMDDam
 	OutResult = FMDDamageResult();
 	const float Damage = Context.BaseDamage * FMath::Max(Context.Step.DamageMult, 0.0f);
 	ApplyDamageCore(Damage, Context.Instigator, Context.Causer, true, &OutResult);
+	OutResult.DamageType = MDDamageNumbers::ResolveType(Context.DamageType.IsValid() ? Context.DamageType : Context.Step.DamageType);
 	return OutResult.bApplied;
 }
 

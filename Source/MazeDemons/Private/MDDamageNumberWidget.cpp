@@ -1,5 +1,7 @@
 #include "MDDamageNumberWidget.h"
 
+#include "MDDamageNumbers.h"
+
 #include "Blueprint/WidgetTree.h"
 #include "Components/TextBlock.h"
 #include "Engine/World.h"
@@ -10,18 +12,44 @@ FString UMDDamageNumberWidget::FormatDamage(float Damage)
 	return FString::FromInt(FMath::Max(1, FMath::RoundToInt(Damage)));
 }
 
+void UMDDamageNumberWidget::EnsureText()
+{
+	if (Text || !WidgetTree)
+	{
+		return;
+	}
+	if (WidgetTree->RootWidget)
+	{
+		Text = Cast<UTextBlock>(WidgetTree->RootWidget);
+		return;
+	}
+	Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("DamageText"));
+	WidgetTree->RootWidget = Text;
+}
+
+// The text block must exist before the first Start(): a widget made with CreateWidget has no Slate widget (and so no RebuildWidget)
+// until it is added to the viewport, and Start() is what adds it. Building it lazily in RebuildWidget meant Start() always found no
+// text and returned, so no native number was ever shown.
+bool UMDDamageNumberWidget::Initialize()
+{
+	const bool bResult = Super::Initialize();
+	if (!WidgetTree)
+	{
+		WidgetTree = NewObject<UWidgetTree>(this, TEXT("WidgetTree"), RF_Transient);
+	}
+	EnsureText();
+	return bResult;
+}
+
 TSharedRef<SWidget> UMDDamageNumberWidget::RebuildWidget()
 {
-	if (WidgetTree && !WidgetTree->RootWidget)
-	{
-		Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("DamageText"));
-		WidgetTree->RootWidget = Text;
-	}
+	EnsureText();
 	return Super::RebuildWidget();
 }
 
-void UMDDamageNumberWidget::Start(APlayerController* Controller, const FVector& WorldLocation, float Damage, bool bCrit)
+void UMDDamageNumberWidget::Start(APlayerController* Controller, const FVector& WorldLocation, float Damage, bool bCrit, const FGameplayTag& DamageType)
 {
+	EnsureText();
 	if (!Controller || !Text)
 	{
 		return;
@@ -37,8 +65,11 @@ void UMDDamageNumberWidget::Start(APlayerController* Controller, const FVector& 
 	Font.OutlineSettings.OutlineColor = FLinearColor(0.0f, 0.0f, 0.0f, 0.9f);
 	Text->SetFont(Font);
 	Text->SetText(FText::FromString(bCrit ? FormatDamage(Damage) + TEXT("!") : FormatDamage(Damage)));
-	Text->SetColorAndOpacity(FSlateColor(bCrit ? CritColor : NormalColor));
+	ShownColor = MDDamageNumbers::ResolveColor(DamageType, bCrit, &TypeColorOverrides, bOverrideCritColor ? &CritColorOverride : nullptr);
+	bShownCrit = bCrit;
+	Text->SetColorAndOpacity(FSlateColor(ShownColor));
 	Text->SetRenderOpacity(1.0f);
+	SetRenderScale(bCrit ? FVector2D(CritPunchScale, CritPunchScale) : FVector2D(1.0, 1.0));
 
 	bActive = true;
 	SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
@@ -80,6 +111,11 @@ void UMDDamageNumberWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
 	{
 		SetRenderOpacity(0.0f);
 		return;
+	}
+	if (bShownCrit)
+	{
+		const float Pop = FMath::Lerp(CritPunchScale, 1.0f, FMath::Clamp(Age / FMath::Max(CritPunchSeconds, 0.01f), 0.0f, 1.0f));
+		SetRenderScale(FVector2D(Pop, Pop));
 	}
 	const float Eased = 1.0f - FMath::Square(1.0f - T);
 	SetPositionInViewport(Screen + Drift * Eased + FVector2D(0.0f, -RisePixels * Eased), true);

@@ -32,6 +32,10 @@ struct MAZEDEMONS_API FMDHitConfirm
 	UPROPERTY(BlueprintReadWrite, Category = "Hit")
 	bool bCrit = false;
 
+	// Damage.Type.* of the hit; colors the damage number.
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	FGameplayTag DamageType;
+
 	UPROPERTY(BlueprintReadWrite, Category = "Hit")
 	FVector_NetQuantize10 Location = FVector::ZeroVector;
 
@@ -46,6 +50,10 @@ struct MAZEDEMONS_API FMDHitConfirm
 
 	UPROPERTY(BlueprintReadWrite, Category = "Hit")
 	EMDHitReaction Reaction = EMDHitReaction::None;
+
+	// Only show the damage number (no hit-stop, shake or rumble): damage that is not a weapon swing, e.g. a status effect tick.
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	bool bNumberOnly = false;
 };
 
 // Per-flash bookkeeping (local).
@@ -220,7 +228,7 @@ private:
 	void DrawDebug();
 	void LoadDefaultAssets();
 	void RestoreOverlay(FMDHitFlashState& Flash);
-	void ShowDamageNumber(float Damage, bool bCrit, const FVector& Location);
+	void ShowDamageNumber(float Damage, bool bCrit, const FVector& Location, const FGameplayTag& DamageType);
 	void PlayNativeImpact(AActor* Victim, const FMDHitResultRep& Hit);
 	void PlayHurtSound(AActor* Victim, const FMDHitResultRep& Hit);
 

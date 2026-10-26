@@ -1,6 +1,12 @@
 #include "MDGameplayTags.h"
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_Data_Damage, "Data.Damage");
+
+UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Physical, "Damage.Type.Physical");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Frost, "Damage.Type.Frost");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Fire, "Damage.Type.Fire");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Poison, "Damage.Type.Poison");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Bleed, "Damage.Type.Bleed");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Exhausted, "State.Exhausted");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Sprinting, "State.Sprinting");
 

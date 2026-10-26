@@ -6,6 +6,14 @@
 // SetByCaller tag carrying raw damage into UMDDamageEffect.
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Damage);
 
+// Damage types (FMDHitContext::DamageType). Physical is the default for any hit that carries none; the elemental ones only change
+// the floating damage number's color for now (see MDDamageNumbers.h). V1 WP6 status effects pass Fire (Burn), Frost, Poison, Bleed.
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Physical);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Frost);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Fire);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Poison);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Bleed);
+
 // Stamina state, kept as loose tags on the server by UMDStaminaComponent. Attacks never check these.
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Exhausted);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Sprinting);
