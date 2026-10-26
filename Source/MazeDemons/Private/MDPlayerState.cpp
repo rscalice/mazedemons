@@ -8,6 +8,7 @@
 #include "MDInventoryComponent.h"
 #include "MDPhysicalHitReactComponent.h"
 #include "MDPerkComponent.h"
+#include "MDRagdollTuning.h"
 #include "MDStaminaComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
@@ -134,6 +135,7 @@ void AMDPlayerState::RagdollPawn(APawn* Pawn)
 		Mesh->SetSimulatePhysics(true);
 		Mesh->SetPhysicsBlendWeight(1.0f);
 		Mesh->WakeAllRigidBodies();
+		MDRagdollTuning::ApplyForDeath(Mesh, false);
 		return;
 	}
 
@@ -150,6 +152,7 @@ void AMDPlayerState::RagdollPawn(APawn* Pawn)
 	Body->SetSimulatePhysics(true);
 	Body->SetPhysicsBlendWeight(1.0f);
 	Body->WakeAllRigidBodies();
+	MDRagdollTuning::ApplyForDeath(Body, true);
 
 	// Armor/face parts follow the simulated body; they are not simulated themselves.
 	static const TCHAR* FollowParts[] = { TEXT("Torso"), TEXT("Hands"), TEXT("Legs"), TEXT("Feet"), TEXT("Face") };
