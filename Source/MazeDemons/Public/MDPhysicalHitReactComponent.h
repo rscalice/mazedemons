@@ -27,6 +27,10 @@ public:
 	// True while the blend is running.
 	bool IsReacting() const { return bActive; }
 
+	// The pawn died and its whole mesh is about to ragdoll: end the reaction without restoring anything, drop the physical animation
+	// drives (they would keep pulling the bodies below the root toward the animation) and refuse further reactions.
+	void StopForDeath();
+
 	// Pure blend curve: 0 at the start, PeakWeight at BlendIn, back to 0 at BlendIn + BlendOut.
 	static float EvaluateBlend(float Elapsed, float BlendIn, float BlendOut, float PeakWeight);
 
@@ -65,6 +69,7 @@ private:
 	TWeakObjectPtr<USkeletalMeshComponent> ConfiguredMesh;
 
 	bool bActive = false;
+	bool bDead = false;
 	float Elapsed = 0.0f;
 
 	// Collision state to restore when a query-only mesh was made simulatable for the reaction.
