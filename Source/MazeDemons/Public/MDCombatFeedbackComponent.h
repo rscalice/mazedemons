@@ -15,6 +15,7 @@ class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class USkeletalMeshComponent;
 class UWorld;
+struct FMDImpactEntry;
 
 // What the server tells the attacker about a hit it landed (Client_ConfirmHit).
 USTRUCT(BlueprintType)
@@ -223,7 +224,12 @@ private:
 	void PlayNativeImpact(AActor* Victim, const FMDHitResultRep& Hit);
 	void PlayHurtSound(AActor* Victim, const FMDHitResultRep& Hit);
 
+	void PlayFloorBlood(AActor* Victim, const FMDHitResultRep& Hit, const FMDImpactEntry& Entry, const UMDImpactSet* Set);
+
 	TArray<TWeakObjectPtr<class UDecalComponent>> ActiveDecals;
+	// Spawned floor-blood Niagara components (oldest first) and the last floor-blood time per victim (cooldown).
+	TArray<TWeakObjectPtr<class UNiagaraComponent>> ActiveFloorBlood;
+	TMap<TWeakObjectPtr<AActor>, double> LastFloorBloodTimes;
 	double LastHurtSoundTime = -1000.0;
 
 	UPROPERTY(Transient)

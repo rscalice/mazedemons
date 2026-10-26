@@ -411,7 +411,7 @@ void UMDComboComponent::StartStep(EMDAttackKind Kind, int32 Index)
 
 	if (ActiveStep.SwingSound && GetOwner())
 	{
-		UGameplayStatics::PlaySoundAtLocation(this, ActiveStep.SwingSound, GetOwner()->GetActorLocation()); // swing whoosh hook (data only)
+		UGameplayStatics::PlaySoundAtLocation(this, ActiveStep.SwingSound, GetOwner()->GetActorLocation(), ComboSet ? ComboSet->SwingSoundVolume : 0.5f, ComboSet ? ComboSet->SwingSoundPitch : 1.0f); // swing whoosh hook (data only)
 	}
 
 	OnStepStarted.Broadcast(ActiveStep, Kind, Index);
@@ -456,7 +456,7 @@ void UMDComboComponent::Multicast_PlayStep_Implementation(EMDAttackKind Kind, in
 	}
 	if (Step.SwingSound && GetOwner())
 	{
-		UGameplayStatics::PlaySoundAtLocation(this, Step.SwingSound, GetOwner()->GetActorLocation());
+		UGameplayStatics::PlaySoundAtLocation(this, Step.SwingSound, GetOwner()->GetActorLocation(), ComboSet->SwingSoundVolume, ComboSet->SwingSoundPitch);
 	}
 	OnStepStarted.Broadcast(Step, Kind, Index);
 }

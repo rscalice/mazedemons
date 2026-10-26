@@ -17,6 +17,8 @@ namespace MDCombatDebug
 	// md.Combat.ShakeScale: multiplier on camera shake.
 	MAZEDEMONS_API float ShakeScale();
 
+	// md.Combat.Trails: 1 (default) shows the sword trails during attack swings, 0 hides them.
+	MAZEDEMONS_API bool TrailsEnabled();
 	// md.Combat.ForceReaction: 0 = off, else every landed hit resolves to this EMDHitReaction value (1 Flinch .. 4 Knockdown).
 	MAZEDEMONS_API int32 ForceReaction();
 }

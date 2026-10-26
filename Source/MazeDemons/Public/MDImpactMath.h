@@ -35,6 +35,31 @@ namespace MDImpactMath
 		return Dir.IsNearlyZero() ? FVector::UpVector : Dir;
 	}
 
+	// Floor blood: horizontal offset from the victim, away from the attacker (falls back to forward when they coincide).
+	inline FVector FloorBloodOffset(const FVector& AttackerLoc, const FVector& VictimLoc, double Distance)
+	{
+		FVector Away = (VictimLoc - AttackerLoc);
+		Away.Z = 0.0;
+		Away = Away.GetSafeNormal();
+		if (Away.IsNearlyZero())
+		{
+			Away = FVector::ForwardVector;
+		}
+		return Away * Distance;
+	}
+
+	// Floor blood is skipped on Reduced effects.
+	inline bool AllowFloorBlood(EMDVFXLevel Level)
+	{
+		return Level != EMDVFXLevel::Reduced;
+	}
+
+	// Sword trail scale: thinner on Reduced effects, never negative.
+	inline float TrailScaleForLevel(float WidthScale, EMDVFXLevel Level)
+	{
+		return FMath::Max(0.0f, WidthScale) * (Level == EMDVFXLevel::Reduced ? 0.6f : 1.0f);
+	}
+
 	// Cooldown gate for the hurt sound.
 	inline bool CooldownElapsed(double Now, double Last, double Cooldown)
 	{

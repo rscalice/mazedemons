@@ -436,6 +436,56 @@ void UMDCombatStatics::TraceEquippedWeapons(AActor* Attacker, EMDTraceHandOverri
 	}
 }
 
+void UMDCombatStatics::GetSwingWeapons(const AActor* Attacker, EMDTraceHandOverride TraceHand, TArray<AActor*>& OutWeapons)
+{
+	using namespace MDCombatTraceLocal;
+	OutWeapons.Reset();
+	if (!IsValid(Attacker))
+	{
+		return;
+	}
+	TArray<AActor*> Attached;
+	Attacker->GetAttachedActors(Attached, true);
+	AActor* Found[3] = { nullptr, nullptr, nullptr }; // MainHand, TwoHanded, OffHand
+	for (AActor* Actor : Attached)
+	{
+		if (!IsValid(Actor))
+		{
+			continue;
+		}
+		const FName Socket = Actor->GetAttachParentSocketName();
+		if (Socket == MainHandSocket)
+		{
+			Found[0] = Actor;
+		}
+		else if (Socket == TwoHandedSocket)
+		{
+			Found[1] = Actor;
+		}
+		else if (Socket == OffHandSocket)
+		{
+			Found[2] = Actor;
+		}
+	}
+	const UMDComboComponent* Combo = UMDComboComponent::FindFor(Attacker);
+	const EMDWeaponHand StepHand = Combo ? Combo->GetActiveStepHand() : EMDWeaponHand::Main;
+	const bool bDualPair = Found[0] != nullptr && Found[2] != nullptr;
+	const bool bSetDual = Combo && Combo->ComboSet && Combo->ComboSet->bDualWield;
+	const TArray<FName> Sockets = TraceSocketsForHand(ResolveTraceHand(TraceHand, Combo != nullptr, StepHand, bDualPair, bSetDual));
+	if (Found[0] && Sockets.Contains(MainHandSocket))
+	{
+		OutWeapons.Add(Found[0]);
+	}
+	if (Found[1] && Sockets.Contains(TwoHandedSocket))
+	{
+		OutWeapons.Add(Found[1]);
+	}
+	if (Found[2] && Sockets.Contains(OffHandSocket))
+	{
+		OutWeapons.Add(Found[2]);
+	}
+}
+
 void UMDCombatStatics::ReleaseAbilityInput(AActor* Avatar, TSubclassOf<UGameplayAbility> AbilityClass)
 {
 	UAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(Avatar);

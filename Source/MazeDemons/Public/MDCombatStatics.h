@@ -64,6 +64,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
 	static void TraceEquippedWeapons(AActor* Attacker, EMDTraceHandOverride TraceHand = EMDTraceHandOverride::Auto);
 
+	// Cosmetic, any machine: the weapon actors attached to Attacker (MainHand / TwoHanded / OffHand sockets) that a swing with the
+	// given TraceHand override currently swings (same hand resolution as TraceEquippedWeapons). Used by the sword trail notify.
+	static void GetSwingWeapons(const AActor* Attacker, EMDTraceHandOverride TraceHand, TArray<AActor*>& OutWeapons);
+
 	// The Heavy button was released. The melee abilities are granted with no GAS input id and the BP_Player input events are not
 	// bound to the ability system, so GAS never calls InputReleased by itself: this does, on the avatar's active instance of
 	// AbilityClass (GA_PlayerHeavy). No-op when the ability is not active. Call on the owning client.

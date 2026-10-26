@@ -17,6 +17,8 @@ namespace MDCombatDebugLocal
 		TEXT("Multiplier on hit-stop length (0 = off)."), ECVF_Cheat);
 	TAutoConsoleVariable<float> CVarShakeScale(TEXT("md.Combat.ShakeScale"), 1.0f,
 		TEXT("Multiplier on combat camera shake (0 = off)."), ECVF_Cheat);
+	TAutoConsoleVariable<int32> CVarTrails(TEXT("md.Combat.Trails"), 1,
+		TEXT("1 = show sword trails during attack swings, 0 = hide them."), ECVF_Default);
 	TAutoConsoleVariable<int32> CVarForceReaction(TEXT("md.Combat.ForceReaction"), 0,
 		TEXT("0 = off. Otherwise every landed hit resolves to this reaction: 1 Flinch, 2 Stagger, 3 Knockback, 4 Knockdown."), ECVF_Cheat);
 
@@ -105,6 +107,11 @@ namespace MDCombatDebug
 	float ShakeScale()
 	{
 		return FMath::Max(MDCombatDebugLocal::CVarShakeScale.GetValueOnGameThread(), 0.0f);
+	}
+
+	bool TrailsEnabled()
+	{
+		return MDCombatDebugLocal::CVarTrails.GetValueOnGameThread() != 0;
 	}
 
 	int32 ForceReaction()

@@ -35,6 +35,14 @@ struct MAZEDEMONS_API FMDImpactEntry
 	// Multiplies the VFX scale (Reduced effects level scales it further).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact", meta = (ClampMin = "0"))
 	float VFXScale = 1.0f;
+
+	// Optional floor effect for hits on pawns (blood pooling / spattering on the ground under the victim). Niagara only (e.g. a
+	// system that spawns decals). Skipped on Reduced effects; capped by the set's MaxDecalsPerZone.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact")
+	TObjectPtr<UFXSystemAsset> FloorVFX = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact", meta = (ClampMin = "0"))
+	float FloorVFXScale = 1.0f;
 };
 
 // Per weapon class impact effects (DA_Impact_Blade / Blunt / Heavy). Data only; the feedback component's Blueprint events use it.

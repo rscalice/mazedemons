@@ -16,6 +16,7 @@
 #include "Particles/ParticleSystem.h"
 #include "Sound/SoundBase.h"
 #include "MDUISettings.h"
+#include "AbilitySystemInterface.h"
 #include "Camera/CameraShakeBase.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -308,8 +309,15 @@ void UMDCombatFeedbackComponent::PlayNativeImpact(AActor* Victim, const FMDHitRe
 		UGameplayStatics::PlaySoundAtLocation(World, Entry.Sound, Point, FMath::FRandRange(0.95f, 1.05f), FMath::FRandRange(0.95f, 1.05f));
 	}
 
-	// Decals only on world geometry (anything that is not a pawn) and not on Reduced effects.
-	if (Entry.Decal && MDImpactMath::AllowDecals(Level) && !Victim->IsA<APawn>())
+	// A creature is a pawn or any actor with an ability system (AMDTestDummy is a plain AActor, so IsA<APawn> alone skipped it).
+	const bool bVictimIsCreature = Victim->IsA<APawn>() || Cast<IAbilitySystemInterface>(Victim) != nullptr;
+	if (bVictimIsCreature)
+	{
+		PlayFloorBlood(Victim, Hit, Entry, Set);
+	}
+
+	// Decals only on world geometry (anything that is not a creature) and not on Reduced effects.
+	if (Entry.Decal && MDImpactMath::AllowDecals(Level) && !bVictimIsCreature)
 	{
 		ActiveDecals.RemoveAll([](const TWeakObjectPtr<UDecalComponent>& D) { return !D.IsValid(); });
 		const int32 Evict = MDImpactMath::DecalsToEvict(ActiveDecals.Num(), Set->MaxDecalsPerZone);
@@ -328,6 +336,91 @@ void UMDCombatFeedbackComponent::PlayNativeImpact(AActor* Victim, const FMDHitRe
 				ActiveDecals.Add(Decal);
 			}
 		}
+	}
+}
+
+void UMDCombatFeedbackComponent::PlayFloorBlood(AActor* Victim, const FMDHitResultRep& Hit, const FMDImpactEntry& Entry, const UMDImpactSet* Set)
+{
+	UWorld* World = GetWorld();
+	UNiagaraSystem* System = Entry.FloorVFX ? Cast<UNiagaraSystem>(Entry.FloorVFX) : nullptr;
+	if (!World || !Victim)
+	{
+		return;
+	}
+	if (!System)
+	{
+		return;
+	}
+	if (!Set || Set->MaxDecalsPerZone <= 0)
+	{
+		return;
+	}
+	if (!MDImpactMath::AllowFloorBlood(GetDefault<UMDLocalSettings>()->VFXLevel))
+	{
+		return;
+	}
+
+	// Per-victim cooldown so rapid multi-hits do not spam.
+	constexpr double FloorBloodCooldown = 0.3;
+	const double Now = RealNow();
+	if (const double* Last = LastFloorBloodTimes.Find(Victim))
+	{
+		if (!MDImpactMath::CooldownElapsed(Now, *Last, FloorBloodCooldown))
+		{
+			return;
+		}
+	}
+	if (LastFloorBloodTimes.Num() > 32)
+	{
+		for (auto It = LastFloorBloodTimes.CreateIterator(); It; ++It)
+		{
+			if (!It.Key().IsValid() || Now - It.Value() > 5.0)
+			{
+				It.RemoveCurrent();
+			}
+		}
+	}
+
+	// Trace down from slightly behind the victim (away from the attacker) onto static / dynamic world geometry, never pawns.
+	const AActor* Attacker = Hit.Instigator;
+	const FVector VictimLoc = Victim->GetActorLocation();
+	const FVector Offset = MDImpactMath::FloorBloodOffset(Attacker ? Attacker->GetActorLocation() : VictimLoc - FVector::ForwardVector, VictimLoc, FMath::FRandRange(20.0, 60.0));
+	const FVector Start = VictimLoc + Offset;
+	const FVector End = Start - FVector(0.0, 0.0, 300.0);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDFloorBlood), false, Victim);
+	Params.AddIgnoredActor(Attacker);
+	FCollisionObjectQueryParams ObjectParams;
+	ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic);
+	ObjectParams.AddObjectTypesToQuery(ECC_WorldDynamic);
+	FHitResult FloorHit;
+	if (!World->LineTraceSingleByObjectType(FloorHit, Start, End, ObjectParams, Params))
+	{
+		return;
+	}
+	if (Cast<APawn>(FloorHit.GetActor()))
+	{
+		return;
+	}
+	LastFloorBloodTimes.Add(Victim, Now);
+
+	// FIFO cap: destroy the oldest spawned systems.
+	ActiveFloorBlood.RemoveAll([](const TWeakObjectPtr<UNiagaraComponent>& C) { return !C.IsValid(); });
+	const int32 Evict = MDImpactMath::DecalsToEvict(ActiveFloorBlood.Num(), Set->MaxDecalsPerZone);
+	for (int32 i = 0; i < Evict && ActiveFloorBlood.Num() > 0; ++i)
+	{
+		if (UNiagaraComponent* Old = ActiveFloorBlood[0].Get())
+		{
+			Old->DestroyComponent();
+		}
+		ActiveFloorBlood.RemoveAt(0);
+	}
+
+	const FVector Normal = FloorHit.ImpactNormal.IsNearlyZero() ? FVector::UpVector : FloorHit.ImpactNormal;
+	const FRotator Rot = FRotationMatrix::MakeFromZ(Normal).Rotator();
+	const FVector Scale(MDImpactMath::VFXScaleForLevel(Entry.FloorVFXScale, GetDefault<UMDLocalSettings>()->VFXLevel));
+	if (UNiagaraComponent* Spawned = UNiagaraFunctionLibrary::SpawnSystemAtLocation(World, System, FloorHit.ImpactPoint + Normal * 2.0f, Rot, Scale, true, true, ENCPoolMethod::None))
+	{
+		ActiveFloorBlood.Add(Spawned);
 	}
 }
 

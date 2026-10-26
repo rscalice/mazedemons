@@ -27,6 +27,14 @@ bool FMDImpactMathTest::RunTest(const FString& Parameters)
 
 	TestFalse(TEXT("Cooldown not elapsed"), MDImpactMath::CooldownElapsed(1.1, 1.0, 0.2));
 	TestTrue(TEXT("Cooldown elapsed"), MDImpactMath::CooldownElapsed(1.3, 1.0, 0.2));
+	// Floor blood and trail helpers.
+	TestTrue(TEXT("Floor offset points away from attacker"), MDImpactMath::FloorBloodOffset(FVector::ZeroVector, FVector(100, 0, 50), 40.0).Equals(FVector(40, 0, 0)));
+	TestTrue(TEXT("Floor offset coincident falls back to forward"), MDImpactMath::FloorBloodOffset(FVector::ZeroVector, FVector::ZeroVector, 30.0).Equals(FVector(30, 0, 0)));
+	TestTrue(TEXT("Floor blood on Full"), MDImpactMath::AllowFloorBlood(EMDVFXLevel::Full));
+	TestFalse(TEXT("No floor blood on Reduced"), MDImpactMath::AllowFloorBlood(EMDVFXLevel::Reduced));
+	TestEqual(TEXT("Trail full scale"), MDImpactMath::TrailScaleForLevel(1.3f, EMDVFXLevel::Full), 1.3f);
+	TestEqual(TEXT("Trail reduced scale"), MDImpactMath::TrailScaleForLevel(1.0f, EMDVFXLevel::Reduced), 0.6f);
+	TestEqual(TEXT("Trail negative scale clamps"), MDImpactMath::TrailScaleForLevel(-1.0f, EMDVFXLevel::Full), 0.0f);
 	return true;
 }
 

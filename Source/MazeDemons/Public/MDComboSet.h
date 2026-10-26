@@ -9,6 +9,7 @@
 class UAnimMontage;
 class UCameraShakeBase;
 class UMDImpactSet;
+class UNiagaraSystem;
 
 // Combo data for one weapon type (DA_Combo_Greatsword, DA_Combo_DualSword).
 UCLASS(BlueprintType)
@@ -64,6 +65,22 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Feedback")
 	TObjectPtr<UMDImpactSet> ImpactSet = nullptr;
+
+	// Ribbon trail shown on the swinging weapon(s) during MD Sword Trail windows. Empty = the notify's default (NS_Trail_01).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Feedback")
+	TSoftObjectPtr<UNiagaraSystem> TrailVFX;
+
+	// Pitch multiplier for every step's SwingSound in this set (1 = unchanged, 0.5 = one octave down). Engine/sound-class min pitch still applies.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Feedback", meta = (ClampMin = "0.1"))
+	float SwingSoundPitch = 1.0f;
+
+	// Volume multiplier for every step's SwingSound in this set (Robert 2026-10-25: whooshes 50% quieter).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Feedback", meta = (ClampMin = "0"))
+	float SwingSoundVolume = 0.5f;
+
+	// Multiplier on the trail's size (width and length). Greatsword is wider than the dual swords.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Feedback", meta = (ClampMin = "0"))
+	float TrailWidthScale = 1.0f;
 
 	// Slide montages indexed by EMDDodgeDirection (Forward, Backward, Left, Right). Empty = the slide is driven in Blueprint.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dodge")

@@ -3,6 +3,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
@@ -10,6 +11,10 @@
 
 namespace
 {
+	// Off by default for player characters: their GASP mesh drives follower meshes and crashed in 2P (array index out of bounds).
+	TAutoConsoleVariable<int32> CVarPhysicalReactionsOnPlayers(TEXT("md.Combat.PhysicalReactionsOnPlayers"), 0,
+		TEXT("1 = also play physical hit reactions on player characters (experimental)."));
+
 	TAutoConsoleVariable<int32> CVarPhysicalReactions(TEXT("md.Combat.PhysicalReactions"), 1,
 		TEXT("1 = hits play a short physical upper-body reaction (spine impulse, never a ragdoll). 0 = off."), ECVF_Default);
 }
@@ -48,9 +53,15 @@ FVector UMDPhysicalHitReactComponent::ImpulseDirection(const FVector& Forward, c
 
 bool UMDPhysicalHitReactComponent::EnsureSetup(USkeletalMeshComponent* Mesh)
 {
-	if (!Mesh || !Mesh->GetSkeletalMeshAsset() || !Mesh->GetPhysicsAsset() || Mesh->GetBoneIndex(RootBone) == INDEX_NONE)
+	if (!Mesh || !Mesh->IsRegistered() || !Mesh->GetSkeletalMeshAsset() || !Mesh->GetPhysicsAsset())
 	{
 		return false;
+	}
+	const int32 BoneIndex = Mesh->GetBoneIndex(RootBone);
+	if (BoneIndex == INDEX_NONE || !Mesh->GetComponentSpaceTransforms().IsValidIndex(BoneIndex) || Mesh->LeaderPoseComponent.IsValid()
+		|| Mesh->Bodies.Num() == 0 || !Mesh->IsPhysicsStateCreated())
+	{
+		return false; // no evaluated pose, a follower mesh, or no physics bodies: simulating would index empty arrays
 	}
 	const FBodyInstance* Body = Mesh->GetBodyInstance(RootBone);
 	if (!Body || !Body->IsValidBodyInstance())
@@ -86,6 +97,10 @@ bool UMDPhysicalHitReactComponent::EnsureSetup(USkeletalMeshComponent* Mesh)
 bool UMDPhysicalHitReactComponent::PlayHitReaction(USkeletalMeshComponent* Mesh, EMDHitDirection Direction, EMDHitReaction Reaction)
 {
 	if (CVarPhysicalReactions.GetValueOnGameThread() == 0 || !GetOwner() || !GetWorld() || GetWorld()->GetNetMode() == NM_DedicatedServer)
+	{
+		return false;
+	}
+	if (const APawn* Pawn = Cast<APawn>(GetOwner()); Pawn && Pawn->GetPlayerState() && CVarPhysicalReactionsOnPlayers.GetValueOnGameThread() == 0)
 	{
 		return false;
 	}
@@ -134,6 +149,11 @@ void UMDPhysicalHitReactComponent::TickComponent(float DeltaTime, ELevelTick Tic
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	USkeletalMeshComponent* Mesh = ActiveMesh.Get();
 	if (!bActive || !Mesh)
+	{
+		Finish();
+		return;
+	}
+	if (!Mesh->GetComponentSpaceTransforms().IsValidIndex(FMath::Max(Mesh->GetBoneIndex(RootBone), 0)) || Mesh->Bodies.Num() == 0)
 	{
 		Finish();
 		return;
