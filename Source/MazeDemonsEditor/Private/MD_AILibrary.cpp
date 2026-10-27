@@ -16,7 +16,17 @@
 #include "AnimationGraph.h"
 #include "AnimationGraphSchema.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "BSPOps.h"
+#include "Builders/CubeBuilder.h"
+#include "Components/BrushComponent.h"
 #include "Components/StateTreeAIComponentSchema.h"
+#include "Editor.h"
+#include "Engine/Polys.h"
+#include "EngineUtils.h"
+#include "Model.h"
+#include "NavMesh/NavMeshBoundsVolume.h"
+#include "NavMesh/RecastNavMesh.h"
+#include "NavigationSystem.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/SkeletalMesh.h"
@@ -391,4 +401,98 @@ bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleto
 	const bool bSaved = UPackage::SavePackage(Package, ABP, *FileName, SaveArgs);
 	OutLog.Add(FString::Printf(TEXT("%s %s"), bSaved ? TEXT("Saved") : TEXT("Error: save failed"), *FileName));
 	return bSaved;
+}
+
+TArray<FString> UMD_AILibrary::EnsureNavMeshCovers(const FBox& Box, const FString& Label)
+{
+	TArray<FString> OutLog;
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		OutLog.Add(TEXT("Error: no editor world"));
+		return OutLog;
+	}
+
+	// An existing volume that already encloses the box is enough.
+	ANavMeshBoundsVolume* Covering = nullptr;
+	for (TActorIterator<ANavMeshBoundsVolume> It(World); It; ++It)
+	{
+		const FBox Bounds = It->GetComponentsBoundingBox(true);
+		OutLog.Add(FString::Printf(TEXT("volume %s bounds %s"), *It->GetActorLabel(), *Bounds.ToString()));
+		if (Bounds.IsInside(Box.Min) && Bounds.IsInside(Box.Max))
+		{
+			Covering = *It;
+		}
+	}
+
+	if (!Covering)
+	{
+		// The same steps the editor's volume placement takes: spawn, build the cube brush, prep it for the BSP tools.
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		ANavMeshBoundsVolume* Volume = World->SpawnActor<ANavMeshBoundsVolume>(Box.GetCenter(), FRotator::ZeroRotator, Params);
+		if (!Volume)
+		{
+			OutLog.Add(TEXT("Error: could not spawn NavMeshBoundsVolume"));
+			return OutLog;
+		}
+		// What UActorFactoryBoxVolume does for a placed volume: a fresh UModel + UPolys, the cube builder, BSP prep.
+		Volume->PreEditChange(nullptr);
+		Volume->PolyFlags = 0;
+		Volume->Brush = NewObject<UModel>(Volume, NAME_None, RF_Transactional);
+		Volume->Brush->Initialize(nullptr, true);
+		Volume->Brush->Polys = NewObject<UPolys>(Volume->Brush, NAME_None, RF_Transactional);
+		Volume->GetBrushComponent()->Brush = Volume->Brush;
+		UCubeBuilder* Builder = NewObject<UCubeBuilder>(Volume, NAME_None, RF_Transactional);
+		const FVector Size = Box.GetSize();
+		Builder->X = static_cast<float>(Size.X);
+		Builder->Y = static_cast<float>(Size.Y);
+		Builder->Z = static_cast<float>(Size.Z);
+		Volume->BrushBuilder = Builder;
+		Builder->Build(World, Volume);
+		FBSPOps::csgPrepMovingBrush(Volume);
+		for (FPoly& Poly : Volume->Brush->Polys->Element)
+		{
+			Poly.Material = nullptr;
+		}
+		Volume->SetActorLabel(Label);
+		Volume->PostEditChange();
+		Volume->MarkPackageDirty();
+		Covering = Volume;
+		OutLog.Add(FString::Printf(TEXT("spawned %s covering %s"), *Label, *Box.ToString()));
+	}
+
+	UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
+	if (!Nav)
+	{
+		OutLog.Add(TEXT("Error: no navigation system in the editor world"));
+		return OutLog;
+	}
+	// A map loaded by a commandlet still carries the async-load lock (released from Tick, which never runs here).
+	Nav->RemoveNavigationBuildLock(ENavigationBuildLock::AsyncLoadLock, UNavigationSystemV1::ELockRemovalRebuildAction::NoRebuild);
+	Nav->OnNavigationBoundsUpdated(Covering);
+	// Bounds updates, the spawn of the missing RecastNavMesh and its registration are all processed from Tick.
+	for (int32 i = 0; i < 5; ++i)
+	{
+		Nav->Tick(0.1f);
+	}
+	if (Nav->NavDataSet.Num() == 0 && Nav->GetSupportedAgents().Num() > 0)
+	{
+		OutLog.Add(TEXT("no nav data after bounds update: creating one for the first supported agent"));
+		if (ANavigationData* NavData = Nav->CreateNavigationDataInstanceInLevel(Nav->GetSupportedAgents()[0], World->PersistentLevel))
+		{
+			Nav->RequestRegistrationDeferred(*NavData);
+			Nav->Tick(0.1f); // registration candidates are processed from Tick
+		}
+	}
+	Nav->Build(); // blocks until the nav data is generated
+	int32 NumNavData = 0;
+	for (TActorIterator<ARecastNavMesh> It(World); It; ++It)
+	{
+		++NumNavData;
+		It->MarkPackageDirty();
+		OutLog.Add(FString::Printf(TEXT("navdata %s bounds %s"), *It->GetActorLabel(), *It->GetComponentsBoundingBox(true).ToString()));
+	}
+	OutLog.Add(FString::Printf(TEXT("%s: built %d nav data actor(s)"), NumNavData > 0 ? TEXT("OK") : TEXT("Error"), NumNavData));
+	return OutLog;
 }

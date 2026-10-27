@@ -32,6 +32,8 @@ public class MazeDemonsEditor : ModuleRules
 			"PropertyBindingUtils",    // FStateTreeCompilerLog items
 			"AnimGraph",               // MD_AILibrary: builds ABP_Ghoul's AnimGraph
 			"AnimGraphRuntime",
+			"NavigationSystem",        // MD_AILibrary: nav bounds + build for the prototype map
+			"BSPUtils",                // FBSPOps::csgPrepMovingBrush for the spawned NavMeshBoundsVolume
 		});
 	}
 }

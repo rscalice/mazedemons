@@ -52,4 +52,12 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
 	static bool BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UBlendSpace* BlendSpace, TArray<FString>& OutLog);
+
+	/**
+	 * Makes sure the current editor world has a NavMeshBoundsVolume enclosing Box (spawns one, labelled Label, when none
+	 * encloses it; volumes cannot be built from Python) and then builds navigation synchronously, so the baked RecastNavMesh
+	 * is saved with the map. Returns a log whose last line starts with "OK" on success and "Error" otherwise.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
+	static TArray<FString> EnsureNavMeshCovers(const FBox& Box, const FString& Label);
 };
