@@ -20,7 +20,15 @@
 #include "MDPlayerState.h"
 #include "MDPoiseComponent.h"
 
+#include "Animation/AnimMontage.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
 #include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
 
@@ -87,6 +95,9 @@ namespace MDAIBrainTestsLocal
 				Test.AddError(TEXT("UWorld::CreateWorld failed"));
 				return false;
 			}
+			// A world context so the world can be ticked (UWorld::Tick looks its context up through the engine).
+			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+			Context.SetCurrentWorld(World);
 			World->InitializeActorsForPlay(FURL());
 
 			Player = World->SpawnActor<APawn>();
@@ -153,6 +164,7 @@ namespace MDAIBrainTestsLocal
 		{
 			if (World)
 			{
+				GEngine->DestroyWorldContext(World);
 				World->DestroyWorld(false);
 				if (World->IsRooted())
 				{
@@ -637,6 +649,145 @@ bool FMDAIBrainFacingRuleTest::RunTest(const FString& Parameters)
 
 	Enemy->FaceTarget(nullptr);
 	TestFalse(TEXT("no target: falls back to movement facing"), Enemy->IsFacingTarget());
+	return true;
+}
+
+// The Ghoul's attack montages carry root motion (data) and a ghoul standing on a floor actually travels when one plays
+// (runtime: the server pawn's movement component consumes the montage root motion). Uses the real project assets.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDAIBrainGhoulAttackRootMotionTest, "MazeDemons.AI.Brain.GhoulAttackRootMotion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
+{
+	using namespace MDAIBrainTestsLocal;
+	UMDEnemyArchetype* Ghoul = LoadObject<UMDEnemyArchetype>(nullptr, TEXT("/Game/Data/Enemies/DA_Archetype_Ghoul.DA_Archetype_Ghoul"));
+	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/Enemies/Ghoul/SK_Ghoul.SK_Ghoul"));
+	UClass* AnimClass = LoadObject<UClass>(nullptr, TEXT("/Game/Animations/Enemies/Ghoul/ABP_Ghoul.ABP_Ghoul_C"));
+	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (!TestNotNull(TEXT("DA_Archetype_Ghoul"), Ghoul) || !TestNotNull(TEXT("SK_Ghoul"), Mesh) || !TestNotNull(TEXT("ABP_Ghoul_C"), AnimClass) || !TestNotNull(TEXT("engine cube"), Cube))
+	{
+		return false;
+	}
+
+	// Data: every attack's montage has a root-motion sequence, and the lunge travels far enough to cover its range.
+	if (!TestTrue(TEXT("archetype has Swipe + Lunge"), Ghoul->Attacks.Num() >= 2))
+	{
+		return false;
+	}
+	for (const FMDEnemyAttack& Attack : Ghoul->Attacks)
+	{
+		if (!TestNotNull(*FString::Printf(TEXT("%s montage"), *Attack.Name.ToString()), Attack.Montage.Get()))
+		{
+			return false;
+		}
+		TestTrue(*FString::Printf(TEXT("%s montage has root motion"), *Attack.Name.ToString()), Attack.Montage->HasRootMotion());
+		const FTransform Travel = Attack.Montage->ExtractRootMotionFromTrackRange(0.0f, Attack.Montage->GetPlayLength(), FAnimExtractContext());
+		TestTrue(*FString::Printf(TEXT("%s travels forward (%.0f cm)"), *Attack.Name.ToString(), Travel.GetTranslation().Size2D()), Travel.GetTranslation().Size2D() > 50.0f);
+		TestTrue(*FString::Printf(TEXT("%s root motion scale is not zero"), *Attack.Name.ToString()), Attack.Step.RootMotionScale > 0.0f);
+	}
+
+	// Runtime: a ghoul on a floor, no target (no warp), plays its last (longest) attack and must move.
+	FBrainFixture F;
+	if (!F.Init(*this, 2))
+	{
+		return false;
+	}
+	AStaticMeshActor* Floor = F.World->SpawnActor<AStaticMeshActor>(FVector(0.0, 0.0, -50.0), FRotator::ZeroRotator);
+	if (!TestNotNull(TEXT("floor"), Floor))
+	{
+		return false;
+	}
+	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Static);
+	Floor->GetStaticMeshComponent()->SetStaticMesh(Cube);
+	Floor->SetActorScale3D(FVector(100.0, 100.0, 1.0));
+	Floor->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+
+	AMDEnemyCharacter* Enemy = F.Enemies[0];
+	Enemy->GetMesh()->SetSkeletalMesh(Mesh);
+	Enemy->GetMesh()->SetAnimInstanceClass(AnimClass);
+	Enemy->GetMesh()->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones; // nothing renders here
+	// As BP_Enemy_Ghoul: anim forward = actor forward. The character caches this offset at PostInitializeComponents (motion
+	// warping converts root motion through it), so set it the same way here.
+	Enemy->GetMesh()->SetRelativeLocationAndRotation(FVector(0.0, 0.0, -90.0), FRotator(0.0, -90.0, 0.0));
+	Enemy->CacheInitialMeshOffset(FVector(0.0, 0.0, -90.0), FRotator(0.0, -90.0, 0.0));
+	Enemy->ApplyArchetype(Ghoul);
+	F.Place(Enemy, FVector(0.0, 0.0, 100.0));
+	F.Place(F.Enemies[1], FVector(2000.0, 2000.0, 100.0));
+	// No game mode here: this is what AGameModeBase::StartPlay does to begin play (actors register their ticks on BeginPlay).
+	F.World->GetWorldSettings()->NotifyBeginPlay();
+	F.World->GetWorldSettings()->NotifyMatchStarted();
+	const float Dt = 1.0f / 60.0f;
+	auto TickWorld = [&F, Dt]()
+	{
+		++GFrameCounter; // tick functions run once per frame counter value
+		F.World->Tick(LEVELTICK_All, Dt);
+	};
+	for (int32 i = 0; i < 60; ++i)
+	{
+		TickWorld(); // settle on the floor
+	}
+	AddInfo(FString::Printf(TEXT("after settling: world time %.2f, mode %d, location %s, anim instance %s, floor bounds %s"), F.World->GetTimeSeconds(),
+		static_cast<int32>(Enemy->GetCharacterMovement()->MovementMode), *Enemy->GetActorLocation().ToString(), *GetNameSafe(Enemy->GetMesh()->GetAnimInstance()),
+		*Floor->GetComponentsBoundingBox().ToString()));
+	AddInfo(FString::Printf(TEXT("ticking: world paused %d begun %d, actor tick %d registered %d, movement tick %d registered %d, mesh tick %d, controller %s, locally controlled %d, velocity %s"),
+		F.World->IsPaused() ? 1 : 0, F.World->HasBegunPlay() ? 1 : 0, Enemy->PrimaryActorTick.IsTickFunctionEnabled() ? 1 : 0, Enemy->PrimaryActorTick.IsTickFunctionRegistered() ? 1 : 0,
+		Enemy->GetCharacterMovement()->PrimaryComponentTick.IsTickFunctionEnabled() ? 1 : 0, Enemy->GetCharacterMovement()->PrimaryComponentTick.IsTickFunctionRegistered() ? 1 : 0,
+		Enemy->GetMesh()->PrimaryComponentTick.IsTickFunctionEnabled() ? 1 : 0, *GetNameSafe(Enemy->GetController()), Enemy->IsLocallyControlled() ? 1 : 0, *Enemy->GetVelocity().ToString()));
+	TestTrue(TEXT("walking on the floor"), Enemy->GetCharacterMovement()->MovementMode == MOVE_Walking);
+	const FVector Start = Enemy->GetActorLocation();
+
+	const int32 AttackIndex = Ghoul->Attacks.Num() - 1;
+	if (!TestTrue(TEXT("attack starts"), Enemy->AttackComponent->StartAttack(AttackIndex, nullptr, 0.0f)))
+	{
+		return false;
+	}
+	TestTrue(TEXT("mesh reports root motion playing"), Enemy->GetMesh()->IsPlayingRootMotion());
+	const float Length = Ghoul->Attacks[AttackIndex].Montage->GetPlayLength();
+	for (int32 i = 0; i < FMath::CeilToInt(Length / Dt) + 10; ++i)
+	{
+		TickWorld();
+	}
+	const double Moved = FVector::Dist2D(Enemy->GetActorLocation(), Start);
+	AddInfo(FString::Printf(TEXT("after the attack: world time %.2f, mode %d, location %s, still attacking %d, montage playing %d"), F.World->GetTimeSeconds(),
+		static_cast<int32>(Enemy->GetCharacterMovement()->MovementMode), *Enemy->GetActorLocation().ToString(), Enemy->AttackComponent->IsAttacking() ? 1 : 0,
+		Enemy->GetMesh()->GetAnimInstance() && Enemy->GetMesh()->GetAnimInstance()->IsAnyMontagePlaying() ? 1 : 0));
+	TestTrue(*FString::Printf(TEXT("%s moved the ghoul (%.0f cm)"), *Ghoul->Attacks[AttackIndex].Name.ToString(), Moved), Moved > 100.0);
+
+	// With a target in warp range the SkewWarp window must carry the ghoul toward it, not cancel the motion.
+	AMDEnemyCharacter* Target = F.Enemies[1];
+	const FVector Here = Enemy->GetActorLocation();
+	const FVector Forward = Enemy->GetActorForwardVector();
+	F.Place(Target, Here + Forward * 400.0 + FVector(0.0, 0.0, 0.0));
+	for (int32 i = 0; i < 30; ++i)
+	{
+		TickWorld();
+	}
+	const FVector Start2 = Enemy->GetActorLocation();
+	const double DistBefore = FVector::Dist2D(Start2, Target->GetActorLocation());
+	const float Tell = Ghoul->Attacks[AttackIndex].TellTime; // the real wind-up: slowed play rate until the trace notify restores it
+	if (!TestTrue(TEXT("attack at the target starts"), Enemy->AttackComponent->StartAttack(AttackIndex, Target, Tell)))
+	{
+		return false;
+	}
+	FString Trace;
+	for (int32 i = 0; i < FMath::CeilToInt((Length + Tell) / Dt) + 10; ++i)
+	{
+		TickWorld();
+		if (i % 10 == 0)
+		{
+			const FVector Loc = Enemy->GetActorLocation();
+			Trace += FString::Printf(TEXT("[t%.2f (%.0f,%.0f) yaw %.0f pos %.2f] "), i * Dt, Loc.X, Loc.Y, Enemy->GetActorRotation().Yaw,
+				Enemy->GetMesh()->GetAnimInstance() ? Enemy->GetMesh()->GetAnimInstance()->Montage_GetPosition(Ghoul->Attacks[AttackIndex].Montage) : -1.0f);
+		}
+	}
+	AddInfo(FString::Printf(TEXT("target at %s; trace: %s"), *Target->GetActorLocation().ToString(), *Trace));
+	const double Moved2 = FVector::Dist2D(Enemy->GetActorLocation(), Start2);
+	const double DistAfter = FVector::Dist2D(Enemy->GetActorLocation(), Target->GetActorLocation());
+	AddInfo(FString::Printf(TEXT("warped attack: moved %.0f cm, target distance %.0f -> %.0f"), Moved2, DistBefore, DistAfter));
+	TestTrue(TEXT("warped attack still travels"), Moved2 > 100.0);
+	TestTrue(TEXT("warped attack closes on the target"), DistAfter < DistBefore - 100.0);
+	// Ends in front of the target (at the warp stop distance, or pressed against its capsule by the authored follow-through),
+	// never through it: the warp window covers the strike.
+	TestTrue(*FString::Printf(TEXT("warped attack stops in front of the target (%.0f cm)"), DistAfter), DistAfter > 50.0 && DistAfter < 220.0);
+	TestTrue(TEXT("still facing the target"), FVector::DotProduct(Enemy->GetActorForwardVector(), (Target->GetActorLocation() - Enemy->GetActorLocation()).GetSafeNormal2D()) > 0.7);
 	return true;
 }
 

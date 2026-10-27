@@ -205,6 +205,7 @@ def analyze(anim):
     opts.set_editor_property('extract_root_motion', False)
     hands = {}
     root_start = None; root_end = None
+    root_path = []  # (t, 2D distance travelled from the start)
     for h in ('hand_r', 'hand_l'):
         prev = None; peak = (0.0, 0.0)
         for i in range(n + 1):
@@ -216,13 +217,29 @@ def analyze(anim):
                 root = unreal.AnimPoseExtensions.get_bone_pose(pose, 'root', unreal.AnimPoseSpaces.WORLD).translation
                 if i == 0: root_start = root
                 root_end = root
+                root_path.append((t, math.sqrt((root.x - root_start.x) ** 2 + (root.y - root_start.y) ** 2)))
             if prev is not None:
                 sp = (loc - prev).length() / dt
                 if sp > peak[1]: peak = (t, sp)
             prev = loc
         hands[h] = peak
     travel = (root_end - root_start) if root_start else unreal.Vector(0, 0, 0)
-    return {"len": length, "travel": travel, "hands": hands}
+    # Time by which 90% of the root travel is done: the motion-warp window must reach it, or the authored displacement
+    # after the window carries the enemy through its target.
+    total = root_path[-1][1] if root_path else 0.0
+    travel_end = 0.0
+    for t, dist in root_path:
+        travel_end = t
+        if total > 1.0 and dist >= 0.9 * total: break
+    return {"len": length, "travel": travel, "hands": hands, "travel_end": travel_end, "root_path": root_path}
+
+def travel_after(d, t):
+    """Authored 2D root travel (cm) left after time t."""
+    path = d.get("root_path") or []
+    if not path: return 0.0
+    total = path[-1][1]
+    at = next((dist for tt, dist in path if tt >= t), total)
+    return max(0.0, total - at)
 
 def s_analyze():
     rows = []
@@ -231,8 +248,8 @@ def s_analyze():
         if a is None: P("  missing %s" % p); continue
         d = analyze(a)
         rows.append((p, d))
-        P("  %s len=%.2f travel=(%.0f,%.0f) hand_r peak %.2fs %.0fcm/s hand_l peak %.2fs %.0fcm/s" % (
-            a.get_name(), d["len"], d["travel"].x, d["travel"].y, d["hands"]["hand_r"][0], d["hands"]["hand_r"][1], d["hands"]["hand_l"][0], d["hands"]["hand_l"][1]))
+        P("  %s len=%.2f travel=(%.0f,%.0f) 90%% by %.2fs hand_r peak %.2fs %.0fcm/s hand_l peak %.2fs %.0fcm/s" % (
+            a.get_name(), d["len"], d["travel"].x, d["travel"].y, d["travel_end"], d["hands"]["hand_r"][0], d["hands"]["hand_r"][1], d["hands"]["hand_l"][0], d["hands"]["hand_l"][1]))
     return rows
 analysis = sec("Analyze", s_analyze) or []
 open(out, "w").write("\n".join(L))
@@ -340,11 +357,19 @@ def build_montage(name, src_path, d):
     ev = lib.add_animation_notify_state_event(m, "Trace", start, end - start, trace_cls)
     try: ev.set_editor_property('trace_hand', unreal.MDTraceHandOverride.BOTH)
     except Exception as ex: P("  trace_hand ERR %s" % ex)
+    # The skew warp redistributes the root motion INSIDE its window so the window ends on the warp point, and any
+    # authored travel after the window plays unwarped. A window that only covered the wind-up (0..trace start) let the
+    # whole strike travel carry the enemy straight through its target. The window now runs to the END of the trace
+    # window: the claws reach the warp point while they are live; the authored follow-through after that (printed
+    # below) only presses against the target's capsule, as the player's own warped combos do.
+    warp_end = min(d["len"] - 0.05, end)
+    follow_through = travel_after(d, warp_end)
     warp_cls = unreal.load_class(None, "/Script/MotionWarping.AnimNotifyState_MotionWarping")
-    wv = lib.add_animation_notify_state_event(m, "Warp", 0.0, start, warp_cls)
+    wv = lib.add_animation_notify_state_event(m, "Warp", 0.0, warp_end, warp_cls)
     info = make_modifier(wv)
     m.modify(); save(path)
-    P("  %s <- %s: trace %.2f..%.2f sockets %s warp 0..%.2f (%s)" % (name, src.get_name(), start, end, sockets, start, info))
+    P("  %s <- %s: trace %.2f..%.2f sockets %s warp 0..%.2f (%s), authored follow-through after the warp %.0f cm" % (
+        name, src.get_name(), start, end, sockets, warp_end, info, follow_through))
     return unreal.load_asset(path), sockets
 
 def s_montages():
