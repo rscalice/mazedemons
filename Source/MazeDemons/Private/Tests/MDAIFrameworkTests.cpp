@@ -20,6 +20,8 @@
 #include "MDStatCalculator.h"
 
 #include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "GameFramework/Character.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
@@ -301,6 +303,75 @@ bool FMDAIFrameworkTagsPerArchetypeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Role None is 0"), static_cast<int32>(EMDRole::None), 0);
 	FMDAttackToken Token;
 	TestFalse(TEXT("a default token is not issued"), Token.IsIssued());
+	return true;
+}
+
+// The enemy collision rules: Camera IGNORED (the player's camera probe must pass through enemies, or the view collapses into the
+// player's shoulder when a ghoul is close) and Visibility BLOCKED (the weapon sweeps), on the capsule and the mesh. Checked on
+// a spawned AMDEnemyCharacter, on the BP_Enemy_Ghoul asset (a Blueprint serializes its own collision over the constructor's)
+// and, for co-op, on BP_Player: players do not block each other's cameras either.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDAIFrameworkCollisionResponsesTest, "MazeDemons.AI.Framework.CollisionResponses", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDAIFrameworkCollisionResponsesTest::RunTest(const FString& Parameters)
+{
+	using namespace MDAIFrameworkTestsLocal;
+	auto CheckEnemy = [this](const TCHAR* Label, const ACharacter* Character)
+	{
+		if (!TestNotNull(*FString::Printf(TEXT("%s character"), Label), Character) || !TestNotNull(*FString::Printf(TEXT("%s capsule"), Label), Character->GetCapsuleComponent())
+			|| !TestNotNull(*FString::Printf(TEXT("%s mesh"), Label), Character->GetMesh()))
+		{
+			return;
+		}
+		const UPrimitiveComponent* Parts[2] = { Character->GetCapsuleComponent(), Character->GetMesh() };
+		const TCHAR* Names[2] = { TEXT("capsule"), TEXT("mesh") };
+		for (int32 i = 0; i < 2; ++i)
+		{
+			TestTrue(*FString::Printf(TEXT("%s %s ignores Camera"), Label, Names[i]), Parts[i]->GetCollisionResponseToChannel(ECC_Camera) == ECR_Ignore);
+			TestTrue(*FString::Printf(TEXT("%s %s blocks Visibility (weapon sweeps)"), Label, Names[i]), Parts[i]->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Block);
+		}
+	};
+
+	// The C++ class on its own, then as spawned (PostInitializeComponents re-applies the rules).
+	CheckEnemy(TEXT("AMDEnemyCharacter CDO"), GetDefault<AMDEnemyCharacter>());
+	{
+		FEnemyFixture Fx;
+		if (Fx.Init(*this))
+		{
+			CheckEnemy(TEXT("spawned enemy"), Fx.Enemy);
+			// A Blueprint-style override (everything blocking, as BP_Enemy_Ghoul once serialized) is undone by re-applying.
+			AMDEnemyCharacter* Fresh = Fx.World->SpawnActor<AMDEnemyCharacter>();
+			if (TestNotNull(TEXT("second enemy"), Fresh))
+			{
+				Fresh->GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+				Fresh->GetMesh()->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+				Fresh->ApplyCollisionResponses();
+				CheckEnemy(TEXT("re-applied enemy"), Fresh);
+			}
+		}
+	}
+
+	// The shipped Blueprints.
+	if (const UClass* GhoulClass = LoadClass<AMDEnemyCharacter>(nullptr, TEXT("/Game/Blueprints/Enemies/BP_Enemy_Ghoul.BP_Enemy_Ghoul_C")))
+	{
+		CheckEnemy(TEXT("BP_Enemy_Ghoul"), Cast<ACharacter>(GhoulClass->GetDefaultObject()));
+	}
+	else
+	{
+		AddError(TEXT("BP_Enemy_Ghoul could not be loaded"));
+	}
+	if (const UClass* PlayerClass = LoadClass<ACharacter>(nullptr, TEXT("/Game/Blueprints/BP_Player.BP_Player_C")))
+	{
+		const ACharacter* Player = Cast<ACharacter>(PlayerClass->GetDefaultObject());
+		if (TestNotNull(TEXT("BP_Player CDO"), Player))
+		{
+			TestTrue(TEXT("BP_Player capsule ignores Camera"), Player->GetCapsuleComponent()->GetCollisionResponseToChannel(ECC_Camera) == ECR_Ignore);
+			TestTrue(TEXT("BP_Player mesh ignores Camera"), Player->GetMesh()->GetCollisionResponseToChannel(ECC_Camera) == ECR_Ignore);
+			TestTrue(TEXT("BP_Player capsule ignores Pawn (players overlap each other)"), Player->GetCapsuleComponent()->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Ignore);
+		}
+	}
+	else
+	{
+		AddError(TEXT("BP_Player could not be loaded"));
+	}
 	return true;
 }
 

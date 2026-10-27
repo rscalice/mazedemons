@@ -34,9 +34,7 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 		Move->RotationRate = FRotator(0.0f, 640.0f, 0.0f); // used by both facing modes (FaceMovement / FaceTarget)
 	}
 
-	// The weapon sweep (UMDCombatStatics::SweepWeaponHand) traces the Visibility channel, which the Pawn profile ignores.
-	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-	GetMesh()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	ApplyCollisionResponses();
 
 	AbilitySystem = CreateDefaultSubobject<UMDAbilitySystemComponent>(TEXT("AbilitySystem"));
 	AbilitySystem->SetIsReplicated(true);
@@ -50,6 +48,20 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 	Targetable = CreateDefaultSubobject<UMDTargetableComponent>(TEXT("Targetable"));
 	AttackComponent = CreateDefaultSubobject<UMDEnemyAttackComponent>(TEXT("EnemyAttack"));
 	MotionWarping = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarping"));
+}
+
+void AMDEnemyCharacter::ApplyCollisionResponses()
+{
+	// The weapon sweep (UMDCombatStatics::SweepWeaponHand) traces the Visibility channel, which the Pawn profile ignores.
+	// The player's camera probes the Camera channel: an enemy that blocks it pushes the camera into the player's shoulder.
+	for (UPrimitiveComponent* Component : TArray<UPrimitiveComponent*>{ GetCapsuleComponent(), GetMesh() })
+	{
+		if (Component)
+		{
+			Component->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+			Component->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		}
+	}
 }
 
 void AMDEnemyCharacter::SetReplicatedIntent(EMDIntent Intent)
@@ -127,6 +139,8 @@ void AMDEnemyCharacter::GetOwnedGameplayTags(FGameplayTagContainer& TagContainer
 void AMDEnemyCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+
+	ApplyCollisionResponses();
 
 	if (AbilitySystem)
 	{
