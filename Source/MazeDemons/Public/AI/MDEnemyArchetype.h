@@ -4,9 +4,54 @@
 #include "Engine/DataAsset.h"
 #include "GameplayTagContainer.h"
 #include "AI/MDAITypes.h"
+#include "MDCombatTypes.h"
 #include "MDEnemyArchetype.generated.h"
 
+class UAnimMontage;
 class UMDPoiseProfile;
+
+// One attack of an enemy (v1-design 2.3 "Attack execution", 3.3 attack sets). The montage carries the C1 notifies
+// (MD Weapon Trace window, Motion Warping "AttackTarget"); the hit itself goes through UMDCombatStatics::ApplyMeleeHit with
+// Step as the attack step (damage multiplier, poise damage, reaction, knockback, warp range).
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDEnemyAttack
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack")
+	FName Name = TEXT("Swipe");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack")
+	TObjectPtr<UAnimMontage> Montage = nullptr;
+
+	// The attack may start when the target is within this distance (cm, centre to centre).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0"))
+	float Range = 220.0f;
+
+	// Readable wind-up (1.3): seconds from the montage start to the first trace window at T0 (tiers scale it, floor 0.35 s).
+	// The attack component slows the montage during the wind-up to reach it; 0 = play as authored.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0"))
+	float TellTime = 0.8f;
+
+	// Seconds after this attack ends before the enemy may attack again.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0"))
+	float Cooldown = 0.8f;
+
+	// Damage / poise / reaction / knockback / warp numbers of the hit (the montage reference here is unused: Montage above plays).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack")
+	FMDAttackStep Step;
+
+	// Weaponless attackers: sockets (or bones) swept as claws, e.g. hand_r / hand_l. Empty = the enemy swings attached weapon actors.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack|Trace")
+	TArray<FName> TraceSockets = { TEXT("hand_r") };
+
+	// Claw box from ClawBack behind the socket to ClawLength in front of it, along the socket's X axis (cm).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack|Trace", meta = (ClampMin = "1"))
+	float ClawLength = 35.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack|Trace", meta = (ClampMin = "0"))
+	float ClawBack = 10.0f;
+};
 
 // One enemy kind (Ghoul, Bone Archer, ...). Stats and AI numbers live here so a Blueprint child of AMDEnemyCharacter carries
 // defaults only. Rules that tests need are plain functions on this class.
@@ -67,7 +112,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "AI")
 	FMDArchetypeAIParams AIParams;
 
+	// The attack set (3.3). The brain picks the tightest attack whose Range covers the target; empty = the enemy never attacks.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat")
+	TArray<FMDEnemyAttack> Attacks;
+
 	// ---- Rules ----
+
+	// Longest Range in Attacks (0 with none): the distance an Attack intent may start from.
+	float GetAttackRange() const;
+
+	// Index of the attack to use at Distance: the one with the smallest Range that still covers it (a swipe up close, the
+	// lunge from further out). INDEX_NONE when nothing reaches.
+	int32 PickAttack(float Distance) const;
 
 	// The tags a dead enemy of this archetype carries for kill credit (empty when ArchetypeTag is unset).
 	FGameplayTagContainer GetVictimTags() const;

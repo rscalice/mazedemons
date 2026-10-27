@@ -46,6 +46,15 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Cultist);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Revenant);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Werewolf);
 
+// V1 enemy brain intents as StateTree event tags: the brain sends AI.Intent.<X> and ST_Enemy transitions to the matching
+// state (one per EMDIntent the executor knows). MDIntentToTag maps the enum.
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Idle);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Chase);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_HoldThreat);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Attack);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Stagger);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Dead);
+
 // Minimap marker kinds (mirrors EMDMapMarkerType; usable as widget lookup keys).
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Objective);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Gate);

@@ -2,6 +2,8 @@
 
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttributeSet.h"
+#include "AI/MDEnemyAttackComponent.h"
+#include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyController.h"
 #include "AI/MDTargetableComponent.h"
 #include "MDAbilitySystemComponent.h"
@@ -14,6 +16,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
+#include "MotionWarpingComponent.h"
 #include "Net/UnrealNetwork.h"
 
 AMDEnemyCharacter::AMDEnemyCharacter()
@@ -43,6 +46,30 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 	Blink = CreateDefaultSubobject<UMDBlinkComponent>(TEXT("Blink"));
 	Feedback = CreateDefaultSubobject<UMDCombatFeedbackComponent>(TEXT("Feedback"));
 	Targetable = CreateDefaultSubobject<UMDTargetableComponent>(TEXT("Targetable"));
+	AttackComponent = CreateDefaultSubobject<UMDEnemyAttackComponent>(TEXT("EnemyAttack"));
+	MotionWarping = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarping"));
+}
+
+void AMDEnemyCharacter::SetReplicatedIntent(EMDIntent Intent)
+{
+	if (HasAuthority())
+	{
+		ReplicatedIntent = static_cast<uint8>(Intent);
+	}
+}
+
+EMDIntent AMDEnemyCharacter::GetIntent() const
+{
+	return static_cast<EMDIntent>(ReplicatedIntent);
+}
+
+void AMDEnemyCharacter::SetFaceMovement(bool bFaceMovement)
+{
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		Move->bOrientRotationToMovement = bFaceMovement;
+		Move->bUseControllerDesiredRotation = !bFaceMovement;
+	}
 }
 
 void AMDEnemyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -207,6 +234,12 @@ void AMDEnemyCharacter::HandleDeath()
 
 	if (HasAuthority())
 	{
+		// The brain goes Dead before the controller detaches (its own OnDeath binding may run after this one).
+		SetReplicatedIntent(EMDIntent::Dead);
+		if (UMDEnemyBrainComponent* Brain = UMDEnemyBrainComponent::FindFor(this))
+		{
+			Brain->NotifyDeath();
+		}
 		AwardKillRewards();
 		// Quest credit needs nothing here: the ASC's kill report already ran (it reads GetOwnedGameplayTags).
 		DetachFromControllerPendingDestroy();

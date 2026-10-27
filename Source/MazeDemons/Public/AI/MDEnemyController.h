@@ -2,10 +2,24 @@
 
 #include "CoreMinimal.h"
 #include "AIController.h"
+#include "Perception/AIPerceptionTypes.h"
+#include "AI/MDAITypes.h"
 #include "MDEnemyController.generated.h"
 
-// Server-only AI controller for AMDEnemyCharacter. A shell in V1 WP0: it possesses the enemy and nothing else. The brain,
-// StateTree and perception arrive with WP1 / WP3. AI controllers do not replicate, so clients never see this actor.
+class AMDEnemyCharacter;
+class UAIPerceptionComponent;
+class UAISenseConfig_Damage;
+class UAISenseConfig_Sight;
+class UMDEnemyBrainComponent;
+class UStateTree;
+class UStateTreeAIComponent;
+
+// Server-only AI controller for AMDEnemyCharacter (v1-design 2.2 / 2.8). It owns:
+//   - UMDEnemyBrainComponent: the decision layer (utility scoring, reaction delay, hysteresis, tokens);
+//   - UStateTreeAIComponent running ST_Enemy: the executor (one state per intent, thin C++ tasks);
+//   - UAIPerceptionComponent with Sight (radius / FOV from the tier) and Damage; the full config is V1 WP3.
+// The brain's OnIntentSelected becomes a StateTree event (AI.Intent.<X>) that moves the tree to that intent's state.
+// AI controllers do not replicate, so clients never see this actor; the pawn's ReplicatedIntent carries the intent.
 UCLASS()
 class MAZEDEMONS_API AMDEnemyController : public AAIController
 {
@@ -14,6 +28,45 @@ class MAZEDEMONS_API AMDEnemyController : public AAIController
 public:
 	AMDEnemyController();
 
+	UMDEnemyBrainComponent* GetBrain() const { return Brain; }
+	UStateTreeAIComponent* GetStateTreeComponent() const { return StateTree; }
+	AMDEnemyCharacter* GetEnemy() const;
+
+	// The executor asset (ST_Enemy; built by UMD_AILibrary::BuildEnemyStateTree in the editor module). Loaded when the
+	// pawn is possessed. Empty = the brain runs without an executor (tests).
+	UPROPERTY(EditDefaultsOnly, Category = "AI")
+	TSoftObjectPtr<UStateTree> EnemyStateTree;
+
+	// Pushes the pawn's current ReplicatedIntent again as a StateTree event (used after a late (re)start of the tree).
+	void ResendIntentEvent();
+
 protected:
 	virtual void OnPossess(APawn* InPawn) override;
+	virtual void OnUnPossess() override;
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	UFUNCTION()
+	void HandleTargetPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus);
+
+	void HandleIntentSelected(EMDIntent Intent, bool bRestart);
+	void ConfigureSenses();
+	void TryStartExecutor();
+
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<UMDEnemyBrainComponent> Brain;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<UStateTreeAIComponent> StateTree;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<UAIPerceptionComponent> Perception;
+
+	UPROPERTY()
+	TObjectPtr<UAISenseConfig_Sight> SightConfig;
+
+	UPROPERTY()
+	TObjectPtr<UAISenseConfig_Damage> DamageConfig;
+
+	bool bExecutorStarted = false;
 };

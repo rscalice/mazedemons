@@ -25,6 +25,11 @@ public class MazeDemonsEditor : ModuleRules
 			"Chooser",      // MD_ChooserLibrary: Chooser Table editing from Python
 			"GameplayTags", // Chooser public headers include GameplayTagContainer.h
 			"MazeDemons",
+			"AIModule",
+			"StateTreeModule",         // MD_AILibrary: builds ST_Enemy from C++
+			"StateTreeEditorModule",
+			"GameplayStateTreeModule",
+			"PropertyBindingUtils",    // FStateTreeCompilerLog items
 		});
 	}
 }

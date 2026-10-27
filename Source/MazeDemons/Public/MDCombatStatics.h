@@ -47,6 +47,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
 	static void SweepWeaponHand(AActor* Attacker, AActor* Weapon, UPARAM(ref) FVector& PrevTop, UPARAM(ref) FVector& PrevBottom, UPARAM(ref) TArray<AActor*>& HitThisAttack);
 
+	// The sweep behind SweepWeaponHand for any blade-like segment (a weapon's tip/base points, or an enemy claw from a hand socket):
+	// a box from the previous segment position to the current one, the same hit-once list, the same debug draw. IgnoredActor
+	// (the weapon) may be null. Authority applies hits exactly as SweepWeaponHand does.
+	static void SweepSegment(AActor* Attacker, AActor* IgnoredActor, const FVector& Top, const FVector& Bottom, FVector& PrevTop, FVector& PrevBottom, TArray<AActor*>& HitThisAttack);
+
 	// Attach-socket names that carry the weapon actor(s) a swing of Hand traces: Main = MainHand + TwoHanded, Off = OffHand,
 	// Both = MainHand + TwoHanded + OffHand.
 	static TArray<FName> TraceSocketsForHand(EMDWeaponHand Hand);
