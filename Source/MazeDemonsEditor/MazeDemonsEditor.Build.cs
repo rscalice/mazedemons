@@ -30,6 +30,8 @@ public class MazeDemonsEditor : ModuleRules
 			"StateTreeEditorModule",
 			"GameplayStateTreeModule",
 			"PropertyBindingUtils",    // FStateTreeCompilerLog items
+			"AnimGraph",               // MD_AILibrary: builds ABP_Ghoul's AnimGraph
+			"AnimGraphRuntime",
 		});
 	}
 }

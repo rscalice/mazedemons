@@ -1,12 +1,29 @@
 #include "MD_AILibrary.h"
 
 #include "AI/MDAIRules.h"
+#include "AI/MDEnemyAnimInstance.h"
 #include "AI/MDEnemyCharacter.h"
 #include "AI/MDEnemyController.h"
 #include "AI/StateTree/MDSTEnemyTasks.h"
 #include "MDGameplayTags.h"
+#include "AnimGraphNode_BlendSpacePlayer.h"
+#include "AnimGraphNode_Root.h"
+#include "AnimGraphNode_Slot.h"
+#include "Animation/AnimBlueprint.h"
+#include "Animation/AnimBlueprintGeneratedClass.h"
+#include "Animation/BlendSpace.h"
+#include "Animation/Skeleton.h"
+#include "AnimationGraph.h"
+#include "AnimationGraphSchema.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/StateTreeAIComponentSchema.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraphSchema_K2.h"
+#include "Engine/SkeletalMesh.h"
+#include "K2Node_VariableGet.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/CompilerResultsLog.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Logging/TokenizedMessage.h"
 #include "Misc/PackageName.h"
 #include "StateTree.h"
@@ -196,4 +213,182 @@ TArray<FString> UMD_AILibrary::DescribeStateTree(const FString& PackagePath)
 		}
 	}
 	return Out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Skeleton assignment and the enemy anim Blueprint
+// ---------------------------------------------------------------------------------------------------------------------
+
+bool UMD_AILibrary::AssignSkeleton(USkeletalMesh* Mesh, USkeleton* Skeleton, FString& OutError)
+{
+	if (!Mesh || !Skeleton)
+	{
+		OutError = TEXT("mesh or skeleton is null");
+		return false;
+	}
+	if (!Skeleton->IsCompatibleMesh(Mesh))
+	{
+		// Same as the editor's Assign Skeleton: add any missing bones to the skeleton (fails on a hierarchy conflict).
+		if (!Skeleton->MergeAllBonesToBoneTree(Mesh, false))
+		{
+			OutError = FString::Printf(TEXT("%s is not compatible with %s (bone hierarchy conflict)"), *Mesh->GetName(), *Skeleton->GetName());
+			return false;
+		}
+		Skeleton->MarkPackageDirty();
+	}
+	Mesh->Modify();
+	Mesh->SetSkeleton(Skeleton);
+	Mesh->PostEditChange();
+	Mesh->MarkPackageDirty();
+	return true;
+}
+
+bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UBlendSpace* BlendSpace, TArray<FString>& OutLog)
+{
+	if (!Skeleton || !BlendSpace)
+	{
+		OutLog.Add(TEXT("Error: skeleton or blend space is null"));
+		return false;
+	}
+	if (!FPackageName::IsValidLongPackageName(PackagePath))
+	{
+		OutLog.Add(FString::Printf(TEXT("Error: '%s' is not a long package name"), *PackagePath));
+		return false;
+	}
+	const FString AssetName = FPackageName::GetShortName(PackagePath);
+	UPackage* Package = CreatePackage(*PackagePath);
+	Package->FullyLoad();
+
+	UAnimBlueprint* ABP = FindObject<UAnimBlueprint>(Package, *AssetName);
+	bool bNew = false;
+	if (!ABP)
+	{
+		ABP = Cast<UAnimBlueprint>(FKismetEditorUtilities::CreateBlueprint(UMDEnemyAnimInstance::StaticClass(), Package, FName(*AssetName), BPTYPE_Normal,
+			UAnimBlueprint::StaticClass(), UAnimBlueprintGeneratedClass::StaticClass(), FName(TEXT("MDBuildEnemyAnimBlueprint"))));
+		bNew = true;
+	}
+	if (!ABP)
+	{
+		OutLog.Add(TEXT("Error: CreateBlueprint failed"));
+		return false;
+	}
+	ABP->TargetSkeleton = Skeleton;
+
+	// The AnimGraph (created with the Blueprint) and its output node.
+	UEdGraph* AnimGraph = nullptr;
+	for (UEdGraph* Graph : ABP->FunctionGraphs)
+	{
+		if (Graph && Graph->IsA<UAnimationGraph>())
+		{
+			AnimGraph = Graph;
+			break;
+		}
+	}
+	if (!AnimGraph)
+	{
+		AnimGraph = FBlueprintEditorUtils::CreateNewGraph(ABP, UEdGraphSchema_K2::GN_AnimGraph, UAnimationGraph::StaticClass(), UAnimationGraphSchema::StaticClass());
+		FBlueprintEditorUtils::AddDomainSpecificGraph(ABP, AnimGraph);
+		AnimGraph->GetSchema()->CreateDefaultNodesForGraph(*AnimGraph);
+	}
+	UAnimGraphNode_Root* Root = nullptr;
+	TArray<UEdGraphNode*> Others;
+	for (UEdGraphNode* Node : AnimGraph->Nodes)
+	{
+		if (UAnimGraphNode_Root* AsRoot = Cast<UAnimGraphNode_Root>(Node))
+		{
+			Root = AsRoot;
+		}
+		else if (Node)
+		{
+			Others.Add(Node);
+		}
+	}
+	for (UEdGraphNode* Node : Others)
+	{
+		AnimGraph->RemoveNode(Node); // rebuild from scratch: the graph is fully described here
+	}
+	if (!Root)
+	{
+		OutLog.Add(TEXT("Error: the AnimGraph has no output pose node"));
+		return false;
+	}
+	Root->NodePosX = 300;
+	Root->NodePosY = 0;
+
+	// Get Speed (a UMDEnemyAnimInstance property, computed in C++).
+	UK2Node_VariableGet* SpeedNode = nullptr;
+	{
+		FGraphNodeCreator<UK2Node_VariableGet> Creator(*AnimGraph);
+		SpeedNode = Creator.CreateNode();
+		SpeedNode->VariableReference.SetSelfMember(GET_MEMBER_NAME_CHECKED(UMDEnemyAnimInstance, Speed));
+		SpeedNode->NodePosX = -900;
+		SpeedNode->NodePosY = 90;
+		Creator.Finalize();
+	}
+	// Blend Space Player: X = Speed.
+	UAnimGraphNode_BlendSpacePlayer* Player = nullptr;
+	{
+		FGraphNodeCreator<UAnimGraphNode_BlendSpacePlayer> Creator(*AnimGraph);
+		Player = Creator.CreateNode();
+		Player->Node.SetBlendSpace(BlendSpace);
+		Player->NodePosX = -600;
+		Player->NodePosY = 0;
+		Creator.Finalize();
+	}
+	// Montage slot.
+	UAnimGraphNode_Slot* Slot = nullptr;
+	{
+		FGraphNodeCreator<UAnimGraphNode_Slot> Creator(*AnimGraph);
+		Slot = Creator.CreateNode();
+		Slot->Node.SlotName = FName(TEXT("DefaultSlot"));
+		Slot->NodePosX = -200;
+		Slot->NodePosY = 0;
+		Creator.Finalize();
+	}
+
+	auto Connect = [&](UEdGraphNode* From, const TCHAR* FromPin, UEdGraphNode* To, const TCHAR* ToPin) -> bool
+	{
+		UEdGraphPin* Out = From ? From->FindPin(FromPin, EGPD_Output) : nullptr;
+		UEdGraphPin* In = To ? To->FindPin(ToPin, EGPD_Input) : nullptr;
+		if (!Out || !In)
+		{
+			OutLog.Add(FString::Printf(TEXT("Error: pin not found: %s.%s -> %s.%s"), *GetNameSafe(From), FromPin, *GetNameSafe(To), ToPin));
+			return false;
+		}
+		if (!AnimGraph->GetSchema()->TryCreateConnection(Out, In))
+		{
+			OutLog.Add(FString::Printf(TEXT("Error: could not connect %s.%s -> %s.%s"), *GetNameSafe(From), FromPin, *GetNameSafe(To), ToPin));
+			return false;
+		}
+		return true;
+	};
+	bool bOk = Connect(SpeedNode, TEXT("Speed"), Player, TEXT("X"));
+	bOk &= Connect(Player, TEXT("Pose"), Slot, TEXT("Source"));
+	bOk &= Connect(Slot, TEXT("Pose"), Root, TEXT("Result"));
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(ABP);
+	FCompilerResultsLog Results;
+	FKismetEditorUtilities::CompileBlueprint(ABP, EBlueprintCompileOptions::None, &Results);
+	for (const TSharedRef<FTokenizedMessage>& Message : Results.Messages)
+	{
+		OutLog.Add(FString::Printf(TEXT("%s: %s"), MDAILibraryLocal::SeverityName(Message->GetSeverity()), *Message->ToText().ToString()));
+	}
+	OutLog.Add(FString::Printf(TEXT("Compile: %d errors, %d warnings, status %d"), Results.NumErrors, Results.NumWarnings, static_cast<int32>(ABP->Status)));
+	if (!bOk || Results.NumErrors > 0)
+	{
+		return false;
+	}
+
+	ABP->MarkPackageDirty();
+	if (bNew)
+	{
+		FAssetRegistryModule::AssetCreated(ABP);
+	}
+	const FString FileName = FPackageName::LongPackageNameToFilename(PackagePath, FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+	SaveArgs.SaveFlags = SAVE_NoError;
+	const bool bSaved = UPackage::SavePackage(Package, ABP, *FileName, SaveArgs);
+	OutLog.Add(FString::Printf(TEXT("%s %s"), bSaved ? TEXT("Saved") : TEXT("Error: save failed"), *FileName));
+	return bSaved;
 }

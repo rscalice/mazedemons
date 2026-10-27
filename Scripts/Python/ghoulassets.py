@@ -31,9 +31,16 @@ def save(path):
     ok = EAL.save_asset(path, only_if_is_dirty=False)
     P("  saved %s -> %s" % (path, ok)); return ok
 
+def unpack(res):
+    """(ok, log) from a C++ helper returning bool + TArray<FString>: python gives a tuple or just the array."""
+    if isinstance(res, tuple):
+        return bool(res[0]), list(res[1])
+    log = [res] if isinstance(res, str) else list(res)
+    return not any(str(l).startswith("Error") for l in log), log
+
 # ---------------------------------------------------------------- 1. StateTree
 def s_statetree():
-    ok, log = unreal.MD_AILibrary.build_enemy_state_tree("/Game/AI/ST_Enemy")
+    ok, log = unpack(unreal.MD_AILibrary.build_enemy_state_tree("/Game/AI/ST_Enemy"))
     for l in log: P("  " + str(l))
     P("  build ok = %s" % ok)
     for l in unreal.MD_AILibrary.describe_state_tree("/Game/AI/ST_Enemy"): P("  " + str(l))
@@ -48,13 +55,11 @@ def s_mesh():
         P("  duplicated -> %s" % (dup.get_path_name() if dup else None))
     mesh = unreal.load_asset(MESH_PATH)
     if mesh.skeleton != sk:
-        done = False
-        try:
-            mesh.set_skeleton(sk); done = True; P("  set_skeleton() ok")
-        except Exception as ex:
-            P("  set_skeleton ERR %s" % ex)
-        if not done:
-            mesh.set_editor_property('skeleton', sk); P("  set_editor_property(skeleton) ok")
+        r = unreal.MD_AILibrary.assign_skeleton(mesh, sk)
+        ok, err = (r[0], r[1]) if isinstance(r, tuple) else ((r == "" or r is True), r)
+        P("  assign_skeleton -> %s %s" % (ok, err))
+        if not ok:
+            raise RuntimeError("skeleton assignment failed: " + str(err))
     pa = unreal.load_asset("/Game/Data/Enemies/Physics/PA_Ghoul_UE5")
     if pa and mesh.physics_asset != pa:
         mesh.set_editor_property('physics_asset', pa)
@@ -92,9 +97,8 @@ def s_retarget():
     AR = unreal.AssetRegistryHelpers.get_asset_registry()
     assets = []
     for src in LOCO.keys():
-        ad = AR.get_asset_by_object_path(unreal.TopLevelAssetPath("/Game/Fab/Ghoul/Demo/Demoscene_UE5/Animations/" + src, src)) if hasattr(unreal, 'TopLevelAssetPath') else None
-        if ad is None or not ad.is_valid():
-            ad = AR.get_asset_by_object_path("/Game/Fab/Ghoul/Demo/Demoscene_UE5/Animations/%s.%s" % (src, src))
+        ad = AR.get_asset_by_object_path("/Game/Fab/Ghoul/Demo/Demoscene_UE5/Animations/%s.%s" % (src, src))
+        P("  source %s valid=%s" % (src, ad.is_valid()))
         assets.append(ad)
     inputs = unreal.IKRetargetBatchOperationInputs()
     inputs.assets_to_retarget = assets
@@ -152,8 +156,23 @@ def s_blendspace():
     bs.set_editor_property('sample_data', samples)
     bs.modify(); save(path)
     bs = unreal.load_asset(path)
-    P("  samples: %s" % [(x.animation.get_name() if x.animation else None, x.sample_value.x) for x in bs.get_editor_property('sample_data')])
-sec("BlendSpace", s_blendspace)
+    try:
+        P("  samples: %s" % [(x.get_editor_property('animation').get_name() if x.get_editor_property('animation') else None, x.get_editor_property('sample_value').x) for x in bs.get_editor_property('sample_data')])
+    except Exception as ex:
+        P("  samples: (unreadable from python: %s)" % ex)
+    return bs
+blendspace = sec("BlendSpace", s_blendspace)
+
+# ---------------------------------------------------------------- 4b. Anim Blueprint (graph authored from C++)
+def s_abp():
+    if blendspace is None:
+        P("  no blend space, skipping"); return None
+    sk = unreal.load_asset(SK_PATH)
+    ok, log = unpack(unreal.MD_AILibrary.build_enemy_anim_blueprint(ANIM_DIR + "/ABP_Ghoul", sk, blendspace))
+    for l in log: P("  " + str(l))
+    P("  build ok = %s" % ok)
+    return unreal.load_asset(ANIM_DIR + "/ABP_Ghoul") if ok else None
+abp = sec("AnimBlueprint", s_abp)
 
 # ---------------------------------------------------------------- 5. Attack analysis + montages
 CANDIDATES = [
@@ -179,14 +198,15 @@ def analyze(anim):
     n = max(int(length * 30), 2)
     dt = length / n
     opts = unreal.AnimPoseEvaluationOptions()
-    opts.set_editor_property('extract_root_motion', True)
+    # Keep root motion in the root bone track so 'root' travel can be read directly (extracting it zeroes the root).
+    opts.set_editor_property('extract_root_motion', False)
     hands = {}
     root_start = None; root_end = None
     for h in ('hand_r', 'hand_l'):
         prev = None; peak = (0.0, 0.0)
         for i in range(n + 1):
             t = i * dt
-            pose = lib.get_anim_pose_at_time(anim, t, opts)
+            pose = unreal.AnimPoseExtensions.get_anim_pose_at_time(anim, t, opts)
             xf = unreal.AnimPoseExtensions.get_bone_pose(pose, h, unreal.AnimPoseSpaces.WORLD)
             loc = xf.translation
             if h == 'hand_r':
@@ -216,7 +236,9 @@ open(out, "w").write("\n".join(L))
 
 # ---------------------------------------------------------------- 5b. Pick attacks and build montages
 SWIPE_OVERRIDE = None   # asset path to force
-LUNGE_OVERRIDE = None
+# Attack46 (auto pick) strikes at 0.15 s: even at the 0.25x wind-up floor its tell is only 0.6 s < 0.9 s.
+# Attack48 strikes at 0.45 s (window 0.33 s -> 0.37x rate reaches the 0.9 s tell) and travels 509 cm, a real lunge.
+LUNGE_OVERRIDE = "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack48"
 WARP_TARGET = "AttackTarget"
 
 def pick_attacks(rows):
@@ -269,7 +291,21 @@ def build_montage(name, src_path, d):
     sk = unreal.load_asset(SK_PATH)
     if EAL.does_asset_exist(path):
         m = unreal.load_asset(path)
-    else:
+        tracks = m.get_editor_property('slot_anim_tracks')
+        segs = tracks[0].get_editor_property('anim_track').get_editor_property('anim_segments') if len(tracks) else []
+        cur = segs[0].get_editor_property('anim_reference') if len(segs) else None
+        if cur is None or cur.get_path_name() != src.get_path_name():
+            # Source animation changed: recreate from the factory so length/sections are derived cleanly.
+            # The archetype references the montage, so drop its attacks first (section 6 refills them).
+            P("  %s source changed (%s -> %s), recreating" % (name, cur.get_name() if cur else None, src.get_name()))
+            da = unreal.load_asset("/Game/Data/Enemies/DA_Archetype_Ghoul")
+            da.set_editor_property('attacks', []); EAL.save_loaded_asset(da)
+            deleted = EAL.delete_asset(path)
+            P("  deleted old %s -> %s" % (name, deleted))
+            if not deleted:
+                P("  FAIL cannot replace montage %s" % name); return None, []
+            m = None
+    if not EAL.does_asset_exist(path):
         f = unreal.AnimMontageFactory()
         f.set_editor_property('target_skeleton', sk)
         try: f.set_editor_property('source_animation', src)
@@ -278,7 +314,9 @@ def build_montage(name, src_path, d):
     if m is None:
         P("  FAIL montage %s" % name); return None, []
     tracks = m.get_editor_property('slot_anim_tracks')
-    if len(tracks) == 0 or len(tracks[0].get_editor_property('anim_track').get_editor_property('anim_segments')) == 0:
+    segs = tracks[0].get_editor_property('anim_track').get_editor_property('anim_segments') if len(tracks) else []
+    if len(segs) == 0 or segs[0].get_editor_property('anim_reference') is None:
+        # New montage, or the source animation changed: rebuild the single DefaultSlot segment.
         seg = unreal.AnimSegment(); seg.set_editor_property('anim_reference', src)
         seg.set_editor_property('anim_end_time', src.get_play_length())
         at = unreal.AnimTrack(); at.set_editor_property('anim_segments', [seg])
@@ -351,9 +389,11 @@ def s_blueprint():
     bp = unreal.load_asset("/Game/Blueprints/Enemies/BP_Enemy_Ghoul")
     cdo = unreal.get_default_object(bp.generated_class())
     mesh = cdo.get_editor_property('mesh')
+    if ghoul_mesh is None:
+        raise RuntimeError("no SK_Ghoul: leaving the Blueprint mesh alone")
     mesh.set_skeletal_mesh_asset(ghoul_mesh)
-    abp = unreal.load_asset(ANIM_DIR + "/ABP_Ghoul") if EAL.does_asset_exist(ANIM_DIR + "/ABP_Ghoul") else None
     if abp:
+        mesh.set_animation_mode(unreal.AnimationMode.ANIMATION_BLUEPRINT)
         mesh.set_anim_instance_class(abp.generated_class())
         P("  anim class ABP_Ghoul")
     else:

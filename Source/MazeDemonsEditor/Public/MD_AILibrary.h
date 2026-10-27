@@ -10,6 +10,10 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "MD_AILibrary.generated.h"
 
+class UBlendSpace;
+class USkeletalMesh;
+class USkeleton;
+
 UCLASS()
 class MAZEDEMONSEDITOR_API UMD_AILibrary : public UBlueprintFunctionLibrary
 {
@@ -30,4 +34,22 @@ public:
 	/** Human-readable summary of a StateTree asset's editor data: states, tasks, transitions. */
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
 	static TArray<FString> DescribeStateTree(const FString& PackagePath);
+
+	/**
+	 * The editor's "Assign Skeleton" for scripts (USkeletalMesh::Skeleton is read-only from Python): merges the mesh's bones into
+	 * Skeleton's bone tree when they are missing (a no-op for the Ghoul: its 79 bones are all in SK_Mannequin) and points the
+	 * mesh at it. Marks the mesh (and the skeleton, if it changed) dirty; nothing is saved. Returns false with OutError when
+	 * the hierarchies are incompatible.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
+	static bool AssignSkeleton(USkeletalMesh* Mesh, USkeleton* Skeleton, FString& OutError);
+
+	/**
+	 * Builds the enemy anim Blueprint at PackagePath (e.g. "/Game/Animations/Enemies/Ghoul/ABP_Ghoul"): parent class
+	 * UMDEnemyAnimInstance (it computes Speed etc. in C++), TargetSkeleton = Skeleton, and an AnimGraph of four nodes laid out
+	 * left to right: Get Speed -> Blend Space Player (BlendSpace, X = Speed) -> Slot "DefaultSlot" -> Output Pose.
+	 * Compiles and saves. Re-running rebuilds the graph. OutLog gets the compiler messages.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
+	static bool BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UBlendSpace* BlendSpace, TArray<FString>& OutLog);
 };
