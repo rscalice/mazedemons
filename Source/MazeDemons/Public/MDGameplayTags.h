@@ -6,6 +6,14 @@
 // SetByCaller tag carrying raw damage into UMDDamageEffect.
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_Damage);
 
+// Damage types (FMDHitContext::DamageType). Physical is the default for any hit that carries none; the elemental ones only change
+// the floating damage number's color for now (see MDDamageNumbers.h). V1 WP6 status effects pass Fire (Burn), Frost, Poison, Bleed.
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Physical);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Frost);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Fire);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Poison);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Bleed);
+
 // Stamina state, kept as loose tags on the server by UMDStaminaComponent. Attacks never check these.
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Exhausted);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Sprinting);
@@ -30,6 +38,13 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone1_Shrine);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone3_Key);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Objective_Zone4_Altar);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Ghoul);
+
+// V1 enemy archetype tags (one per UMDEnemyArchetype::ArchetypeTag; kill credit and spawning match on them).
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_BoneArcher);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_GraveBrute);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Cultist);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Revenant);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Enemy_Werewolf);
 
 // Minimap marker kinds (mirrors EMDMapMarkerType; usable as widget lookup keys).
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Objective);

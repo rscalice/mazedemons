@@ -22,6 +22,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
 	static bool ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHitResult& Hit);
 
+	// Server only. Damage that is not a weapon swing (a status effect tick, a trap, a spell): runs the same team rules and i-frames
+	// as a hit, never crits and never staggers, and shows the attacker a floating number colored by DamageType (a Damage.Type.* tag;
+	// empty = Physical). Instigator may be null (no number then). Returns true when health went down. V1 WP6 status effects call this
+	// with Damage.Type.Fire (Burn), Frost, Poison and Bleed.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Combat")
+	static bool ApplyTypedDamage(AActor* Instigator, AActor* Victim, float Damage, FGameplayTag DamageType, FVector Location = FVector::ZeroVector);
+
 	// Where a held weapon's blade is: Top = the tip end, Bottom = a point toward the hilt. Uses the weapon root's sockets
 	// "TopTrace" / "BottomTrace" when both exist, else the long axis of the weapon's mesh bounds (the Fab swords carry no trace
 	// sockets, and this keeps them hit-capable without editing Content/Fab). Both zero when Weapon is null/invalid.

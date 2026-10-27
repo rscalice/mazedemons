@@ -96,7 +96,7 @@ bool UMDPhysicalHitReactComponent::EnsureSetup(USkeletalMeshComponent* Mesh)
 
 bool UMDPhysicalHitReactComponent::PlayHitReaction(USkeletalMeshComponent* Mesh, EMDHitDirection Direction, EMDHitReaction Reaction)
 {
-	if (CVarPhysicalReactions.GetValueOnGameThread() == 0 || !GetOwner() || !GetWorld() || GetWorld()->GetNetMode() == NM_DedicatedServer)
+	if (bDead || CVarPhysicalReactions.GetValueOnGameThread() == 0 || !GetOwner() || !GetWorld() || GetWorld()->GetNetMode() == NM_DedicatedServer)
 	{
 		return false;
 	}
@@ -165,6 +165,23 @@ void UMDPhysicalHitReactComponent::TickComponent(float DeltaTime, ELevelTick Tic
 		return;
 	}
 	Mesh->SetAllBodiesBelowPhysicsBlendWeight(RootBone, EvaluateBlend(Elapsed, BlendInTime, BlendOutTime, PeakWeight), false, true);
+}
+
+void UMDPhysicalHitReactComponent::StopForDeath()
+{
+	bDead = true;
+	if (PhysicalAnimation)
+	{
+		PhysicalAnimation->SetStrengthMultiplyer(0.0f);
+		PhysicalAnimation->DestroyComponent();
+		PhysicalAnimation = nullptr;
+	}
+	ConfiguredMesh.Reset();
+	ActiveMesh.Reset();
+	bRestoreCollision = false;
+	bActive = false;
+	Elapsed = 0.0f;
+	SetComponentTickEnabled(false);
 }
 
 void UMDPhysicalHitReactComponent::Finish()

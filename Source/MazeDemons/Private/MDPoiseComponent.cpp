@@ -179,6 +179,7 @@ FMDPoiseHitResult UMDPoiseComponent::ApplyHit(const FMDHitContext& Context, cons
 		Rep.ImpactTag = Context.ImpactTag;
 		Rep.Surface = Context.PhysMaterial ? Context.PhysMaterial->SurfaceType.GetValue() : static_cast<EPhysicalSurface>(SurfaceType_Default);
 		Rep.bCrit = Damage.bCrit;
+	Rep.DamageType = Damage.DamageType;
 		Rep.Damage = Damage.Damage;
 		Rep.Instigator = Context.Instigator;
 		NextSeq = (NextSeq == 255) ? 1 : static_cast<uint8>(NextSeq + 1); // 0 means "no hit yet"

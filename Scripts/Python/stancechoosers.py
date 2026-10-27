@@ -78,6 +78,26 @@ def run():
         log("FAIL: enum entry missing")
         return False
 
+    # A weapon database whose schema or animations failed to load (e.g. a dangling /Game/... reference after content was moved)
+    # is silently empty at runtime and the character falls back to the unarmed pose, so refuse to apply/save on top of one.
+    bad = []
+    for stance, folder, sfx in WEAPONS:
+        for tbl in TABLES.values():
+            for role, stock_name, pattern in tbl:
+                path = "%s%s/%s" % (MM, folder, pattern.format(sfx=sfx))
+                db = unreal.load_asset(path)
+                if db is None:
+                    bad.append(path + " (missing)")
+                elif db.get_editor_property("schema") is None:
+                    bad.append(path + " (no schema)")
+                elif db.get_num_animation_assets() == 0:
+                    bad.append(path + " (no animations)")
+    if bad:
+        log("FAIL: weapon databases are empty or broken (fix their references first, check the editor log for missing packages):")
+        for b in bad:
+            log("  " + b)
+        return False
+
     log("Tables in asset: " + ", ".join(lib.list_tables(root)))
     tables = {}
     for name in TABLES:

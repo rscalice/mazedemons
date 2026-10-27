@@ -6,13 +6,16 @@
 #include "MDGameSettings.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "MDPhysicalHitReactComponent.h"
 #include "MDPerkComponent.h"
+#include "MDRagdollTuning.h"
 #include "MDStaminaComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Animation/AnimInstance.h"
 #include "Engine/SkeletalMesh.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Net/UnrealNetwork.h"
@@ -115,8 +118,24 @@ void AMDPlayerState::RagdollPawn(APawn* Pawn)
 	}
 	if (!Body)
 	{
+		// Enemies and any pawn without a separate body mesh: the main mesh itself goes fully limp. Every body simulates at full
+		// physics weight, the anim instance stops driving the pose, and the cosmetic hit reaction (whose physical animation drives
+		// and partial blend weights would keep the upper body stiff) is shut down.
+		if (UMDPhysicalHitReactComponent* HitReact = Character->FindComponentByClass<UMDPhysicalHitReactComponent>())
+		{
+			HitReact->StopForDeath();
+		}
+		if (UAnimInstance* Anim = Mesh->GetAnimInstance())
+		{
+			Anim->StopAllMontages(0.0f);
+		}
+		Mesh->bPauseAnims = true;
 		Mesh->SetCollisionProfileName(TEXT("Ragdoll"));
+		Mesh->SetAllBodiesSimulatePhysics(true);
 		Mesh->SetSimulatePhysics(true);
+		Mesh->SetPhysicsBlendWeight(1.0f);
+		Mesh->WakeAllRigidBodies();
+		MDRagdollTuning::ApplyForDeath(Mesh, false);
 		return;
 	}
 
@@ -133,6 +152,7 @@ void AMDPlayerState::RagdollPawn(APawn* Pawn)
 	Body->SetSimulatePhysics(true);
 	Body->SetPhysicsBlendWeight(1.0f);
 	Body->WakeAllRigidBodies();
+	MDRagdollTuning::ApplyForDeath(Body, true);
 
 	// Armor/face parts follow the simulated body; they are not simulated themselves.
 	static const TCHAR* FollowParts[] = { TEXT("Torso"), TEXT("Hands"), TEXT("Legs"), TEXT("Feet"), TEXT("Face") };

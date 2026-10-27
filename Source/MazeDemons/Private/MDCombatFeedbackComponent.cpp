@@ -152,8 +152,12 @@ void UMDCombatFeedbackComponent::Client_ConfirmHit_Implementation(const FMDHitCo
 
 	if (Settings->DamageNumberMode != EMDDamageNumberMode::Off && Confirm.Damage > 0.0f)
 	{
-		ShowDamageNumber(Confirm.Damage, Confirm.bCrit, Confirm.Location);
+		ShowDamageNumber(Confirm.Damage, Confirm.bCrit, Confirm.Location, Confirm.DamageType);
 		OnHitNumber(Confirm.Damage, Confirm.bCrit, Confirm.Location);
+	}
+	if (Confirm.bNumberOnly)
+	{
+		return;
 	}
 
 	const int32 Frames = UMDCombatRules::EffectiveHitStopFrames(Confirm.HitStopFrames, Confirm.Kind, LightHitStopMinFrames, HeavyHitStopMinFrames);
@@ -190,7 +194,7 @@ void UMDCombatFeedbackComponent::BeginPlay()
 	}
 }
 
-void UMDCombatFeedbackComponent::ShowDamageNumber(float Damage, bool bCrit, const FVector& Location)
+void UMDCombatFeedbackComponent::ShowDamageNumber(float Damage, bool bCrit, const FVector& Location, const FGameplayTag& DamageType)
 {
 	APlayerController* PC = GetLocalController();
 	if (!bNativeDamageNumbers || !PC || !DamageNumberClass)
@@ -227,7 +231,7 @@ void UMDCombatFeedbackComponent::ShowDamageNumber(float Damage, bool bCrit, cons
 	}
 	if (Widget)
 	{
-		Widget->Start(PC, Location + FVector(0.0f, 0.0f, 40.0f), Damage, bCrit);
+		Widget->Start(PC, Location + FVector(0.0f, 0.0f, 40.0f), Damage, bCrit, DamageType);
 	}
 }
 
@@ -261,7 +265,7 @@ void UMDCombatFeedbackComponent::NotifyReactionObserved(AActor* Victim, const FM
 	// "All" mode also shows other people's numbers; the attacker's own come from Client_ConfirmHit.
 	if (Settings->DamageNumberMode == EMDDamageNumberMode::All && Hit.Instigator != LocalPawn && Hit.Damage > 0.0f)
 	{
-		ShowDamageNumber(Hit.Damage, Hit.bCrit, FVector(Hit.ImpactPoint));
+		ShowDamageNumber(Hit.Damage, Hit.bCrit, FVector(Hit.ImpactPoint), Hit.DamageType);
 		OnHitNumber(Hit.Damage, Hit.bCrit, FVector(Hit.ImpactPoint));
 	}
 }
