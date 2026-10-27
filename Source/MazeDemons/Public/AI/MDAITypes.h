@@ -43,6 +43,20 @@ enum class EMDRole : uint8
 	Leader
 };
 
+// Pack state (2.4). Engage = 0 so a loose enemy's default is the plain fight. Ambush-armed arrives with WP5.
+//   Engage    the normal fight.
+//   Pressing  the pack has all of its tokens on the focus target.
+//   Regroup   retreat triggered: every member runs to the rally point, waits there, then comes back (state returns to Engage).
+//   Routed    the pack is under its retreat threshold but cannot retreat (no rally point, or it already did): it fights on.
+UENUM(BlueprintType)
+enum class EMDPackState : uint8
+{
+	Engage = 0,
+	Pressing,
+	Regroup,
+	Routed
+};
+
 // Intelligence tier T0 (basic) .. T4 (smartest). The tier table struct (FMDIntelligenceTier) arrives with V1 WP4.
 UENUM(BlueprintType)
 enum class EMDIntelligenceTier : uint8
@@ -184,6 +198,25 @@ struct MAZEDEMONS_API FMDBrainContext
 
 	UPROPERTY(BlueprintReadWrite, Category = "AI")
 	float ThreatRange = 450.0f;
+
+	// ---- Pack (WP2) ----
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	EMDRole Role = EMDRole::None;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	EMDPackState PackState = EMDPackState::Engage;
+
+	// The director assigned this enemy a ring slot around its target.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bHasSlot = false;
+
+	// A rally point exists and the pack is retreating to it.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bHasRally = false;
+
+	// Within reach of the rally point (Retreat is over, Regroup holds).
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bAtRally = false;
 
 	// ---- Determinism ----
 	UPROPERTY(BlueprintReadWrite, Category = "AI")

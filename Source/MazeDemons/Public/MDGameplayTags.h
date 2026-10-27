@@ -54,6 +54,8 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_HoldThreat);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Attack);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Stagger);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Dead);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Retreat);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Regroup);
 
 // Minimap marker kinds (mirrors EMDMapMarkerType; usable as widget lookup keys).
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Objective);

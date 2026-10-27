@@ -11,8 +11,8 @@ class UMDEnemyBrainComponent;
 // Server-only world services the enemy brains share (V1 WP1):
 //   - the round-robin brain scheduler (2.9): brains do not tick themselves, this runs BrainHz x N decisions per second
 //     spread evenly over frames;
-//   - the attack token pool (1.3): one pool, MaxTokensPerPlayer from the tier (1 at T0). This is the minimal interface
-//     WP2's UMDPackDirectorSubsystem takes over (same calls, same FMDAttackTokenPool);
+//   - the attack token calls (1.3): thin wrappers over UMDPackDirectorSubsystem (V1 WP2), which holds the per-player pools,
+//     MaxTokensPerPlayer from the tier (1 at T0);
 //   - the run seed every brain's noise is keyed on (md.AI.Seed; 0 = drawn once per world and logged).
 // Console: md.AI.Debug, md.AI.ForceTier, md.AI.BrainHz, md.AI.Seed (see MDAISubsystem.cpp).
 UCLASS()
@@ -29,15 +29,19 @@ public:
 	void UnregisterBrain(UMDEnemyBrainComponent* Brain);
 	int32 NumBrains() const { return Brains.Num(); }
 
-	// ---- Tokens (WP2 replaces the implementation, not the calls) ----
+	// ---- Tokens (V1 WP2: these calls delegate to UMDPackDirectorSubsystem, which owns the per-player pools) ----
 	bool RequestAttackToken(AActor* Enemy, AActor* Target);
 	bool HoldsAttackToken(const AActor* Enemy) const;
 	void ReleaseAttackToken(AActor* Enemy);
 	void ReleaseAttackTokenAfter(AActor* Enemy, double Delay = MDAI::TokenHoldAfterAttack);
+	// The enemy started the attack its token was for: a higher priority requester can no longer take it.
+	void CommitAttackToken(AActor* Enemy);
 	int32 CountAttackTokensOn(const AActor* Target) const;
 
-	// Stable id of an actor for the token pool (assigned on first use).
+	// Stable id of an actor for the token pools (assigned on first use).
 	int32 GetActorId(const AActor* Actor);
+	// The id if the actor already has one, else 0 (never assigns).
+	int32 FindActorId(const AActor* Actor) const;
 
 	// ---- Run / tier ----
 	int32 GetRunSeed() const { return RunSeed; }
@@ -71,7 +75,6 @@ private:
 	float Accumulator = 0.0f;
 	int32 NextEnemyId = 1;
 
-	FMDAttackTokenPool Tokens;
 	TMap<TWeakObjectPtr<const AActor>, int32> ActorIds;
 	int32 NextActorId = 1;
 

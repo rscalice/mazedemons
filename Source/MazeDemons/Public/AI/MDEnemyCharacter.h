@@ -109,6 +109,11 @@ public:
 	void FaceTarget(AActor* Target);
 	bool IsFacingTarget() const { return bFacingTarget; }
 
+	// Level-placed enemies with the same non-empty SpawnGroupId form one pack (V1 WP2) and share a retreat threshold. Empty =
+	// a loose enemy (a pack of one). Spawners that know their group call UMDPackDirectorSubsystem::RegisterSpawnGroup instead.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy|AI")
+	FName SpawnGroupId;
+
 	// Seconds the corpse stays before it is destroyed (server). 0 or less keeps it.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy", meta = (ClampMin = "0"))
 	float CorpseLifetime = 15.0f;

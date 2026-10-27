@@ -188,7 +188,7 @@ bool FMDAIBrainScorerDeterministicForSeedTest::RunTest(const FString& Parameters
 	const FMDBrainContext Far = MakeContext(900.0f, false);
 	const MDAI::FScores A = FMDUtilityScorer::Score(Far, Params, T0);
 	const MDAI::FScores B = FMDUtilityScorer::Score(Far, Params, T0);
-	if (!TestEqual(TEXT("scores one slot per scored intent"), A.Num(), 4) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
+	if (!TestEqual(TEXT("scores one slot per scored intent (Idle, Chase, HoldThreat, Attack, Retreat, Regroup)"), A.Num(), 6) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
 	{
 		return false;
 	}

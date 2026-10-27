@@ -2,6 +2,7 @@
 
 #include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyCharacter.h"
+#include "AI/MDPackDirectorSubsystem.h"
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Math/RandomStream.h"
@@ -144,7 +145,6 @@ int32 UMDAISubsystem::StepScheduler(float DeltaTime)
 void UMDAISubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	Tokens.Purge(Now());
 	StepScheduler(DeltaTime);
 }
 
@@ -178,37 +178,48 @@ int32 UMDAISubsystem::GetActorId(const AActor* Actor)
 
 bool UMDAISubsystem::RequestAttackToken(AActor* Enemy, AActor* Target)
 {
-	if (!Enemy || !Target)
-	{
-		return false;
-	}
-	return Tokens.TryGrant(GetActorId(Enemy), GetActorId(Target), Now(), ResolveTierParams().MaxTokensPerPlayer);
+	UMDPackDirectorSubsystem* Director = UMDPackDirectorSubsystem::Get(GetWorld());
+	return Director && Director->RequestToken(Enemy, Target);
 }
 
 bool UMDAISubsystem::HoldsAttackToken(const AActor* Enemy) const
 {
-	const int32* Id = Enemy ? ActorIds.Find(Enemy) : nullptr;
-	return Id && Tokens.Holds(*Id, Now());
+	const UMDPackDirectorSubsystem* Director = UMDPackDirectorSubsystem::Get(GetWorld());
+	return Director && Director->HoldsToken(Enemy);
 }
 
 void UMDAISubsystem::ReleaseAttackToken(AActor* Enemy)
 {
-	if (const int32* Id = Enemy ? ActorIds.Find(Enemy) : nullptr)
+	if (UMDPackDirectorSubsystem* Director = UMDPackDirectorSubsystem::Get(GetWorld()))
 	{
-		Tokens.Release(*Id);
+		Director->ReleaseToken(Enemy);
 	}
 }
 
 void UMDAISubsystem::ReleaseAttackTokenAfter(AActor* Enemy, double Delay)
 {
-	if (const int32* Id = Enemy ? ActorIds.Find(Enemy) : nullptr)
+	if (UMDPackDirectorSubsystem* Director = UMDPackDirectorSubsystem::Get(GetWorld()))
 	{
-		Tokens.ReleaseAfter(*Id, Now(), Delay);
+		Director->ReleaseTokenAfter(Enemy, Delay);
+	}
+}
+
+void UMDAISubsystem::CommitAttackToken(AActor* Enemy)
+{
+	if (UMDPackDirectorSubsystem* Director = UMDPackDirectorSubsystem::Get(GetWorld()))
+	{
+		Director->CommitToken(Enemy);
 	}
 }
 
 int32 UMDAISubsystem::CountAttackTokensOn(const AActor* Target) const
 {
-	const int32* Id = Target ? ActorIds.Find(Target) : nullptr;
-	return Id ? Tokens.CountForTarget(*Id, Now()) : 0;
+	const UMDPackDirectorSubsystem* Director = UMDPackDirectorSubsystem::Get(GetWorld());
+	return Director ? Director->CountTokensOn(Target) : 0;
+}
+
+int32 UMDAISubsystem::FindActorId(const AActor* Actor) const
+{
+	const int32* Found = Actor ? ActorIds.Find(Actor) : nullptr;
+	return Found ? *Found : 0;
 }

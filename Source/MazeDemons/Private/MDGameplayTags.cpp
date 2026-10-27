@@ -38,6 +38,8 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_HoldThreat, "AI.Intent.HoldThreat");
 UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Attack, "AI.Intent.Attack");
 UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Stagger, "AI.Intent.Stagger");
 UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Dead, "AI.Intent.Dead");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Retreat, "AI.Intent.Retreat");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Regroup, "AI.Intent.Regroup");
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Objective, "Map.Marker.Objective");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Gate, "Map.Marker.Gate");

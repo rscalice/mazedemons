@@ -81,6 +81,19 @@ void FMDST_EnemyChase::IssueMove(AMDEnemyController& Controller, FInstanceDataTy
 	const float Acceptance = FMath::Max(Brain->GetAttackRange() * 0.75f, 60.0f);
 	if (Brain->IsTargetSensed())
 	{
+		// V1 WP2: approach the ring slot the pack director gave this enemy, so a pack spreads around the player instead of
+		// stacking on one point. Without a slot (a loose enemy, the focus is another player) go straight at the target.
+		FVector SlotPoint;
+		if (Brain->GetSlotPoint(SlotPoint))
+		{
+			if (Data.LastTarget != Target || FVector::Dist2D(SlotPoint, Data.LastGoal) > 60.0f || Controller.GetMoveStatus() != EPathFollowingStatus::Moving)
+			{
+				Controller.MoveToLocation(SlotPoint, 50.0f, true, true, true, true);
+				Data.LastTarget = Target;
+				Data.LastGoal = SlotPoint;
+			}
+			return;
+		}
 		if (Data.LastTarget != Target || Controller.GetMoveStatus() != EPathFollowingStatus::Moving)
 		{
 			Controller.MoveToActor(Target, Acceptance, /*bStopOnOverlap*/ true, /*bUsePathfinding*/ true, /*bCanStrafe*/ true);
@@ -206,7 +219,24 @@ EStateTreeRunStatus FMDST_EnemyHoldThreat::Tick(FStateTreeExecutionContext& Cont
 		Enemy->FaceTarget(Target);
 	}
 	FVector Point;
-	if (ComputeHoldPoint(Brain->GetTargetLocation(), Enemy->GetActorLocation(), Brain->GetThreatRange(), Tolerance, Point))
+	FVector RingPoint;
+	if (Brain->GetThreatPoint(RingPoint))
+	{
+		// The threat ring point on this enemy's slot angle: 4-6 m out, spread around the target like the melee slots.
+		if (FVector::Dist2D(RingPoint, Enemy->GetActorLocation()) > Tolerance)
+		{
+			if (FVector::Dist2D(RingPoint, Data.LastGoal) > 50.0f || Controller->GetMoveStatus() != EPathFollowingStatus::Moving)
+			{
+				Controller->MoveToLocation(RingPoint, 40.0f, true, true, true, true);
+				Data.LastGoal = RingPoint;
+			}
+		}
+		else if (Controller->GetMoveStatus() == EPathFollowingStatus::Moving)
+		{
+			Controller->StopMovement();
+		}
+	}
+	else if (ComputeHoldPoint(Brain->GetTargetLocation(), Enemy->GetActorLocation(), Brain->GetThreatRange(), Tolerance, Point))
 	{
 		if (FVector::Dist2D(Point, Data.LastGoal) > 50.0f || Controller->GetMoveStatus() != EPathFollowingStatus::Moving)
 		{
@@ -227,6 +257,80 @@ void FMDST_EnemyHoldThreat::ExitState(FStateTreeExecutionContext& Context, const
 	{
 		MDSTLocal::Stop(*Controller, nullptr);
 	}
+}
+
+// ---- Retreat ----
+
+FMDST_EnemyRetreat::FMDST_EnemyRetreat()
+{
+	bShouldCallTick = true;
+}
+
+EStateTreeRunStatus FMDST_EnemyRetreat::EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
+{
+	FInstanceDataType& Data = Context.GetInstanceData(*this);
+	AMDEnemyController* Controller = ResolveController(Context, Data);
+	if (!Controller)
+	{
+		return EStateTreeRunStatus::Running;
+	}
+	if (AMDEnemyCharacter* Enemy = Controller->GetEnemy())
+	{
+		Enemy->FaceMovement(); // run, do not back-pedal
+	}
+	Data.NextUpdateTime = 0.0;
+	Data.LastGoal = FVector::ZeroVector;
+	return Tick(Context, 0.0f);
+}
+
+EStateTreeRunStatus FMDST_EnemyRetreat::Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const
+{
+	FInstanceDataType& Data = Context.GetInstanceData(*this);
+	const double Now = MDSTLocal::Now(Context);
+	if (Now < Data.NextUpdateTime)
+	{
+		return EStateTreeRunStatus::Running;
+	}
+	Data.NextUpdateTime = Now + UpdateInterval;
+	AMDEnemyController* Controller = ResolveController(Context, Data);
+	UMDEnemyBrainComponent* Brain = Controller ? Controller->GetBrain() : nullptr;
+	FVector Rally;
+	if (!Brain || !Brain->GetRallyPoint(Rally))
+	{
+		return EStateTreeRunStatus::Running; // the brain ends the state when the regroup is over
+	}
+	if (FVector::Dist2D(Rally, Data.LastGoal) > 50.0f || Controller->GetMoveStatus() != EPathFollowingStatus::Moving)
+	{
+		Controller->MoveToLocation(Rally, Acceptance, true, true, false, true);
+		Data.LastGoal = Rally;
+	}
+	return EStateTreeRunStatus::Running;
+}
+
+void FMDST_EnemyRetreat::ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
+{
+	if (AMDEnemyController* Controller = ResolveController(Context, Context.GetInstanceData(*this)))
+	{
+		Controller->StopMovement();
+	}
+}
+
+// ---- Regroup ----
+
+FMDST_EnemyRegroup::FMDST_EnemyRegroup()
+{
+	bShouldCallTick = false;
+}
+
+EStateTreeRunStatus FMDST_EnemyRegroup::EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
+{
+	AMDEnemyController* Controller = ResolveController(Context, Context.GetInstanceData(*this));
+	if (Controller)
+	{
+		// Wait at the rally point watching the player.
+		MDSTLocal::Stop(*Controller, Controller->GetBrain() ? Controller->GetBrain()->GetTarget() : nullptr);
+	}
+	return EStateTreeRunStatus::Running;
 }
 
 // ---- Attack ----
@@ -299,6 +403,14 @@ FText FMDST_EnemyChase::GetDescription(const FGuid& ID, FStateTreeDataView Insta
 FText FMDST_EnemyHoldThreat::GetDescription(const FGuid& ID, FStateTreeDataView InstanceDataView, const IStateTreeBindingLookup& BindingLookup, EStateTreeNodeFormatting Formatting) const
 {
 	return LOCTEXT("HoldDesc", "Hold the threat range, facing the target");
+}
+FText FMDST_EnemyRetreat::GetDescription(const FGuid& ID, FStateTreeDataView InstanceDataView, const IStateTreeBindingLookup& BindingLookup, EStateTreeNodeFormatting Formatting) const
+{
+	return LOCTEXT("RetreatDesc", "Run to the pack's rally point");
+}
+FText FMDST_EnemyRegroup::GetDescription(const FGuid& ID, FStateTreeDataView InstanceDataView, const IStateTreeBindingLookup& BindingLookup, EStateTreeNodeFormatting Formatting) const
+{
+	return LOCTEXT("RegroupDesc", "Wait at the rally point until the pack comes back");
 }
 FText FMDST_EnemyAttack::GetDescription(const FGuid& ID, FStateTreeDataView InstanceDataView, const IStateTreeBindingLookup& BindingLookup, EStateTreeNodeFormatting Formatting) const
 {

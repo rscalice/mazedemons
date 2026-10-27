@@ -23,7 +23,7 @@ public:
 	/**
 	 * Builds (or rebuilds) the enemy executor StateTree at PackagePath (e.g. "/Game/AI/ST_Enemy"):
 	 *   schema  StateTree AI Component (AMDEnemyController / AMDEnemyCharacter)
-	 *   states  Root -> Idle, Chase, HoldThreat, Attack, Stagger, Dead, one MD Enemy task each (Idle is selected first)
+	 *   states  Root -> Idle, Chase, HoldThreat, Retreat, Regroup, Attack, Stagger, Dead, one MD Enemy task each (Idle is selected first)
 	 *   events  Root transitions On Event AI.Intent.<X> -> that state (the brain sends them); every leaf also goes back to
 	 *           Idle when its state completes (the tasks never complete, this is a safety net).
 	 * Compiles and saves the asset. OutLog gets the compiler messages. Returns true when compiled and saved.
