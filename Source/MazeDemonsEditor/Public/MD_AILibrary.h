@@ -54,6 +54,18 @@ public:
 	static bool BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UBlendSpace* BlendSpace, TArray<FString>& OutLog);
 
 	/**
+	 * A blend space whose samples were set from a script has no triangulation/segment data until it is re-sampled (the editor
+	 * does this from PostEditChangeProperty): without it the player evaluates nothing but the first sample. Validates the
+	 * samples, rebuilds the blend data and reports what X (and Y) evaluate to; nothing is saved.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
+	static TArray<FString> FinalizeBlendSpace(UBlendSpace* BlendSpace);
+
+	/** Data check for the enemy animation setup: the ABP's graph nodes and links, the blend space's samples and evaluation. */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
+	static TArray<FString> DescribeEnemyAnimation(const FString& AnimBlueprintPath, UBlendSpace* BlendSpace);
+
+	/**
 	 * Makes sure the current editor world has a NavMeshBoundsVolume enclosing Box (spawns one, labelled Label, when none
 	 * encloses it; volumes cannot be built from Python) and then builds navigation synchronously, so the baked RecastNavMesh
 	 * is saved with the map. Returns a log whose last line starts with "OK" on success and "Error" otherwise.

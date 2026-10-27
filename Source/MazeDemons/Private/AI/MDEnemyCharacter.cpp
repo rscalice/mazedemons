@@ -12,6 +12,7 @@
 #include "MDGameplayStatics.h"
 #include "MDPlayerState.h"
 #include "MDPoiseComponent.h"
+#include "AIController.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -29,7 +30,8 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 	if (UCharacterMovementComponent* Move = GetCharacterMovement())
 	{
 		Move->bOrientRotationToMovement = true;
-		Move->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+		Move->bUseControllerDesiredRotation = false;
+		Move->RotationRate = FRotator(0.0f, 640.0f, 0.0f); // used by both facing modes (FaceMovement / FaceTarget)
 	}
 
 	// The weapon sweep (UMDCombatStatics::SweepWeaponHand) traces the Visibility channel, which the Pawn profile ignores.
@@ -63,12 +65,36 @@ EMDIntent AMDEnemyCharacter::GetIntent() const
 	return static_cast<EMDIntent>(ReplicatedIntent);
 }
 
-void AMDEnemyCharacter::SetFaceMovement(bool bFaceMovement)
+void AMDEnemyCharacter::FaceMovement()
 {
+	bFacingTarget = false;
+	if (AAIController* AI = Cast<AAIController>(GetController()))
+	{
+		AI->ClearFocus(EAIFocusPriority::Gameplay);
+	}
 	if (UCharacterMovementComponent* Move = GetCharacterMovement())
 	{
-		Move->bOrientRotationToMovement = bFaceMovement;
-		Move->bUseControllerDesiredRotation = !bFaceMovement;
+		Move->bOrientRotationToMovement = true;
+		Move->bUseControllerDesiredRotation = false;
+	}
+}
+
+void AMDEnemyCharacter::FaceTarget(AActor* Target)
+{
+	if (!Target)
+	{
+		FaceMovement();
+		return;
+	}
+	bFacingTarget = true;
+	if (AAIController* AI = Cast<AAIController>(GetController()))
+	{
+		AI->SetFocus(Target, EAIFocusPriority::Gameplay); // AAIController::UpdateControlRotation aims the control rotation at it every tick
+	}
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		Move->bOrientRotationToMovement = false;
+		Move->bUseControllerDesiredRotation = true;
 	}
 }
 

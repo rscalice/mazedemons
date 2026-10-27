@@ -293,6 +293,11 @@ void UMDEnemyAttackComponent::NotifyTraceWindowBegan()
 		return;
 	}
 	bRateRestored = true;
+	// The swing is committed: stop tracking the target so it goes where it was aimed (server; the rotation replicates).
+	if (AMDEnemyCharacter* Enemy = Cast<AMDEnemyCharacter>(GetOwner()); Enemy && Enemy->HasAuthority())
+	{
+		Enemy->FaceMovement();
+	}
 	USkeletalMeshComponent* Mesh = GetMesh();
 	UAnimInstance* Anim = Mesh ? Mesh->GetAnimInstance() : nullptr;
 	UAnimMontage* Montage = ActiveMontage.Get();

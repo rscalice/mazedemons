@@ -154,6 +154,9 @@ def s_blendspace():
         s.set_editor_property('rate_scale', 1.0)
         samples.append(s)
     bs.set_editor_property('sample_data', samples)
+    # Setting sample_data from a script does not re-triangulate the blend space (the editor does that from
+    # PostEditChangeProperty); without segments GetSamplesFromBlendInput returns nothing and the player shows one pose.
+    for l in unreal.MD_AILibrary.finalize_blend_space(bs): P("  " + str(l))
     bs.modify(); save(path)
     bs = unreal.load_asset(path)
     try:

@@ -5,8 +5,11 @@
 #include "AI/MDAIRules.h"
 #include "AI/MDAISubsystem.h"
 #include "AI/MDAITypes.h"
+#include "AI/MDEnemyAnimInstance.h"
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttackComponent.h"
+#include "AIController.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyCharacter.h"
 #include "AI/MDEnemyController.h"
@@ -555,6 +558,85 @@ bool FMDAIBrainSchedulerAndRulesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("chase task instance data"), Chase.GetInstanceDataType() == FMDSTEnemyTaskInstanceData::StaticStruct());
 	const FMDST_EnemyAttack AttackTask;
 	TestFalse(TEXT("attack task does not tick"), AttackTask.bShouldCallTick);
+	return true;
+}
+
+// The enemy anim instance reads the pawn's velocity on every update (listen server and clients alike): the locomotion
+// blend space in ABP_Ghoul is driven by Speed, so a stale Speed means an enemy gliding in its idle pose.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDAIBrainAnimInstanceSpeedTest, "MazeDemons.AI.Brain.AnimInstanceSpeed", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDAIBrainAnimInstanceSpeedTest::RunTest(const FString& Parameters)
+{
+	using namespace MDAIBrainTestsLocal;
+	FBrainFixture F;
+	if (!F.Init(*this, 1))
+	{
+		return false;
+	}
+	AMDEnemyCharacter* Enemy = F.Enemies[0];
+	UMDEnemyAnimInstance* Anim = NewObject<UMDEnemyAnimInstance>(Enemy->GetMesh());
+	if (!TestNotNull(TEXT("anim instance"), Anim))
+	{
+		return false;
+	}
+	TestTrue(TEXT("pawn owner resolves through the mesh"), Anim->TryGetPawnOwner() == Enemy);
+
+	Enemy->GetCharacterMovement()->Velocity = FVector(300.0, 0.0, 0.0);
+	Anim->NativeUpdateAnimation(0.016f);
+	TestEqual(TEXT("speed from the pawn velocity"), Anim->Speed, 300.0f, 0.01f);
+	TestEqual(TEXT("fraction of the archetype MoveSpeed (520)"), Anim->SpeedFraction, 300.0f / 520.0f, 0.001f);
+	TestTrue(TEXT("moving"), Anim->bMoving);
+	TestFalse(TEXT("not attacking"), Anim->bAttacking);
+	TestFalse(TEXT("not dead"), Anim->bDead);
+
+	Enemy->GetCharacterMovement()->Velocity = FVector(0.0, 0.0, -400.0); // falling: horizontal speed only
+	Anim->NativeUpdateAnimation(0.016f);
+	TestEqual(TEXT("vertical velocity is not speed"), Anim->Speed, 0.0f, 0.01f);
+	TestFalse(TEXT("not moving"), Anim->bMoving);
+
+	Enemy->SetReplicatedIntent(EMDIntent::Chase);
+	Anim->NativeUpdateAnimation(0.016f);
+	TestTrue(TEXT("intent mirrors the replicated intent"), Anim->Intent == EMDIntent::Chase);
+	return true;
+}
+
+// The facing rule (AMDEnemyCharacter::FaceMovement / FaceTarget) for every enemy: chase turns with the movement, holding
+// the ring and winding up face the target through controller focus + desired rotation, never through controller yaw.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDAIBrainFacingRuleTest, "MazeDemons.AI.Brain.FacingRule", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDAIBrainFacingRuleTest::RunTest(const FString& Parameters)
+{
+	using namespace MDAIBrainTestsLocal;
+	FBrainFixture F;
+	if (!F.Init(*this, 1))
+	{
+		return false;
+	}
+	AMDEnemyCharacter* Enemy = F.Enemies[0];
+	UCharacterMovementComponent* Move = Enemy->GetCharacterMovement();
+	AAIController* Controller = Cast<AAIController>(Enemy->GetController());
+	if (!TestNotNull(TEXT("movement"), Move) || !TestNotNull(TEXT("AI controller"), Controller))
+	{
+		return false;
+	}
+	// Defaults: orient to movement at a brisk yaw rate, never controller yaw.
+	TestFalse(TEXT("no controller yaw"), Enemy->bUseControllerRotationYaw);
+	TestTrue(TEXT("default: orient to movement"), Move->bOrientRotationToMovement);
+	TestFalse(TEXT("default: no desired rotation"), Move->bUseControllerDesiredRotation);
+	TestTrue(TEXT("yaw rate 540..720"), Move->RotationRate.Yaw >= 540.0f && Move->RotationRate.Yaw <= 720.0f);
+
+	Enemy->FaceTarget(F.Player);
+	TestTrue(TEXT("face target: focus on the target"), Controller->GetFocusActor() == F.Player);
+	TestTrue(TEXT("face target: desired rotation"), Move->bUseControllerDesiredRotation);
+	TestFalse(TEXT("face target: not orient to movement"), Move->bOrientRotationToMovement);
+	TestTrue(TEXT("face target: flagged"), Enemy->IsFacingTarget());
+
+	Enemy->FaceMovement();
+	TestNull(TEXT("face movement: focus cleared"), Controller->GetFocusActor());
+	TestTrue(TEXT("face movement: orient to movement"), Move->bOrientRotationToMovement);
+	TestFalse(TEXT("face movement: no desired rotation"), Move->bUseControllerDesiredRotation);
+	TestFalse(TEXT("face movement: not flagged"), Enemy->IsFacingTarget());
+
+	Enemy->FaceTarget(nullptr);
+	TestFalse(TEXT("no target: falls back to movement facing"), Enemy->IsFacingTarget());
 	return true;
 }
 

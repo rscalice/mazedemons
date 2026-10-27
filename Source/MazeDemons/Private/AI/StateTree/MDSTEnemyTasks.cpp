@@ -18,13 +18,17 @@ namespace MDSTLocal
 		return World ? World->GetTimeSeconds() : 0.0;
 	}
 
-	void Stop(AMDEnemyController& Controller, bool bFaceMovement)
+	// Stop moving and face a target (focus) or, with none, the movement direction. The facing rule lives in AMDEnemyCharacter.
+	void Stop(AMDEnemyController& Controller, AActor* FaceTarget)
 	{
 		Controller.StopMovement();
-		Controller.ClearFocus(EAIFocusPriority::Gameplay);
 		if (AMDEnemyCharacter* Enemy = Controller.GetEnemy())
 		{
-			Enemy->SetFaceMovement(bFaceMovement);
+			Enemy->FaceTarget(FaceTarget);
+		}
+		else if (!FaceTarget)
+		{
+			Controller.ClearFocus(EAIFocusPriority::Gameplay);
 		}
 	}
 }
@@ -50,7 +54,7 @@ EStateTreeRunStatus FMDST_EnemyIdle::EnterState(FStateTreeExecutionContext& Cont
 {
 	if (AMDEnemyController* Controller = ResolveController(Context, Context.GetInstanceData(*this)))
 	{
-		MDSTLocal::Stop(*Controller, true);
+		MDSTLocal::Stop(*Controller, nullptr);
 	}
 	return EStateTreeRunStatus::Running;
 }
@@ -105,10 +109,9 @@ EStateTreeRunStatus FMDST_EnemyChase::EnterState(FStateTreeExecutionContext& Con
 	{
 		return EStateTreeRunStatus::Running;
 	}
-	Controller->ClearFocus(EAIFocusPriority::Gameplay);
 	if (AMDEnemyCharacter* Enemy = Controller->GetEnemy())
 	{
-		Enemy->SetFaceMovement(true);
+		Enemy->FaceMovement();
 	}
 	Data.LastTarget = nullptr;
 	Data.LastGoal = FVector::ZeroVector;
@@ -169,18 +172,8 @@ EStateTreeRunStatus FMDST_EnemyHoldThreat::EnterState(FStateTreeExecutionContext
 	{
 		return EStateTreeRunStatus::Running;
 	}
-	Controller->StopMovement();
-	if (AMDEnemyCharacter* Enemy = Controller->GetEnemy())
-	{
-		Enemy->SetFaceMovement(false); // face the player while stepping in or back
-	}
-	if (UMDEnemyBrainComponent* Brain = Controller->GetBrain())
-	{
-		if (AActor* Target = Brain->GetTarget())
-		{
-			Controller->SetFocus(Target, EAIFocusPriority::Gameplay);
-		}
-	}
+	// Face the player while stepping in or back.
+	MDSTLocal::Stop(*Controller, Controller->GetBrain() ? Controller->GetBrain()->GetTarget() : nullptr);
 	Data.NextUpdateTime = 0.0;
 	Data.LastGoal = FVector::ZeroVector;
 	return Tick(Context, 0.0f);
@@ -208,9 +201,9 @@ EStateTreeRunStatus FMDST_EnemyHoldThreat::Tick(FStateTreeExecutionContext& Cont
 		Controller->StopMovement();
 		return EStateTreeRunStatus::Running;
 	}
-	if (Controller->GetFocusActor() != Target)
+	if (Controller->GetFocusActor() != Target || !Enemy->IsFacingTarget())
 	{
-		Controller->SetFocus(Target, EAIFocusPriority::Gameplay);
+		Enemy->FaceTarget(Target);
 	}
 	FVector Point;
 	if (ComputeHoldPoint(Brain->GetTargetLocation(), Enemy->GetActorLocation(), Brain->GetThreatRange(), Tolerance, Point))
@@ -232,7 +225,7 @@ void FMDST_EnemyHoldThreat::ExitState(FStateTreeExecutionContext& Context, const
 {
 	if (AMDEnemyController* Controller = ResolveController(Context, Context.GetInstanceData(*this)))
 	{
-		MDSTLocal::Stop(*Controller, true);
+		MDSTLocal::Stop(*Controller, nullptr);
 	}
 }
 
@@ -252,7 +245,8 @@ EStateTreeRunStatus FMDST_EnemyAttack::EnterState(FStateTreeExecutionContext& Co
 	{
 		return EStateTreeRunStatus::Running;
 	}
-	MDSTLocal::Stop(*Controller, true); // the montage's root motion / warp owns the movement now
+	// Face the target through the wind-up (the warp aims at the same point); the trace notify then freezes the facing.
+	MDSTLocal::Stop(*Controller, Brain->GetTarget());
 	UMDEnemyAttackComponent* Attack = Enemy->AttackComponent;
 	if (!Attack || !Attack->StartAttack(Brain->GetChosenAttackIndex(), Brain->GetTarget(), Brain->GetChosenTellTime()))
 	{
@@ -272,7 +266,7 @@ EStateTreeRunStatus FMDST_EnemyStagger::EnterState(FStateTreeExecutionContext& C
 {
 	if (AMDEnemyController* Controller = ResolveController(Context, Context.GetInstanceData(*this)))
 	{
-		MDSTLocal::Stop(*Controller, true);
+		MDSTLocal::Stop(*Controller, nullptr);
 	}
 	return EStateTreeRunStatus::Running;
 }
@@ -288,7 +282,7 @@ EStateTreeRunStatus FMDST_EnemyDead::EnterState(FStateTreeExecutionContext& Cont
 {
 	if (AMDEnemyController* Controller = ResolveController(Context, Context.GetInstanceData(*this)))
 	{
-		MDSTLocal::Stop(*Controller, true);
+		MDSTLocal::Stop(*Controller, nullptr);
 	}
 	return EStateTreeRunStatus::Running;
 }

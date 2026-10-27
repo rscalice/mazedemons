@@ -99,9 +99,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Enemy|AI")
 	EMDIntent GetIntent() const;
 
-	// Facing while moving: true = turn with the movement direction (chase), false = face the controller's focus (hold the
-	// threat ring while sidestepping). Server only; the rotation replicates with the movement.
-	void SetFaceMovement(bool bFaceMovement);
+	// The facing rule for every enemy (server only; the rotation replicates with the movement):
+	//   FaceMovement  while chasing or idle: turn with the movement direction (bOrientRotationToMovement, RotationRate yaw),
+	//                 no controller focus; with no velocity the facing is frozen (the swing goes where it was aimed).
+	//   FaceTarget    while holding the threat ring or winding up an attack: the controller focuses the target and the
+	//                 movement component turns toward the controller rotation at RotationRate (bUseControllerDesiredRotation).
+	// Motion warping still owns the facing inside the attack's warp window; both aim at the same target.
+	void FaceMovement();
+	void FaceTarget(AActor* Target);
+	bool IsFacingTarget() const { return bFacingTarget; }
 
 	// Seconds the corpse stays before it is destroyed (server). 0 or less keeps it.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy", meta = (ClampMin = "0"))
@@ -125,4 +131,5 @@ private:
 	void AwardKillRewards();
 
 	bool bDeathHandled = false;
+	bool bFacingTarget = false;
 };

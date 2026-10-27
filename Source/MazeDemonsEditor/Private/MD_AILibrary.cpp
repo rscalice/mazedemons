@@ -7,6 +7,7 @@
 #include "AI/StateTree/MDSTEnemyTasks.h"
 #include "MDGameplayTags.h"
 #include "AnimGraphNode_BlendSpacePlayer.h"
+#include "AnimGraphNode_Inertialization.h"
 #include "AnimGraphNode_Root.h"
 #include "AnimGraphNode_Slot.h"
 #include "Animation/AnimBlueprint.h"
@@ -351,8 +352,18 @@ bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleto
 		FGraphNodeCreator<UAnimGraphNode_Slot> Creator(*AnimGraph);
 		Slot = Creator.CreateNode();
 		Slot->Node.SlotName = FName(TEXT("DefaultSlot"));
-		Slot->NodePosX = -200;
+		Slot->NodePosX = -300;
 		Slot->NodePosY = 0;
+		Creator.Finalize();
+	}
+	// Inertialization after the slot: the C1 attack/react montages blend with Inertialization and request it from the
+	// slot, which logs "No Inertialization node found" on every montage without this (ABP_SandboxCharacter does the same).
+	UAnimGraphNode_Inertialization* Inertialization = nullptr;
+	{
+		FGraphNodeCreator<UAnimGraphNode_Inertialization> Creator(*AnimGraph);
+		Inertialization = Creator.CreateNode();
+		Inertialization->NodePosX = 0;
+		Inertialization->NodePosY = 0;
 		Creator.Finalize();
 	}
 
@@ -374,7 +385,8 @@ bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleto
 	};
 	bool bOk = Connect(SpeedNode, TEXT("Speed"), Player, TEXT("X"));
 	bOk &= Connect(Player, TEXT("Pose"), Slot, TEXT("Source"));
-	bOk &= Connect(Slot, TEXT("Pose"), Root, TEXT("Result"));
+	bOk &= Connect(Slot, TEXT("Pose"), Inertialization, TEXT("Source"));
+	bOk &= Connect(Inertialization, TEXT("Pose"), Root, TEXT("Result"));
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(ABP);
 	FCompilerResultsLog Results;
@@ -494,5 +506,107 @@ TArray<FString> UMD_AILibrary::EnsureNavMeshCovers(const FBox& Box, const FStrin
 		OutLog.Add(FString::Printf(TEXT("navdata %s bounds %s"), *It->GetActorLabel(), *It->GetComponentsBoundingBox(true).ToString()));
 	}
 	OutLog.Add(FString::Printf(TEXT("%s: built %d nav data actor(s)"), NumNavData > 0 ? TEXT("OK") : TEXT("Error"), NumNavData));
+	return OutLog;
+}
+
+namespace MDAILibraryLocal
+{
+	void DescribeBlendSpace(UBlendSpace* BlendSpace, TArray<FString>& OutLog)
+	{
+		if (!BlendSpace)
+		{
+			OutLog.Add(TEXT("BlendSpace: none"));
+			return;
+		}
+		const FBlendParameter& X = BlendSpace->GetBlendParameter(0);
+		OutLog.Add(FString::Printf(TEXT("BlendSpace %s: axis '%s' %.0f..%.0f, %d samples, %d segments, %d triangles"), *BlendSpace->GetName(),
+			*X.DisplayName, X.Min, X.Max, BlendSpace->GetNumberOfBlendSamples(), BlendSpace->GetBlendSpaceData().Segments.Num(), BlendSpace->GetBlendSpaceData().Triangles.Num()));
+		for (int32 i = 0; i < BlendSpace->GetNumberOfBlendSamples(); ++i)
+		{
+			const FBlendSample& Sample = BlendSpace->GetBlendSample(i);
+			OutLog.Add(FString::Printf(TEXT("  sample %d: %s at (%.0f, %.0f) rate %.2f valid=%d"), i, *GetNameSafe(Sample.Animation), Sample.SampleValue.X, Sample.SampleValue.Y,
+				Sample.RateScale, Sample.bIsValid ? 1 : 0));
+		}
+		for (const float Input : { 0.0f, 100.0f, 200.0f, 400.0f, 520.0f, 600.0f })
+		{
+			TArray<FBlendSampleData> Samples;
+			int32 Cached = INDEX_NONE;
+			const bool bAny = BlendSpace->GetSamplesFromBlendInput(FVector(Input, 0.0, 0.0), Samples, Cached, true);
+			FString Line = FString::Printf(TEXT("  X=%.0f -> %s"), Input, bAny ? TEXT("") : TEXT("(nothing)"));
+			for (const FBlendSampleData& S : Samples)
+			{
+				Line += FString::Printf(TEXT("%s %.2f  "), *GetNameSafe(S.Animation), S.TotalWeight);
+			}
+			OutLog.Add(Line);
+		}
+	}
+}
+
+TArray<FString> UMD_AILibrary::FinalizeBlendSpace(UBlendSpace* BlendSpace)
+{
+	TArray<FString> OutLog;
+	if (!BlendSpace)
+	{
+		OutLog.Add(TEXT("Error: no blend space"));
+		return OutLog;
+	}
+	OutLog.Add(TEXT("before:"));
+	MDAILibraryLocal::DescribeBlendSpace(BlendSpace, OutLog);
+	BlendSpace->ValidateSampleData();
+	BlendSpace->ResampleData();
+	BlendSpace->MarkPackageDirty();
+	OutLog.Add(TEXT("after ValidateSampleData + ResampleData:"));
+	MDAILibraryLocal::DescribeBlendSpace(BlendSpace, OutLog);
+	return OutLog;
+}
+
+TArray<FString> UMD_AILibrary::DescribeEnemyAnimation(const FString& AnimBlueprintPath, UBlendSpace* BlendSpace)
+{
+	TArray<FString> OutLog;
+	UAnimBlueprint* ABP = LoadObject<UAnimBlueprint>(nullptr, *AnimBlueprintPath);
+	if (!ABP)
+	{
+		OutLog.Add(FString::Printf(TEXT("Error: no anim Blueprint at %s"), *AnimBlueprintPath));
+	}
+	else
+	{
+		OutLog.Add(FString::Printf(TEXT("ABP %s: parent %s, generated %s, skeleton %s, status %d"), *ABP->GetName(), *GetNameSafe(ABP->ParentClass),
+			*GetNameSafe(ABP->GeneratedClass), *GetNameSafe(ABP->TargetSkeleton), static_cast<int32>(ABP->Status)));
+		for (UEdGraph* Graph : ABP->FunctionGraphs)
+		{
+			if (!Graph || !Graph->IsA<UAnimationGraph>())
+			{
+				continue;
+			}
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (!Node)
+				{
+					continue;
+				}
+				FString Line = FString::Printf(TEXT("  node %s"), *Node->GetClass()->GetName());
+				if (UAnimGraphNode_BlendSpacePlayer* Player = Cast<UAnimGraphNode_BlendSpacePlayer>(Node))
+				{
+					Line += FString::Printf(TEXT(" [blend space %s]"), *GetNameSafe(Player->Node.GetBlendSpace()));
+				}
+				for (UEdGraphPin* Pin : Node->Pins)
+				{
+					if (!Pin || Pin->bHidden)
+					{
+						continue;
+					}
+					FString Links;
+					for (UEdGraphPin* Other : Pin->LinkedTo)
+					{
+						Links += FString::Printf(TEXT("%s.%s "), Other && Other->GetOwningNode() ? *Other->GetOwningNode()->GetClass()->GetName() : TEXT("?"), Other ? *Other->PinName.ToString() : TEXT("?"));
+					}
+					Line += FString::Printf(TEXT("\n    %s %s%s%s"), Pin->Direction == EGPD_Input ? TEXT("in ") : TEXT("out"), *Pin->PinName.ToString(),
+						Links.IsEmpty() ? (Pin->Direction == EGPD_Input ? *FString::Printf(TEXT(" = %s"), *Pin->DefaultValue) : TEXT("")) : *FString::Printf(TEXT(" -> %s"), *Links), TEXT(""));
+				}
+				OutLog.Add(Line);
+			}
+		}
+	}
+	MDAILibraryLocal::DescribeBlendSpace(BlendSpace, OutLog);
 	return OutLog;
 }
