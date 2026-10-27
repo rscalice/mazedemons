@@ -680,7 +680,25 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 		}
 		TestTrue(*FString::Printf(TEXT("%s montage has root motion"), *Attack.Name.ToString()), Attack.Montage->HasRootMotion());
 		const FTransform Travel = Attack.Montage->ExtractRootMotionFromTrackRange(0.0f, Attack.Montage->GetPlayLength(), FAnimExtractContext());
-		TestTrue(*FString::Printf(TEXT("%s travels forward (%.0f cm)"), *Attack.Name.ToString(), Travel.GetTranslation().Size2D()), Travel.GetTranslation().Size2D() > 50.0f);
+		// The ghoul claws (a werewolf clip with a baked root dash): the Swipe is a short step-in, the Lunge a 3-4 m leap, and neither
+		// lifts, flips or spins the root (the sword clips used before did all three).
+		const double Dist2D = Travel.GetTranslation().Size2D();
+		if (Attack.Name == FName(TEXT("Swipe")))
+		{
+			TestTrue(*FString::Printf(TEXT("Swipe is a short step-in (%.0f cm, 15..60)"), Dist2D), Dist2D > 15.0 && Dist2D < 60.0);
+		}
+		else if (Attack.Name == FName(TEXT("Lunge")))
+		{
+			TestTrue(*FString::Printf(TEXT("Lunge is a forward leap (%.0f cm, 300..400)"), Dist2D), Dist2D > 300.0 && Dist2D < 400.0);
+		}
+		else
+		{
+			TestTrue(*FString::Printf(TEXT("%s travels forward (%.0f cm)"), *Attack.Name.ToString(), Dist2D), Dist2D > 50.0);
+		}
+		TestTrue(*FString::Printf(TEXT("%s has no vertical root travel (%.0f cm)"), *Attack.Name.ToString(), Travel.GetTranslation().Z), FMath::Abs(Travel.GetTranslation().Z) < 5.0);
+		const FRotator RootTurn = Travel.GetRotation().Rotator();
+		TestTrue(*FString::Printf(TEXT("%s root does not spin or flip (%s)"), *Attack.Name.ToString(), *RootTurn.ToString()),
+			FMath::Abs(RootTurn.Yaw) < 5.0 && FMath::Abs(RootTurn.Pitch) < 5.0 && FMath::Abs(RootTurn.Roll) < 5.0);
 		TestTrue(*FString::Printf(TEXT("%s root motion scale is not zero"), *Attack.Name.ToString()), Attack.Step.RootMotionScale > 0.0f);
 	}
 
@@ -762,6 +780,7 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 	}
 	const FVector Start2 = Enemy->GetActorLocation();
 	const double DistBefore = FVector::Dist2D(Start2, Target->GetActorLocation());
+	Enemy->FaceTarget(Target); // attacks run in the face-target mode (MDSTEnemyTasks), not orient-to-movement: the authored recoil must not turn the ghoul around
 	const float Tell = Ghoul->Attacks[AttackIndex].TellTime; // the real wind-up: slowed play rate until the trace notify restores it
 	if (!TestTrue(TEXT("attack at the target starts"), Enemy->AttackComponent->StartAttack(AttackIndex, Target, Tell)))
 	{
