@@ -424,6 +424,12 @@ protected:
 	void Client_ResetMovementState();
 
 private:
+	// R0: Q / D-pad Up swaps melee and ranged mode. The server validates and flips UMDRangedComponent.
+	void RangedSwapPressed();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestRangedSwap();
+
 	void OnQuickSlot1(const FInputActionValue& Value);
 	void OnQuickSlot2(const FInputActionValue& Value);
 	void OnPause(const FInputActionValue& Value);

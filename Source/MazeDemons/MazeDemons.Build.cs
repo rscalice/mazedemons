@@ -28,7 +28,9 @@ public class MazeDemons : ModuleRules
 				"MotionWarping",
 				"StateTreeModule",         // V1 enemy executor tasks (AI/StateTree)
 				"GameplayStateTreeModule", // UStateTreeAIComponent on AMDEnemyController
-				"NavigationSystem"
+				"NavigationSystem",
+				"AnimGraphRuntime",        // R0 support-hand IK anim node (FAnimNode_TwoBoneIK)
+				"AnimationCore"
 			});
 
 		PrivateDependencyModuleNames.Add("AssetRegistry"); // combo set validation test

@@ -26,6 +26,7 @@
 #include "Components/SceneComponent.h"
 #include "GameFramework/DamageType.h"
 #include "Kismet/GameplayStatics.h"
+#include "Ranged/MDRangedComponent.h"
 
 namespace MDCombatNumberLocal
 {
@@ -599,7 +600,10 @@ void UMDCombatStatics::ReleaseAbilityInput(AActor* Avatar, TSubclassOf<UGameplay
 EMDWeaponStance UMDCombatStatics::GetWeaponStanceForActor(const AActor* Actor)
 {
 	const UMDInventoryComponent* Inv = UMDGameplayStatics::GetInventory(Actor);
-	return Inv ? Inv->GetWeaponStance() : EMDWeaponStance::Unarmed;
+	const EMDWeaponStance MeleeStance = Inv ? Inv->GetWeaponStance() : EMDWeaponStance::Unarmed;
+	// R0: in ranged mode the held gun's stance (Pistol / Rifle / Staff) replaces the melee one.
+	const UMDRangedComponent* Ranged = UMDRangedComponent::Find(Actor);
+	return Ranged ? Ranged->ResolveActiveStance(MeleeStance) : MeleeStance;
 }
 
 bool UMDCombatStatics::ShouldDrawTraces()

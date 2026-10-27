@@ -29,7 +29,11 @@ enum class EMDWeaponStance : uint8
 	Greatsword UMETA(DisplayName = "Greatsword"),
 	DualSword UMETA(DisplayName = "Dual Sword"),
 	OneHanded UMETA(DisplayName = "One Handed"),
-	Crossbow UMETA(DisplayName = "Crossbow")
+	Crossbow UMETA(DisplayName = "Crossbow"),
+	// R0 ranged stances (read from UMDRangedComponent while in ranged mode). Pistol / Rifle / Staff: the held gun's family.
+	Pistol UMETA(DisplayName = "Pistol"),
+	Rifle UMETA(DisplayName = "Rifle"),
+	Staff UMETA(DisplayName = "Staff")
 };
 
 UENUM(BlueprintType)

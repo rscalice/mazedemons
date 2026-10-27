@@ -9,6 +9,7 @@
 class UMDAbilitySystemComponent;
 class UMDAttributeSet;
 class UMDPerkComponent;
+class UMDRangedComponent;
 class UMDStaminaComponent;
 class USkeletalMesh;
 
@@ -41,6 +42,10 @@ public:
 	// Perk ranks and everything they drive (U3). Ranks persist across respawns.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Perks")
 	TObjectPtr<UMDPerkComponent> PerkComponent;
+
+	// R0 ranged weapons: State.RangedMode, aim flag, per-slot magazines. Next to the inventory (D1), replicated for late join (D5).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Ranged")
+	TObjectPtr<UMDRangedComponent> RangedComponent;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Stats", meta = (ClampMin = "1"))
 	float StartingMaxHealth = 100.0f;

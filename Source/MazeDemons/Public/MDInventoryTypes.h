@@ -6,6 +6,7 @@
 #include "MDInventoryTypes.generated.h"
 
 class UMDComboSet;
+class UMDRangedWeaponData;
 
 // Why a consumable use was refused (server decides, owning client shows a toast).
 UENUM(BlueprintType)
@@ -66,6 +67,10 @@ struct MAZEDEMONS_API FMDItemStatsRow : public FTableRowBase
 	// Empty = no dual set: the main-hand ComboSet is used as normal.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	TSoftObjectPtr<UMDComboSet> DualComboSet;
+
+	// R0: the gun's data (DA_Ranged_*). Set only on E_ItemTypes::Ranged rows; empty on every other item.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ranged")
+	TSoftObjectPtr<UMDRangedWeaponData> RangedData;
 };
 
 // Row of DT_ItemDisplay (same row names as DT_Items): player-facing text. Kept in C++ because S_ItemInfo cannot be edited via tools.
@@ -96,7 +101,11 @@ namespace MDItemType
 	constexpr uint8 Gold = 9;
 	constexpr uint8 Consumable = 10;
 	constexpr uint8 Material = 11;
-	constexpr uint8 NumEquipSlots = 9;
+	// R0: E_ItemTypes::Ranged (appended, ordinal 12). Its equip slot is RangedSlot, NOT 12, because the equip slot byte indexes
+	// the Equipped array and slot 9 is free there (Gold 9 is a currency row type, never an equip slot).
+	constexpr uint8 Ranged = 12;
+	constexpr uint8 RangedSlot = 9;
+	constexpr uint8 NumEquipSlots = 10;
 }
 
 // Durability value for an item without durability.

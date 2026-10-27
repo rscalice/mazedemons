@@ -19,6 +19,7 @@
 #include "MDStation.h"
 #include "MDAttributeSet.h"
 #include "MDStaminaComponent.h"
+#include "Ranged/MDRangedComponent.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Character.h"
@@ -200,6 +201,9 @@ void AMDPlayerController::SetupInputComponent()
 		{
 			InputComponent->BindKey(EKeys::R, IE_Pressed, this, &AMDPlayerController::OpenRunFallback);
 		}
+		// R0 mode swap (no asset needed): Q / D-pad Up.
+		InputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
 	}
 }
 
@@ -339,6 +343,23 @@ void AMDPlayerController::OpenMenuTab(int32 TabNumber)
 		return;
 	}
 	OpenGameMenuTab(static_cast<EMDMenuTab>(TabNumber));
+}
+
+void AMDPlayerController::RangedSwapPressed()
+{
+	if (IsAnyMenuOpen())
+	{
+		return;
+	}
+	Server_RequestRangedSwap();
+}
+
+void AMDPlayerController::Server_RequestRangedSwap_Implementation()
+{
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->TrySwapMode();
+	}
 }
 
 void AMDPlayerController::OnQuickSlot1(const FInputActionValue& Value)
