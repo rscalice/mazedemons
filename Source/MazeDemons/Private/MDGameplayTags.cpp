@@ -32,6 +32,13 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_Cultist, "Enemy.Cultist");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_Revenant, "Enemy.Revenant");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Enemy_Werewolf, "Enemy.Werewolf");
 
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Idle, "AI.Intent.Idle");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Chase, "AI.Intent.Chase");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_HoldThreat, "AI.Intent.HoldThreat");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Attack, "AI.Intent.Attack");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Stagger, "AI.Intent.Stagger");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Dead, "AI.Intent.Dead");
+
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Objective, "Map.Marker.Objective");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Gate, "Map.Marker.Gate");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Station, "Map.Marker.Station");

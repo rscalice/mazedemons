@@ -25,7 +25,10 @@ public class MazeDemons : ModuleRules
 				"EnhancedInput",
 				"PhysicsCore",
 				"Niagara",
-				"MotionWarping"
+				"MotionWarping",
+				"StateTreeModule",         // V1 enemy executor tasks (AI/StateTree)
+				"GameplayStateTreeModule", // UStateTreeAIComponent on AMDEnemyController
+				"NavigationSystem"
 			});
 
 		PrivateDependencyModuleNames.Add("AssetRegistry"); // combo set validation test

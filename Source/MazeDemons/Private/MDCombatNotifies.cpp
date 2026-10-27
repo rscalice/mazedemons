@@ -1,5 +1,6 @@
 #include "MDCombatNotifies.h"
 
+#include "AI/MDEnemyAttackComponent.h"
 #include "MDCombatDebug.h"
 #include "MDCombatStatics.h"
 #include "MDComboComponent.h"
@@ -255,6 +256,7 @@ void UMDANS_WeaponTrace::NotifyBegin(USkeletalMeshComponent* MeshComp, UAnimSequ
 		MDCombatTrailLocal::StartTrails(MeshComp, this, false, TraceHand, TSoftObjectPtr<UNiagaraSystem>(), FRotator::ZeroRotator, FVector::ZeroVector);
 	}
 	const AActor* Owner = MeshComp ? MeshComp->GetOwner() : nullptr;
+	UMDEnemyAttackComponent::NotifyTraceWindowBegan(Owner); // every machine: an enemy's wind-up is over, play rate back to 1
 	if (Owner && Owner->HasAuthority())
 	{
 		if (bUseCppTrace)

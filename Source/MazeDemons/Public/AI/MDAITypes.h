@@ -54,7 +54,7 @@ enum class EMDIntelligenceTier : uint8
 	T4
 };
 
-// Per-archetype AI numbers. Placeholder for V1 WP1+: the brain reads PreferredRange and AllowedRoles; tier overrides come later.
+// Per-archetype AI numbers. The brain (WP1) reads PreferredRange / ThreatRange; the pack director (WP2) reads AllowedRoles.
 USTRUCT(BlueprintType)
 struct MAZEDEMONS_API FMDArchetypeAIParams
 {
@@ -64,10 +64,140 @@ struct MAZEDEMONS_API FMDArchetypeAIParams
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI", meta = (ClampMin = "0"))
 	float PreferredRange = 180.0f;
 
+	// Distance (cm) an enemy without an attack token holds at (v1-design 1.3: approach and threaten, never swing).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI", meta = (ClampMin = "0"))
+	float ThreatRange = 450.0f;
+
 	// Roles the pack director may give this archetype.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
 	TArray<EMDRole> AllowedRoles;
 };
+
+// Common tier parameters (v1-design 3.2). WP1 carries the table in code (FMDTierParams::ForTier); WP4 moves it to
+// DT_IntelligenceTiers and adds the per-archetype overrides. Distances in cm, angles in degrees, times in seconds.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDTierParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier")
+	EMDIntelligenceTier Tier = EMDIntelligenceTier::T0;
+
+	// Enemies never react to a player action faster than this (a delay on perception events reaching the brain).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float ReactionTime = 0.9f;
+
+	// Multiplier on an attack's authored TellTime; the result never drops below TellTimeFloor.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float TellTimeMultiplier = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	int32 MaxTokensPerPlayer = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float SightRadius = 1500.0f;
+
+	// Full field of view.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0", ClampMax = "360"))
+	float SightFOV = 110.0f;
+
+	// Attack score bias.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float Aggression = 0.6f;
+
+	// Seeded noise added to every intent score.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float NoiseAmplitude = 0.05f;
+
+	// Pack-shared awareness delay; < 0 = no sharing (T0).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier")
+	float ShareDelay = -1.0f;
+
+	// Tells never get shorter than this (1.3).
+	static constexpr float TellTimeFloor = 0.35f;
+
+	// The 3.2 table row for a tier.
+	static FMDTierParams ForTier(EMDIntelligenceTier InTier);
+
+	// The authored tell scaled by the tier, floored.
+	float ResolveTellTime(float BaseTellTime) const { return FMath::Max(BaseTellTime * TellTimeMultiplier, TellTimeFloor); }
+
+	// Behaviours unlocked at this tier (3.2). HoldThreat is allowed at every tier: it is the fairness fallback of an enemy
+	// without a token, not a tactic. Stagger / Dead are interrupts and always allowed.
+	bool IsIntentUnlocked(EMDIntent Intent) const;
+};
+
+// One intent with its utility score (FMDUtilityScorer output).
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDScoredIntent
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "AI")
+	EMDIntent Intent = EMDIntent::Idle;
+
+	UPROPERTY(BlueprintReadOnly, Category = "AI")
+	float Score = 0.0f;
+};
+
+// Everything the scorer looks at for one decision (v1-design 2.3 step 2). Plain data, built by the brain each decision.
+// Distances in cm. No pointers: the scorer runs in tests with no world.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDBrainContext
+{
+	GENERATED_BODY()
+
+	// ---- Target ----
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bHasTarget = false;
+
+	// The target is sensed right now (else only its last known position is).
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bTargetSensed = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	float DistanceToTarget = 0.0f;
+
+	// ---- Self ----
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bHasToken = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bAttackInProgress = false;
+
+	// Attack cooldown elapsed.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bAttackReady = true;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bStunned = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bDead = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	float HealthFraction = 1.0f;
+
+	// Longest attack reach of the archetype (an attack may start inside it).
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	float AttackRange = 220.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	float ThreatRange = 450.0f;
+
+	// ---- Determinism ----
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	int32 RunSeed = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	int32 EnemyId = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	int32 DecisionIndex = 0;
+};
+
+// Readable intent name for debug output.
+MAZEDEMONS_API const TCHAR* MDIntentToString(EMDIntent Intent);
 
 // One attack permission handed out by the pack director (V1 WP2). Struct only: nothing issues or checks tokens yet.
 struct MAZEDEMONS_API FMDAttackToken

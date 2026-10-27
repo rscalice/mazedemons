@@ -1,5 +1,6 @@
 #include "MDCombatStatics.h"
 
+#include "AI/MDEnemyAttackComponent.h"
 #include "Abilities/GameplayAbility.h"
 #include "AbilitySystemComponent.h"
 #include "MDAbilitySystemComponent.h"
@@ -66,6 +67,14 @@ bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHi
 	if (bHasStep && !Combo->TryRegisterSwingHit(Victim))
 	{
 		return false; // this swing already hit this target
+	}
+	if (!Combo)
+	{
+		// An enemy swing (V1): the archetype attack's step carries the hit numbers; hit-once-per-window is the trace's ignore list.
+		if (const UMDEnemyAttackComponent* EnemyAttack = UMDEnemyAttackComponent::FindFor(Attacker))
+		{
+			EnemyAttack->GetActiveStep(Step);
+		}
 	}
 
 	FMDHitContext Context;
@@ -238,6 +247,15 @@ void UMDCombatStatics::SweepWeaponHand(AActor* Attacker, AActor* Weapon, FVector
 	FVector Top;
 	FVector Bottom;
 	GetWeaponTracePoints(Weapon, Top, Bottom);
+	SweepSegment(Attacker, Weapon, Top, Bottom, PrevTop, PrevBottom, HitThisAttack);
+}
+
+void UMDCombatStatics::SweepSegment(AActor* Attacker, AActor* IgnoredActor, const FVector& Top, const FVector& Bottom, FVector& PrevTop, FVector& PrevBottom, TArray<AActor*>& HitThisAttack)
+{
+	if (!IsValid(Attacker))
+	{
+		return;
+	}
 	const bool bHavePrev = !PrevTop.IsNearlyZero();
 	const FVector StartTop = bHavePrev ? PrevTop : Top;
 	const FVector StartBottom = bHavePrev ? PrevBottom : Bottom;
@@ -256,7 +274,10 @@ void UMDCombatStatics::SweepWeaponHand(AActor* Attacker, AActor* Weapon, FVector
 	const FVector Mid = (Top + Bottom) * 0.5;
 	const FQuat Rotation = FRotationMatrix::MakeFromX(Top - Bottom).ToQuat();
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDWeaponSweep), true, Attacker);
-	Params.AddIgnoredActor(Weapon);
+	if (IgnoredActor)
+	{
+		Params.AddIgnoredActor(IgnoredActor);
+	}
 	TArray<AActor*> Attached;
 	Attacker->GetAttachedActors(Attached, true);
 	Params.AddIgnoredActors(Attached);
@@ -327,7 +348,8 @@ namespace MDCombatTraceLocal
 	struct FSwingTraceState
 	{
 		FHandTraceState Hands[2]; // 0 = main side (MainHand / TwoHanded), 1 = off hand
-		TArray<AActor*> HitThisAttack; // shared by both hands: a target is hit once per trace window
+		TMap<FName, FHandTraceState> BodySegments; // weaponless attackers: one per claw socket
+		TArray<AActor*> HitThisAttack; // shared by every hand and claw: a target is hit once per trace window
 		bool bLogged = false;
 	};
 
@@ -437,6 +459,30 @@ void UMDCombatStatics::TraceEquippedWeapons(AActor* Attacker, EMDTraceHandOverri
 		else if (Socket == OffHandSocket)
 		{
 			Found[2] = Actor;
+		}
+	}
+
+	// Weaponless attackers (V1 enemies with claws): sweep the archetype attack's body segments instead of weapon actors.
+	if (!Found[0] && !Found[1] && !Found[2])
+	{
+		if (const UMDEnemyAttackComponent* EnemyAttack = UMDEnemyAttackComponent::FindFor(Attacker))
+		{
+			TArray<FMDTraceSegment> Segments;
+			EnemyAttack->GetBodyTraceSegments(Segments);
+			if (Segments.Num() > 0)
+			{
+				if (!State.bLogged)
+				{
+					State.bLogged = true;
+					UE_LOG(LogTemp, Verbose, TEXT("TraceEquippedWeapons %s: %d claw segment(s)"), *GetNameSafe(Attacker), Segments.Num());
+				}
+				for (const FMDTraceSegment& Segment : Segments)
+				{
+					FHandTraceState& Hs = State.BodySegments.FindOrAdd(Segment.Id);
+					SweepSegment(Attacker, nullptr, Segment.Top, Segment.Bottom, Hs.PrevTop, Hs.PrevBottom, State.HitThisAttack);
+				}
+				return;
+			}
 		}
 	}
 

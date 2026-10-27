@@ -2,6 +2,8 @@
 
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttributeSet.h"
+#include "AI/MDEnemyAttackComponent.h"
+#include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyController.h"
 #include "AI/MDTargetableComponent.h"
 #include "MDAbilitySystemComponent.h"
@@ -10,10 +12,12 @@
 #include "MDGameplayStatics.h"
 #include "MDPlayerState.h"
 #include "MDPoiseComponent.h"
+#include "AIController.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
+#include "MotionWarpingComponent.h"
 #include "Net/UnrealNetwork.h"
 
 AMDEnemyCharacter::AMDEnemyCharacter()
@@ -26,7 +30,8 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 	if (UCharacterMovementComponent* Move = GetCharacterMovement())
 	{
 		Move->bOrientRotationToMovement = true;
-		Move->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+		Move->bUseControllerDesiredRotation = false;
+		Move->RotationRate = FRotator(0.0f, 640.0f, 0.0f); // used by both facing modes (FaceMovement / FaceTarget)
 	}
 
 	// The weapon sweep (UMDCombatStatics::SweepWeaponHand) traces the Visibility channel, which the Pawn profile ignores.
@@ -43,6 +48,54 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 	Blink = CreateDefaultSubobject<UMDBlinkComponent>(TEXT("Blink"));
 	Feedback = CreateDefaultSubobject<UMDCombatFeedbackComponent>(TEXT("Feedback"));
 	Targetable = CreateDefaultSubobject<UMDTargetableComponent>(TEXT("Targetable"));
+	AttackComponent = CreateDefaultSubobject<UMDEnemyAttackComponent>(TEXT("EnemyAttack"));
+	MotionWarping = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarping"));
+}
+
+void AMDEnemyCharacter::SetReplicatedIntent(EMDIntent Intent)
+{
+	if (HasAuthority())
+	{
+		ReplicatedIntent = static_cast<uint8>(Intent);
+	}
+}
+
+EMDIntent AMDEnemyCharacter::GetIntent() const
+{
+	return static_cast<EMDIntent>(ReplicatedIntent);
+}
+
+void AMDEnemyCharacter::FaceMovement()
+{
+	bFacingTarget = false;
+	if (AAIController* AI = Cast<AAIController>(GetController()))
+	{
+		AI->ClearFocus(EAIFocusPriority::Gameplay);
+	}
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		Move->bOrientRotationToMovement = true;
+		Move->bUseControllerDesiredRotation = false;
+	}
+}
+
+void AMDEnemyCharacter::FaceTarget(AActor* Target)
+{
+	if (!Target)
+	{
+		FaceMovement();
+		return;
+	}
+	bFacingTarget = true;
+	if (AAIController* AI = Cast<AAIController>(GetController()))
+	{
+		AI->SetFocus(Target, EAIFocusPriority::Gameplay); // AAIController::UpdateControlRotation aims the control rotation at it every tick
+	}
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		Move->bOrientRotationToMovement = false;
+		Move->bUseControllerDesiredRotation = true;
+	}
 }
 
 void AMDEnemyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -207,6 +260,12 @@ void AMDEnemyCharacter::HandleDeath()
 
 	if (HasAuthority())
 	{
+		// The brain goes Dead before the controller detaches (its own OnDeath binding may run after this one).
+		SetReplicatedIntent(EMDIntent::Dead);
+		if (UMDEnemyBrainComponent* Brain = UMDEnemyBrainComponent::FindFor(this))
+		{
+			Brain->NotifyDeath();
+		}
 		AwardKillRewards();
 		// Quest credit needs nothing here: the ASC's kill report already ran (it reads GetOwnedGameplayTags).
 		DetachFromControllerPendingDestroy();

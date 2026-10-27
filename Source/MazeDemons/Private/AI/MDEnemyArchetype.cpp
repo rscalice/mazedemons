@@ -12,6 +12,29 @@ FGameplayTagContainer UMDEnemyArchetype::GetVictimTags() const
 	return Tags;
 }
 
+float UMDEnemyArchetype::GetAttackRange() const
+{
+	float Range = 0.0f;
+	for (const FMDEnemyAttack& Attack : Attacks)
+	{
+		Range = FMath::Max(Range, Attack.Range);
+	}
+	return Range;
+}
+
+int32 UMDEnemyArchetype::PickAttack(float Distance) const
+{
+	int32 Best = INDEX_NONE;
+	for (int32 i = 0; i < Attacks.Num(); ++i)
+	{
+		if (Distance <= Attacks[i].Range && (Best == INDEX_NONE || Attacks[i].Range < Attacks[Best].Range))
+		{
+			Best = i;
+		}
+	}
+	return Best;
+}
+
 bool UMDEnemyArchetype::AllowsTier(EMDIntelligenceTier Tier) const
 {
 	const uint8 Low = FMath::Min(static_cast<uint8>(MinTier), static_cast<uint8>(MaxTier));

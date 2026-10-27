@@ -5,6 +5,7 @@
 #include "GameFramework/Character.h"
 #include "GameplayTagAssetInterface.h"
 #include "GenericTeamAgentInterface.h"
+#include "AI/MDAITypes.h"
 #include "MDCombatTypes.h"
 #include "MDEnemyCharacter.generated.h"
 
@@ -12,9 +13,11 @@ class UMDAbilitySystemComponent;
 class UMDBlinkComponent;
 class UMDCombatFeedbackComponent;
 class UMDEnemyArchetype;
+class UMDEnemyAttackComponent;
 class UMDEnemyAttributeSet;
 class UMDPoiseComponent;
 class UMDTargetableComponent;
+class UMotionWarpingComponent;
 
 // Base class of every V1 enemy (v1-design 2.2). Blueprint children carry defaults only (mesh, anim class, Archetype asset).
 //
@@ -73,14 +76,38 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMDTargetableComponent> Targetable;
 
+	// Plays the archetype's attacks (V1 WP1): montage multicast, motion warp to the target, claw traces.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMDEnemyAttackComponent> AttackComponent;
+
+	// "AttackTarget" warp for the attack montages (the same warp name the player's combo steps use).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMotionWarpingComponent> MotionWarping;
+
 	// What kind of enemy this is. Set on the Blueprint class; a spawner may set it before FinishSpawning (replicated once).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_Archetype, Category = "Enemy")
 	TObjectPtr<UMDEnemyArchetype> Archetype;
 
-	// Current intent (EMDIntent) for clients' animation and tells. Reserved: nothing writes it before the V1 brain, but it is
-	// in the class now so later work packages do not change the replicated layout.
+	// Current intent (EMDIntent) for clients' animation and tells. The brain writes it on the server; late joiners get the
+	// current value on first replication.
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Enemy|AI")
 	uint8 ReplicatedIntent = 0;
+
+	// Server: the brain's current intent, mirrored for clients.
+	void SetReplicatedIntent(EMDIntent Intent);
+
+	UFUNCTION(BlueprintPure, Category = "Enemy|AI")
+	EMDIntent GetIntent() const;
+
+	// The facing rule for every enemy (server only; the rotation replicates with the movement):
+	//   FaceMovement  while chasing or idle: turn with the movement direction (bOrientRotationToMovement, RotationRate yaw),
+	//                 no controller focus; with no velocity the facing is frozen (the swing goes where it was aimed).
+	//   FaceTarget    while holding the threat ring or winding up an attack: the controller focuses the target and the
+	//                 movement component turns toward the controller rotation at RotationRate (bUseControllerDesiredRotation).
+	// Motion warping still owns the facing inside the attack's warp window; both aim at the same target.
+	void FaceMovement();
+	void FaceTarget(AActor* Target);
+	bool IsFacingTarget() const { return bFacingTarget; }
 
 	// Seconds the corpse stays before it is destroyed (server). 0 or less keeps it.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy", meta = (ClampMin = "0"))
@@ -104,4 +131,5 @@ private:
 	void AwardKillRewards();
 
 	bool bDeathHandled = false;
+	bool bFacingTarget = false;
 };
