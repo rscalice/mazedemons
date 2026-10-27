@@ -78,6 +78,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|Chooser")
 	static bool SetEnumCellMask(UChooserTable* Table, int32 ColumnIndex, int32 RowIndex, int32 Mask);
 
+	/** R0: the result object of a row (the database for Asset rows), or null. */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|Chooser")
+	static UObject* GetRowObject(UChooserTable* Table, int32 RowIndex);
+
+	/** R0: remove one row from every column and the result list. Returns false when the index is invalid. */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|Chooser")
+	static bool RemoveRow(UChooserTable* Table, int32 RowIndex);
+
+	/** R0: stance mask of one cell of an enum column (multi-enum: stored mask; plain enum: 1 << value, 0 = any). -1 on failure. */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|Chooser")
+	static int32 GetEnumCellMask(UChooserTable* Table, int32 ColumnIndex, int32 RowIndex);
+
 	/** Convenience: SetEnumCellMask on the column bound to BoundPropertyName (the stance column). */
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|Chooser")
 	static bool SetRowStance(UChooserTable* Table, int32 RowIndex, FName BoundPropertyName, int32 StanceMask);
