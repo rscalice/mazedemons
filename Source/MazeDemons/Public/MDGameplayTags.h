@@ -56,6 +56,18 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Stagger);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Dead);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Retreat);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Regroup);
+// V1 WP5 advanced behaviours.
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Swarm);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Bait);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Kite);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Flank);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Feint);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Guard);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Ambush);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Blink);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_AI_Intent_Charge);
+// Level marker tag of an ambush group (PDG markers come later: until then AMDAmbushMarker carries it).
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Spawn_Ambush);
 
 // Minimap marker kinds (mirrors EMDMapMarkerType; usable as widget lookup keys).
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Map_Marker_Objective);

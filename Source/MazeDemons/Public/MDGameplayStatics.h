@@ -138,6 +138,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stats")
 	static TArray<FMDStatLine> GetCharacterStatLines(APlayerState* PS, FName CompareRow);
 
+	// R7: the gun rows GetCharacterStatLines appends when CompareRow is a gun: damage / shot, rounds / s, magazine, reload, spread (hip).
+	// Old = the gun in the Ranged slot (null = none: Current shows "-", no delta). For reload and spread lower is better, so DeltaSign is
+	// +1 when the new gun improves the stat (DeltaText still shows the plain change, e.g. "-0.3 s").
+	static TArray<FMDStatLine> MakeGunCompareLines(const class UMDRangedWeaponData* Old, const class UMDRangedWeaponData* New);
+
 	// ---- Perks ----
 	// Unspent perk points of a PlayerState (earned minus spent), 0 when it has no perk component. Owner-only data: on a
 	// remote player's PlayerState this is just what that machine can see.

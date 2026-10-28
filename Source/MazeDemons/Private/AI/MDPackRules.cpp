@@ -1,5 +1,6 @@
 #include "AI/MDPackRules.h"
 
+#include "AI/MDBehaviourRules.h"
 #include "Math/RandomStream.h"
 
 namespace MDPackLocal
@@ -173,6 +174,21 @@ void MDPackRules::AssignRoles(const TArray<FMDRoleCandidate>& Candidates, EMDInt
 		OutRoles[i] = BaseRole(Candidates[i].AllowedMask);
 	}
 
+	// V1 WP5 protect the caster (T2+): the members that allow Guard (and are not the caster) screen it, at most MaxGuards.
+	const bool bHasCaster = Candidates.ContainsByPredicate([](const FMDRoleCandidate& C) { return C.bIsCaster; });
+	if (bHasCaster && TierIndex(Tier) >= TierIndex(EMDIntelligenceTier::T2))
+	{
+		int32 Guards = 0;
+		for (const int32 Index : Order)
+		{
+			if (Guards < MDBehaviour::MaxGuards && !Candidates[Index].bIsCaster && Allows(Candidates[Index].AllowedMask, EMDRole::Guard))
+			{
+				OutRoles[Index] = EMDRole::Guard;
+				++Guards;
+			}
+		}
+	}
+
 	const bool bPackTactics = TierIndex(Tier) >= TierIndex(EMDIntelligenceTier::T2) && Num >= 3; // 2 or fewer: everyone strikes
 
 	if (bPackTactics)
@@ -182,7 +198,7 @@ void MDPackRules::AssignRoles(const TArray<FMDRoleCandidate>& Candidates, EMDInt
 		{
 			for (const int32 Index : Order)
 			{
-				if (Allows(Candidates[Index].AllowedMask, EMDRole::Leader))
+				if (OutRoles[Index] != EMDRole::Guard && Allows(Candidates[Index].AllowedMask, EMDRole::Leader))
 				{
 					OutRoles[Index] = EMDRole::Leader;
 					break;
@@ -195,7 +211,7 @@ void MDPackRules::AssignRoles(const TArray<FMDRoleCandidate>& Candidates, EMDInt
 		for (int32 k = Order.Num() - 1; k >= 0; --k)
 		{
 			const int32 Index = Order[k];
-			if (OutRoles[Index] != EMDRole::Leader && Allows(Candidates[Index].AllowedMask, EMDRole::Bait))
+			if (OutRoles[Index] != EMDRole::Leader && OutRoles[Index] != EMDRole::Guard && Allows(Candidates[Index].AllowedMask, EMDRole::Bait))
 			{
 				OutRoles[Index] = EMDRole::Bait;
 				break;
@@ -317,7 +333,7 @@ float MDPackRules::SlotAngleFromFacing(int32 Slot, float BaseYawDeg, float Facin
 	return AngleDiff(SlotAngle(Slot, BaseYawDeg), FacingYawDeg);
 }
 
-void MDPackRules::AssignSlots(const TArray<FMDSlotMember>& Members, float BaseYawDeg, float FacingYawDeg, TArray<int32>& OutSlots)
+void MDPackRules::AssignSlots(const TArray<FMDSlotMember>& Members, float BaseYawDeg, float FacingYawDeg, TArray<int32>& OutSlots, bool bEvenSpread)
 {
 	OutSlots.Reset();
 	OutSlots.Init(-1, Members.Num());
@@ -345,6 +361,36 @@ void MDPackRules::AssignSlots(const TArray<FMDSlotMember>& Members, float BaseYa
 	});
 
 	bool bTaken[MDPack::NumRingSlots] = {};
+	if (bEvenSpread && Members.Num() > 0 && Members.Num() < MDPack::NumRingSlots)
+	{
+		// Swarm: block every slot outside the evenly spaced set that costs the pack the least walking.
+		TArray<int32> BestSet;
+		float BestCost = TNumericLimits<float>::Max();
+		for (int32 Rotation = 0; Rotation < MDPack::NumRingSlots; ++Rotation)
+		{
+			TArray<int32> Set;
+			MDBehaviour::EvenSlotSet(Members.Num(), Rotation, Set);
+			float Cost = 0.0f;
+			for (const FMDSlotMember& M : Members)
+			{
+				float Nearest = 360.0f;
+				for (const int32 Slot : Set)
+				{
+					Nearest = FMath::Min(Nearest, AngleDiff(M.AngleDeg, SlotAngle(Slot, BaseYawDeg)));
+				}
+				Cost += Nearest;
+			}
+			if (Cost < BestCost)
+			{
+				BestCost = Cost;
+				BestSet = Set;
+			}
+		}
+		for (int32 Slot = 0; Slot < MDPack::NumRingSlots; ++Slot)
+		{
+			bTaken[Slot] = !BestSet.Contains(Slot);
+		}
+	}
 	for (const int32 Index : Order)
 	{
 		const FMDSlotMember& M = Members[Index];
@@ -512,4 +558,25 @@ void FMDPackTokenPool::ReleaseAfter(int32 Holder, double Now, double Delay)
 void FMDPackTokenPool::Purge(double Now)
 {
 	Entries.RemoveAll([Now](const FEntry& E) { return Now >= E.ExpireTime; });
+}
+
+void FMDPackTokenPool::ForEachValid(double Now, TFunctionRef<void(int32, int32, double, bool)> Fn) const
+{
+	for (const FEntry& E : Entries)
+	{
+		if (Now < E.ExpireTime)
+		{
+			Fn(E.Holder, E.Target, E.ExpireTime - Now, E.bCommitted);
+		}
+	}
+}
+
+double FMDPackTokenPool::MaxSecondsLeft(double Now) const
+{
+	double Max = 0.0;
+	for (const FEntry& E : Entries)
+	{
+		Max = FMath::Max(Max, E.ExpireTime - Now);
+	}
+	return Max;
 }

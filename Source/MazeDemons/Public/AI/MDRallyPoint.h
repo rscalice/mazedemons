@@ -15,4 +15,8 @@ public:
 	AMDRallyPoint();
 
 	static const FName RallyTag;
+
+	// The fallback when a level has no rally point: any actor tagged "MDRoomEntry" (a doorway marker, V1 WP3; PDG places
+	// them later) is a room entry the pack may retreat to.
+	static const FName RoomEntryTag;
 };

@@ -49,6 +49,7 @@ struct FMDReactionInput
 	bool bStunned = false;
 	bool bFlinchOnly = false;   // bosses
 	EMDHitReaction StepReaction = EMDHitReaction::Flinch;
+	EMDHitReaction MaxReaction = EMDHitReaction::Knockdown; // R1: per-weapon cap on the final reaction (poise break included)
 	float Poise = 50.0f;
 	float MaxPoise = 50.0f;
 	float PoiseDamage = 0.0f;

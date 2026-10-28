@@ -10,7 +10,10 @@
 #include "MDGameSettings.h"
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
+#include "MDPlayerState.h"
+#include "MDArmorProbe.h"
 #include "Ranged/MDRangedWeaponData.h"
+#include "Ranged/MDAmmoRules.h"
 #include "MDStation.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/Actor.h"
@@ -216,9 +219,26 @@ void UMDInventoryComponent::ReapplyAllEquipment()
 	{
 		ApplyArmorReduction(Entry.Slot, Entry.ItemRowName);
 		ApplyWeaponBonus(Entry.Slot, Entry.ItemRowName);
+		MDArmorTrace(this, FString::Printf(TEXT("Reapply slot=%d row=%s"), Entry.Slot, *Entry.ItemRowName.ToString()));
 		K2_ApplyEquipment(Entry.Slot, Entry.ItemRowName);
+		SyncArmorToPlayerState(Entry.Slot);
 	}
 	OnEquipmentChanged.Broadcast();
+}
+
+static TAutoConsoleVariable<int32> CVarArmorSyncOnEquip(TEXT("md.Armor.SyncOnEquip"), 1,
+	TEXT("1 (default): every armor equip/unequip on the server republishes the pawn's armor meshes to the PlayerState. 0: only the BP's own (partial) syncs, as before."));
+
+void UMDInventoryComponent::SyncArmorToPlayerState(uint8 Slot) const
+{
+	if (CVarArmorSyncOnEquip.GetValueOnGameThread() == 0 || Slot < MDItemType::Helmet || Slot > MDItemType::Boots || !GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	if (AMDPlayerState* State = Cast<AMDPlayerState>(GetOwner()))
+	{
+		State->SyncArmorFromPawn();
+	}
 }
 
 UMDAbilitySystemComponent* UMDInventoryComponent::ResolveASC() const
@@ -640,6 +660,30 @@ UMDRangedWeaponData* UMDInventoryComponent::GetItemRangedData(FName ItemRowName)
 {
 	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
 	return Stats ? Stats->RangedData.LoadSynchronous() : nullptr;
+}
+
+UTexture2D* UMDInventoryComponent::GetItemIcon(FName ItemRowName) const
+{
+	if (!ItemTable || ItemRowName.IsNone())
+	{
+		return nullptr;
+	}
+	const uint8* RowData = ItemTable->FindRowUnchecked(ItemRowName);
+	const FProperty* Prop = FindRowProperty(ItemTable->GetRowStruct(), TEXT("Icon"));
+	if (!RowData || !Prop)
+	{
+		return nullptr;
+	}
+	const void* Ptr = Prop->ContainerPtrToValuePtr<void>(RowData);
+	if (const FSoftObjectProperty* Soft = CastField<FSoftObjectProperty>(Prop))
+	{
+		return Cast<UTexture2D>(Soft->GetPropertyValue(Ptr).LoadSynchronous());
+	}
+	if (const FObjectPropertyBase* Obj = CastField<FObjectPropertyBase>(Prop))
+	{
+		return Cast<UTexture2D>(Obj->GetObjectPropertyValue(Ptr));
+	}
+	return nullptr;
 }
 
 FName UMDInventoryComponent::GetEquippedRangedRow() const
@@ -1201,7 +1245,9 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 	OnEquipmentChanged.Broadcast();
 	ApplyArmorReduction(Slot, NewRow);
 	ApplyWeaponBonus(Slot, NewRow);
+	MDArmorTrace(this, FString::Printf(TEXT("K2_ApplyEquipment slot=%d row=%s"), Slot, *NewRow.ToString()));
 	K2_ApplyEquipment(Slot, NewRow);
+	SyncArmorToPlayerState(Slot);
 }
 
 void UMDInventoryComponent::UnequipSlot_Impl(uint8 Slot)
@@ -1226,6 +1272,7 @@ void UMDInventoryComponent::UnequipSlot_Impl(uint8 Slot)
 	ApplyArmorReduction(Slot, NAME_None);
 	ApplyWeaponBonus(Slot, NAME_None);
 	K2_ClearEquipment(Slot);
+	SyncArmorToPlayerState(Slot);
 }
 
 void UMDInventoryComponent::DropItem_Impl(int32 Index, int32 Quantity)
@@ -1531,6 +1578,35 @@ void UMDInventoryComponent::ApplyWeaponWear()
 	OnInventoryChanged.Broadcast();
 }
 
+void UMDInventoryComponent::ApplyWearToSlot(uint8 Slot, int32 Points)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Points <= 0)
+	{
+		return;
+	}
+	const int32 Max = GetEquippedMaxDurability(Slot);
+	if (Max <= 0)
+	{
+		return;
+	}
+	int32 Cur = 0;
+	int32 MaxNow = 0;
+	GetSlotDurability(Slot, Cur, MaxNow);
+	if (Cur <= 0)
+	{
+		return;
+	}
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	const float Before = UMDStatCalculator::ConditionMultiplier(Cur, Max, Tuning);
+	const int32 After = FMath::Max(Cur - Points, 0);
+	SetConditionDurability(Slot, After);
+	if (UMDStatCalculator::ConditionMultiplier(After, Max, Tuning) != Before)
+	{
+		PushWeaponModifiers();
+	}
+	OnInventoryChanged.Broadcast();
+}
+
 void UMDInventoryComponent::NotifyHitLanded(AActor* Instigator, const AActor* Victim)
 {
 	if (!Instigator || Instigator == Victim)
@@ -1596,6 +1672,12 @@ FText UMDInventoryComponent::GetStationRejectText(EMDStationReject Reason, int32
 		return FText::Format(LOCTEXT("RejectNotEnoughGold", "Not enough gold (need {0})"), FText::AsNumber(Needed));
 	case EMDStationReject::NotEnoughShards:
 		return FText::Format(LOCTEXT("RejectNotEnoughShards", "Not enough Shards ({0}/{1})"), FText::AsNumber(Have), FText::AsNumber(Needed));
+	case EMDStationReject::AmmoFull:
+		return LOCTEXT("RejectAmmoFull", "Ammo reserve is full");
+	case EMDStationReject::NotForSale:
+		return LOCTEXT("RejectNotForSale", "Not sold here");
+	case EMDStationReject::BagFull:
+		return LOCTEXT("RejectBagFull", "Bag is full");
 	default:
 		return FText::GetEmpty();
 	}
@@ -1833,6 +1915,113 @@ bool UMDInventoryComponent::Upgrade_Impl(AActor* Station, uint8 Slot)
 	RefreshEquippedStats();
 	OnInventoryChanged.Broadcast();
 	SendToast(FText::Format(LOCTEXT("UpgradeDone", "{0} upgraded to +{1}"), UMDGameplayStatics::GetItemDisplayName(Row), FText::AsNumber(NewLevel)), EMDColor::Upgrade);
+	return true;
+}
+
+// ---- R3 ammo ----
+
+int32 UMDInventoryComponent::GetAmmoCount(FName Row) const
+{
+	if (Row.IsNone())
+	{
+		return 0;
+	}
+	int32 Total = 0;
+	for (const FMDItemStack& Stack : Items)
+	{
+		if (Stack.ItemRowName == Row)
+		{
+			Total += Stack.Quantity;
+		}
+	}
+	return Total;
+}
+
+int32 UMDInventoryComponent::GetAmmoCap(FName Row) const
+{
+	return Row.IsNone() ? 0 : GetMaxStackForItem(Row);
+}
+
+int32 UMDInventoryComponent::ConsumeAmmo(FName Row, int32 N)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Row.IsNone() || N <= 0)
+	{
+		return 0;
+	}
+	const int32 Take = FMath::Min(N, GetAmmoCount(Row));
+	return Take > 0 && RemoveItemByRow(Row, Take) ? Take : 0;
+}
+
+EMDStationReject UMDInventoryComponent::GetBuyAmmoReject(const AActor* Station, FName Row, int32& OutQty, int32& OutGold) const
+{
+	OutQty = 0;
+	OutGold = 0;
+	const EMDStationReject Access = CheckStationAccess(Station, static_cast<uint8>(EMDStationService::Ammo));
+	if (Access != EMDStationReject::None)
+	{
+		return Access;
+	}
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	const int32* Price = Row.IsNone() ? nullptr : Tuning.AmmoBundleGold.Find(Row);
+	if (!Price)
+	{
+		return EMDStationReject::NotForSale;
+	}
+	OutQty = FMDAmmoRules::PurchaseQuantity(GetAmmoCount(Row), GetAmmoCap(Row), Tuning.AmmoBundleSize);
+	if (OutQty <= 0)
+	{
+		return EMDStationReject::AmmoFull;
+	}
+	OutGold = FMDAmmoRules::PurchaseCost(OutQty, Tuning.AmmoBundleSize, *Price);
+	if (!HasRoomForItem(Row, OutQty))
+	{
+		return EMDStationReject::BagFull;
+	}
+	return GoldAmount < OutGold ? EMDStationReject::NotEnoughGold : EMDStationReject::None;
+}
+
+void UMDInventoryComponent::RequestBuyAmmo(AActor* Station, FName Row)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		BuyAmmo_Impl(Station, Row);
+	}
+	else
+	{
+		Server_BuyAmmo(Station, Row);
+	}
+}
+
+bool UMDInventoryComponent::Server_BuyAmmo_Validate(AActor* Station, FName Row)
+{
+	return !Row.IsNone();
+}
+
+void UMDInventoryComponent::Server_BuyAmmo_Implementation(AActor* Station, FName Row)
+{
+	BuyAmmo_Impl(Station, Row);
+}
+
+bool UMDInventoryComponent::BuyAmmo_Impl(AActor* Station, FName Row)
+{
+	int32 Qty = 0;
+	int32 Gold = 0;
+	const EMDStationReject Reject = GetBuyAmmoReject(Station, Row, Qty, Gold);
+	if (Reject != EMDStationReject::None)
+	{
+		SendToast(GetStationRejectText(Reject, Gold, GoldAmount), EMDColor::Warning);
+		return false;
+	}
+	if (!SpendGold(Gold))
+	{
+		return false;
+	}
+	if (!AddItem(Row, Qty))
+	{
+		AddGold(Gold); // never keep the gold of a purchase that did not land
+		return false;
+	}
+	SendToast(FText::Format(LOCTEXT("AmmoBought", "+{0} {1} (-{2} gold)"), FText::AsNumber(Qty), UMDGameplayStatics::GetItemDisplayName(Row), FText::AsNumber(Gold)), EMDColor::Success);
 	return true;
 }
 

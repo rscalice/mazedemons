@@ -20,6 +20,8 @@
 #include "MDAttributeSet.h"
 #include "MDStaminaComponent.h"
 #include "Ranged/MDRangedComponent.h"
+#include "Ranged/MDRangedCameraModifier.h"
+#include "Camera/PlayerCameraManager.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Character.h"
@@ -55,6 +57,7 @@ void AMDPlayerController::BeginPlay()
 	{
 		GetWorldTimerManager().SetTimer(FocusTraceTimer, this, &AMDPlayerController::UpdateInteractFocus,
 			FMath::Max(0.02f, FocusTraceInterval), true);
+		EnsureRangedCameraModifier();
 	}
 
 	if (!IsLocalController() || HUDWidget)
@@ -97,8 +100,18 @@ bool AMDPlayerController::WouldFocusChange(const AActor* OldFocus, const FText& 
 	return OldFocus != NewFocus || !OldPrompt.EqualTo(NewPrompt);
 }
 
+void AMDPlayerController::EnsureRangedCameraModifier()
+{
+	if (RangedCamModifier.IsValid() || !PlayerCameraManager)
+	{
+		return;
+	}
+	RangedCamModifier = Cast<UMDRangedCameraModifier>(PlayerCameraManager->AddNewCameraModifier(UMDRangedCameraModifier::StaticClass()));
+}
+
 void AMDPlayerController::UpdateInteractFocus()
 {
+	EnsureRangedCameraModifier(); // the camera manager can appear after BeginPlay
 	AActor* Target = nullptr;
 	FText Prompt;
 
@@ -204,6 +217,14 @@ void AMDPlayerController::SetupInputComponent()
 		// R0 mode swap (no asset needed): Q / D-pad Up.
 		InputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
 		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
+		// R3 reload: D-pad Down on a gamepad (R is shared with the Run tab: in ranged mode R reloads, see TryReloadFromKey).
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Down, IE_Pressed, this, &AMDPlayerController::RangedReloadPressed);
+		// R1 fire: LMB / right trigger. Not consumed, so melee's own LMB binding keeps working outside ranged mode.
+		for (const FKey& FireKey : { EKeys::LeftMouseButton, EKeys::Gamepad_RightTrigger })
+		{
+			InputComponent->BindKey(FireKey, IE_Pressed, this, &AMDPlayerController::RangedFirePressed).bConsumeInput = false;
+			InputComponent->BindKey(FireKey, IE_Released, this, &AMDPlayerController::RangedFireReleased).bConsumeInput = false;
+		}
 	}
 }
 
@@ -219,6 +240,10 @@ void AMDPlayerController::OnOpenPerks(const FInputActionValue& Value)
 
 void AMDPlayerController::OnOpenRun(const FInputActionValue& Value)
 {
+	if (TryReloadFromKey())
+	{
+		return;
+	}
 	OpenGameMenuTab(EMDMenuTab::Run);
 }
 
@@ -229,7 +254,35 @@ void AMDPlayerController::OpenPerksFallback()
 
 void AMDPlayerController::OpenRunFallback()
 {
+	if (TryReloadFromKey())
+	{
+		return;
+	}
 	OpenGameMenuTab(EMDMenuTab::Run);
+}
+
+bool AMDPlayerController::TryReloadFromKey()
+{
+	// R3: in ranged mode (with no menu open) R is the reload key; the Run tab stays on the game menu (Tab).
+	UMDRangedComponent* Ranged = UMDRangedComponent::Find(this);
+	if (!Ranged || !Ranged->IsRangedMode() || IsAnyMenuOpen())
+	{
+		return false;
+	}
+	Ranged->TryActivateReload();
+	return true;
+}
+
+void AMDPlayerController::RangedReloadPressed()
+{
+	if (IsAnyMenuOpen())
+	{
+		return;
+	}
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->TryActivateReload();
+	}
 }
 
 void AMDPlayerController::ToggleGameMenu()
@@ -352,6 +405,26 @@ void AMDPlayerController::RangedSwapPressed()
 		return;
 	}
 	Server_RequestRangedSwap();
+}
+
+void AMDPlayerController::RangedFirePressed()
+{
+	if (IsAnyMenuOpen())
+	{
+		return;
+	}
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->SetFireHeld(true);
+	}
+}
+
+void AMDPlayerController::RangedFireReleased()
+{
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->SetFireHeld(false);
+	}
 }
 
 void AMDPlayerController::Server_RequestRangedSwap_Implementation()
@@ -763,6 +836,7 @@ void AMDPlayerController::OpenStationLocal(AMDStation* Station)
 	OpenStation = Station;
 	bStationOpen = true;
 	GetWorldTimerManager().SetTimer(StationWatchTimer, this, &AMDPlayerController::WatchStation, 0.25f, true);
+	// R7: the Ammo service is a tab inside W_MDStationPanel now (UMDStationAmmoPanel reads GetOpenStation()).
 	OnStationOpened.Broadcast(Station);
 }
 

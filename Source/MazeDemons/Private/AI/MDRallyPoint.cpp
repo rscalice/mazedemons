@@ -3,6 +3,7 @@
 #include "Components/SceneComponent.h"
 
 const FName AMDRallyPoint::RallyTag(TEXT("MDRallyPoint"));
+const FName AMDRallyPoint::RoomEntryTag(TEXT("MDRoomEntry"));
 
 AMDRallyPoint::AMDRallyPoint()
 {

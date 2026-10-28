@@ -4,8 +4,12 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "AI/MDAIRules.h"
 #include "AI/MDAITypes.h"
+#include "AI/MDPerceptionRules.h"
+#include "MDQuestTypes.h"
 #include "MDAISubsystem.generated.h"
 
+class APawn;
+class FOutputDevice;
 class UMDEnemyBrainComponent;
 
 // Server-only world services the enemy brains share (V1 WP1):
@@ -47,17 +51,72 @@ public:
 	int32 GetRunSeed() const { return RunSeed; }
 	void SetRunSeed(int32 InSeed) { RunSeed = InSeed; }
 
-	// The tier every brain runs at this WP: md.AI.ForceTier when >= 0, else T0 (tier computation is WP4).
+	// md.AI.ForceTier: true (and the tier) when it is set to 0..4. A pack's own tier (UMDPackDirectorSubsystem::ComputeTier,
+	// V1 WP4) applies when it is off.
+	static bool TryGetForcedTier(EMDIntelligenceTier& OutTier);
+
+	// The tier for an enemy that is in no pack: md.AI.ForceTier when set, else T0. Enemies in a pack ask the director
+	// (UMDPackDirectorSubsystem::GetTierOf).
 	static EMDIntelligenceTier ResolveTier();
 	static FMDTierParams ResolveTierParams() { return FMDTierParams::ForTier(ResolveTier()); }
 
 	// md.AI.Debug != 0
 	static bool IsDebugEnabled();
+	// md.AI.Debug: 0 off, 1 compact (nearest md.AI.DebugCount enemies), 2 verbose (all awake enemies).
+	static int32 GetDebugLevel();
+	// Draws the md.AI.Debug overlay once (the tick calls it every 0.1 s).
+	void DrawOverlay();
+	// md.AI.DumpTokens: the token pool and every brain's intent / token / target.
+	void DumpTokens(FOutputDevice& Ar) const;
 
 	// md.AI.BrainHz
 	static float GetBrainHz();
 
+	// md.AI.DebugPerception != 0
+	static bool IsDebugPerceptionEnabled();
+
+	// md.AI.Dormancy != 0 (default on)
+	static bool IsDormancyEnabled();
+
 	double Now() const;
+
+	// ---- Players (V1 WP3) ----
+	// The living player pawns: every player controller's pawn plus the pawns added with TrackExtraPlayer.
+	void CollectPlayerPawns(TArray<AActor*>& Out) const;
+	void CollectPlayerLocations(TArray<FVector>& Out) const;
+	// Locations of the players with an enemy within melee reach (kite points keep 3 m from them).
+	void CollectMeleePlayerLocations(TArray<FVector>& Out) const;
+	// A pawn that counts as a player without a player controller (tests, a possessed-by-AI stand-in).
+	void TrackExtraPlayer(APawn* Pawn);
+
+	// ---- Dormancy (2.9) ----
+	// Evaluates every brain: further than 40 m from every player (and not hurt for 10 s) = dormant (no sensing, no thinking),
+	// else awake; also sets the pawn's NetUpdateFrequency (10 Hz beyond 25 m). Runs twice a second from Tick; tests call it
+	// directly. Returns the number of dormant brains afterwards.
+	int32 UpdateDormancy(double Now);
+	int32 NumDormant() const;
+
+	// ---- Room reveal gate (2.6, U4 shared fog of war) ----
+	// True when the room / zone at Location has been revealed by the players (the shared fog grid). True when there is no fog
+	// (no game state, no level map, tests) and for points outside the fog's bounds: the gate only ever blocks known hidden rooms.
+	bool IsRoomRevealed(const FVector& Location) const;
+	// Tests: use Grid instead of the game state's fog (null = back to the real fog).
+	void SetRevealGridOverride(const FMDFogGrid* Grid);
+
+	// ---- Rally points (2.6) ----
+	// Positions of the actors tagged MDRallyPoint and of the room entries (MDRoomEntry); rescanned every 2 s.
+	void CollectRallyPoints(TArray<FVector>& OutRallyPoints, TArray<FVector>& OutRoomEntries) const;
+
+	// ---- Navigation (2.9) ----
+	// One path request out of this frame's budget of 10. The movement tasks ask before every MoveTo; a denied task retries on
+	// the next frame.
+	bool TryConsumePathRequest();
+	const MDNav::FPathBudget& GetPathBudget() const { return PathBudget; }
+
+	// ---- Profile ----
+	// Time this subsystem's Tick took (scheduler, dormancy, noise), summed over frames: the brain budget (0.6 ms/frame).
+	const MDAIPerf::FFrameProfile& GetProfile() const { return Profile; }
+	void ResetProfile() { Profile = MDAIPerf::FFrameProfile(); }
 
 	// UTickableWorldSubsystem
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
@@ -70,6 +129,10 @@ public:
 	int32 StepScheduler(float DeltaTime);
 
 private:
+	// DT_IntelligenceTiers (V1 WP4), loaded on initialize and handed to FMDTierParams; null when the asset is missing.
+	UPROPERTY(Transient)
+	TObjectPtr<UDataTable> TierTable;
+
 	TArray<TWeakObjectPtr<UMDEnemyBrainComponent>> Brains;
 	int32 Cursor = 0;
 	float Accumulator = 0.0f;
@@ -79,4 +142,28 @@ private:
 	int32 NextActorId = 1;
 
 	int32 RunSeed = 0;
+
+	// V1 WP3
+	void ReportSprintNoise();
+	// Every living player pawn carries a UMDCrowdObstacleComponent (md.AI.CrowdObstacle).
+	void EnsureCrowdObstacles();
+	void RefreshRallyCache(double InNow) const;
+	void RefreshFogCache(double InNow) const;
+
+	TArray<TWeakObjectPtr<APawn>> ExtraPlayers;
+	float SlowAccumulator = 0.0f;
+	float DebugAccumulator = 0.0f;
+	float OverlayAccumulator = 0.0f;
+	MDAIPerf::FFrameProfile Profile;
+	MDNav::FPathBudget PathBudget;
+
+	TOptional<FMDFogGrid> FogOverride;
+	mutable FMDFogGrid FogCache;
+	mutable bool bFogCacheValid = false;
+	mutable double NextFogRefresh = -1.0;
+
+	mutable TArray<TWeakObjectPtr<AActor>> RallyActors;
+	mutable TArray<TWeakObjectPtr<AActor>> EntryActors;
+	mutable double NextRallyRefresh = -1.0;
+	mutable int32 CachedActorCount = -1;
 };

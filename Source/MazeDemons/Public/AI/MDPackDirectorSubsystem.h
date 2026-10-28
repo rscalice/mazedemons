@@ -5,6 +5,8 @@
 #include "AI/MDAITypes.h"
 #include "AI/MDPack.h"
 #include "AI/MDPackRules.h"
+#include "AI/MDPerceptionRules.h"
+#include "AI/MDTierRules.h"
 #include "MDPackDirectorSubsystem.generated.h"
 
 // The squad layer (v1-design 2.4), server only. It owns:
@@ -44,11 +46,43 @@ public:
 	const FMDPack* FindPackOf(const AActor* Enemy) const;
 	int32 GetPackIdOf(const AActor* Enemy) const;
 
+	// ---- Intelligence tier (V1 WP4, v1-design 3.1) ----
+	// Each pack gets its tier ONCE, when its first member joins (the enemy has just spawned): MDTier::Compute over the zone the
+	// enemy stands in, the party's perk points and gear upgrades, the player count, the run seed and the pack id, clamped to the
+	// archetype's MinTier / MaxTier. It never changes afterwards, so a player who joins late only affects packs spawned later.
+	// Merged packs keep the older pack's tier.
+	void ComputeTier(FMDPack& Pack, const AActor* Sample);
+
+	// The inputs ComputeTier feeds to MDTier::Compute for an enemy spawning now (public for the tests).
+	MDTier::FInputs GatherTierInputs(const AActor* Sample, int32 PackId) const;
+
+	// The tier a pack runs at: md.AI.ForceTier when set, else the tier computed for it (T0 before it has one).
+	EMDIntelligenceTier GetPackTier(const FMDPack& Pack) const;
+
+	// GetPackTier of the enemy's pack; md.AI.ForceTier or T0 for an enemy in no pack.
+	EMDIntelligenceTier GetTierOf(const AActor* Enemy) const;
+
 	// ---- Reports (from the brains) ----
 	void ReportMember(AActor* Enemy, const FMDMemberReport& Report);
 
 	// The enemy took Amount damage from Instigator (feeds the focus score's threat term).
 	void ReportDamage(AActor* Enemy, AActor* Instigator, float Amount);
+
+	// Pack-shared awareness (V1 WP3, 2.3 / 2.5): Seer saw (or, for a loud noise, heard) Player at Location at SightTime. Every
+	// other member of Seer's pack learns the LAST-KNOWN position (never the live one) at SightTime + max(ShareDelay, its
+	// reaction time). ShareDelay < 0 (T0) shares nothing. Returns how many pack mates were told.
+	int32 ShareSighting(AActor* Seer, AActor* Player, const FVector& Location, double SightTime, float ShareDelay);
+
+	// ---- V1 WP5 ----
+	// An ambush group waits for its trigger: the pack state is AmbushArmed, nobody gets a token, nobody retreats.
+	void SetAmbushArmed(int32 PackId, bool bArmed);
+
+	// One bark per pack per MDBehaviour::BarkInterval (swarm howl, fall back): true (and the time is recorded) when this
+	// enemy's pack may bark Cue now. Loose enemies (no pack) always may.
+	bool TryPackBark(const AActor* Enemy, uint8 Cue);
+
+	// The pack the level-placed spawn group GroupKey formed (0 when none yet).
+	int32 FindGroupPack(FName GroupKey) const;
 
 	// ---- Assignment (to the brains) ----
 	bool GetAssignment(const AActor* Enemy, FMDEnemyAssignment& Out) const;
@@ -88,14 +122,15 @@ private:
 	void AddToPack(FMDPack& Pack, AActor* Enemy);
 	void RemovePackIfEmpty(int32 PackId);
 
-	void MergePacks(EMDIntelligenceTier Tier);
+	void MergePacks();
 	void UpdateRoles(FMDPack& Pack, EMDIntelligenceTier Tier);
 	void UpdateFocus(FMDPack& Pack, EMDIntelligenceTier Tier, double Now);
 	void UpdatePackState(FMDPack& Pack, EMDIntelligenceTier Tier, double Now);
 	void UpdateSlots(FMDPack& Pack);
 	void PruneMembers(FMDPack& Pack);
 
-	// Rally points are actors tagged "MDRallyPoint" (AMDRallyPoint), rescanned every 2 s. True when the level has any.
+	// Rally points are actors tagged "MDRallyPoint" (AMDRallyPoint), else room entries tagged "MDRoomEntry"; both come from
+	// UMDAISubsystem and only revealed rooms count (MDAIQueries::FindRallyPoint). True when the level has a usable one.
 	bool HasAnyRallyPoint(double InNow);
 	// The rally point nearest to Near; false when none.
 	bool FindRallyPoint(const FVector& Near, FVector& OutPoint) const;
@@ -108,8 +143,14 @@ private:
 	TMap<FName, int32> GroupPacks;
 
 	FMDPackTokenPool Tokens;
-	EMDIntelligenceTier LastTier = EMDIntelligenceTier::T0;
 	float StepAccumulator = 0.0f;
-	TArray<TWeakObjectPtr<AActor>> RallyActors;
-	double NextRallyRefresh = 0.0;
+	MDAIPerf::FFrameProfile Profile;
+
+public:
+	// Time spent in this subsystem's Tick (the pack step), for the 40-enemy budget test and tuning.
+	const MDAIPerf::FFrameProfile& GetProfile() const { return Profile; }
+
+	// The token pool itself (md.AI.DumpTokens, the token timeout tests).
+	const FMDPackTokenPool& GetTokens() const { return Tokens; }
+	void ResetProfile() { Profile = MDAIPerf::FFrameProfile(); }
 };

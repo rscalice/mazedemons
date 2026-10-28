@@ -5,6 +5,7 @@
 #include "Engine/EngineTypes.h"      // ENetRole
 #include "GameplayTagContainer.h"
 #include "AI/MDAITypes.h"
+#include "AI/MDPerceptionRules.h"
 
 // V1 WP1 brain rules (v1-design 2.3, 1.3, 2.9). Plain structs and functions: no world, no allocations in the hot path, so
 // every rule runs in MazeDemons.AI.Brain.* with no actors. The brain component is a thin wrapper around these.
@@ -23,8 +24,17 @@ namespace MDAI
 	// Seconds without a stimulus before the brain forgets a target (2.5 lose-sight).
 	constexpr double LoseTargetTime = 3.0;
 
+	// Token requests (1.3 / 2.4): an enemy asks for a token from the threat ring, not only from attack reach. The threat ring
+	// (HoldThreat / Swarm) stands ThreatRange from the player; a request gate inside that ring deadlocks a pack: nobody is
+	// allowed to close in without a token, and nobody is close enough to ask for one (the "never attacked" bug).
+	constexpr float TokenReachBeyondThreat = 150.0f;
+
+	// How far from its target an enemy may ask for an attack token: 1.5 x its attack reach, the threat ring plus a margin,
+	// or (charge-capable) its charge range, whichever is the largest.
+	MAZEDEMONS_API float TokenRequestReach(float AttackRange, float ThreatRange, bool bCanCharge, float ChargeMaxDistance);
+
 	// Scores are plain struct math: eight slots cover every intent WP1 scores, so no heap allocation per decision.
-	using FScores = TArray<FMDScoredIntent, TInlineAllocator<8>>;
+	using FScores = TArray<FMDScoredIntent, TInlineAllocator<16>>;
 }
 
 // Utility scoring (2.3 step 3). Score = base x gates (tier, token, cooldown) x curves (distance) x aggression + seeded noise.
@@ -55,12 +65,20 @@ struct FMDStimulus
 	FVector Location = FVector::ZeroVector;
 	bool bSensed = true; // false = lost
 	double Time = 0.0;   // when it happened
+	// How it reached the brain (V1 WP3): only Sight keeps the source's live position known, the rest give a last-known one.
+	EMDStimulusKind Kind = EMDStimulusKind::Sight;
+	// The noise tag of a Hearing stimulus (Attack / Sprint / Gunshot / any).
+	FName Tag = NAME_None;
 };
 
 // Reaction floor (1.3): stimuli are timestamped and only handed to the brain once they are older than ReactionTime.
 struct MAZEDEMONS_API FMDDelayedStimulusQueue
 {
 	void Push(const FMDStimulus& Stimulus) { Pending.Add(Stimulus); }
+
+	// Like Push, but a stimulus of the same source and kind that is still waiting keeps its delivery time and only takes the
+	// newer location. A 40-enemy pack sharing every sighting would otherwise queue one entry per mate per event (V1 WP3).
+	void PushCoalesced(const FMDStimulus& Stimulus);
 
 	// Removes and returns (through Fn, oldest first) every stimulus with Time + Delay <= Now. Returns how many were delivered.
 	int32 Pop(double Now, double Delay, TFunctionRef<void(const FMDStimulus&)> Fn);
@@ -104,6 +122,13 @@ struct MAZEDEMONS_API FMDAttackTokenPool
 	void Purge(double Now);
 
 	int32 Num() const { return Entries.Num(); }
+
+	// Every valid entry (md.AI.DumpTokens, tests): holder, target, seconds until it expires.
+	void ForEachValid(double Now, TFunctionRef<void(int32 Holder, int32 Target, double SecondsLeft)> Fn) const;
+
+	// The longest a valid token has left before it expires on its own (0 when the pool is empty). A token can never be held
+	// longer than its Timeout: TryGrant refreshes it, ReleaseAfter shortens it, nothing extends it past Now + Timeout.
+	double MaxSecondsLeft(double Now) const;
 
 private:
 	TArray<FEntry> Entries;

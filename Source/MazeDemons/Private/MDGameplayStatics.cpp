@@ -19,6 +19,8 @@
 #include "MDStaminaComponent.h"
 #include "MDStatCalculator.h"
 #include "MDUISettings.h"
+#include "Ranged/MDAmmoDrops.h"
+#include "Ranged/MDRangedWeaponData.h"
 #include "Engine/DataTable.h"
 #include "Components/ActorComponent.h"
 
@@ -361,6 +363,69 @@ TArray<FMDStatLine> UMDGameplayStatics::GetCharacterStatLines(APlayerState* PS, 
 	{
 		Lines.Add(MakeLine(LOCTEXT("StatSprintSpeed", "Sprint speed"), SprintScale * 100.0f, SprintScale * 100.0f, true, false, 0.0f, 0.0f, TEXT("")));
 	}
+
+	// R7: comparing a gun adds its own rows (damage / shot, rounds / s, magazine, reload, spread) against the gun in the Ranged slot.
+	if (Inv && !CompareRow.IsNone())
+	{
+		if (const UMDRangedWeaponData* NewGun = Inv->GetItemRangedData(CompareRow))
+		{
+			Lines.Append(MakeGunCompareLines(Inv->GetEquippedRangedData(), NewGun));
+		}
+	}
+	return Lines;
+}
+
+TArray<FMDStatLine> UMDGameplayStatics::MakeGunCompareLines(const UMDRangedWeaponData* Old, const UMDRangedWeaponData* New)
+{
+	TArray<FMDStatLine> Lines;
+	if (!New)
+	{
+		return Lines;
+	}
+	struct FGunStat
+	{
+		FText Label;
+		float OldValue;
+		float NewValue;
+		int32 Decimals;
+		const TCHAR* Suffix;
+		bool bLowerIsBetter;
+	};
+	const bool bHasOld = Old != nullptr;
+	const FGunStat Stats[] = {
+		{ LOCTEXT("GunDamage", "Damage / shot"), bHasOld ? Old->DamagePerShot : 0.0f, New->DamagePerShot, 0, TEXT(""), false },
+		{ LOCTEXT("GunRPS", "Rounds / s"), bHasOld ? Old->RoundsPerSecond : 0.0f, New->RoundsPerSecond, 1, TEXT(""), false },
+		{ LOCTEXT("GunMag", "Magazine"), bHasOld ? static_cast<float>(Old->MagSize) : 0.0f, static_cast<float>(New->MagSize), 0, TEXT(""), false },
+		{ LOCTEXT("GunReload", "Reload"), bHasOld ? Old->ReloadSeconds : 0.0f, New->ReloadSeconds, 1, TEXT(" s"), true },
+		{ LOCTEXT("GunSpread", "Spread"), bHasOld ? Old->SpreadHip : 0.0f, New->SpreadHip, 1, TEXT("\u00B0"), true },
+	};
+	for (const FGunStat& Stat : Stats)
+	{
+		const float Scale = Stat.Decimals > 0 ? 10.0f : 1.0f;
+		auto Fmt = [&](float Value) { return FText::FromString(FString::Printf(TEXT("%.*f%s"), Stat.Decimals, Value, Stat.Suffix)); };
+		FMDStatLine Line;
+		Line.Label = Stat.Label;
+		Line.New = Stat.NewValue;
+		Line.NewText = Fmt(Stat.NewValue);
+		if (!bHasOld)
+		{
+			Line.Current = Stat.NewValue;
+			Line.CurrentText = FText::FromString(TEXT("-"));
+			Lines.Add(Line);
+			continue;
+		}
+		Line.Current = Stat.OldValue;
+		Line.CurrentText = Fmt(Stat.OldValue);
+		const int32 Delta = FMath::RoundToInt(Stat.NewValue * Scale) - FMath::RoundToInt(Stat.OldValue * Scale);
+		if (Delta != 0)
+		{
+			const FString Sign = Delta > 0 ? FString(TEXT("+")) : FString(TEXT("\u2212"));
+			Line.DeltaText = FText::FromString(FString::Printf(TEXT("%s%.*f%s"), *Sign, Stat.Decimals, FMath::Abs(Delta) / Scale, Stat.Suffix));
+			const int32 Direction = Delta > 0 ? 1 : -1;
+			Line.DeltaSign = Stat.bLowerIsBetter ? -Direction : Direction;
+		}
+		Lines.Add(Line);
+	}
 	return Lines;
 }
 
@@ -526,6 +591,7 @@ EMDColor UMDGameplayStatics::DurabilityColor(float Fraction)
 
 void UMDGameplayStatics::AwardKillGold(const AActor* Victim, const AController* Killer, int32 Gold)
 {
+	FMDAmmoDrops::RollKillDrop(Victim, Killer); // R3: the ammo drop rides the kill path (no gold needed for it)
 	const UWorld* World = Victim ? Victim->GetWorld() : nullptr;
 	const AGameStateBase* GameState = World ? World->GetGameState() : nullptr;
 	if (!GameState || Gold <= 0 || !Victim->HasAuthority())

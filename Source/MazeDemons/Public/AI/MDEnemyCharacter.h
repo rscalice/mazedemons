@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
@@ -11,12 +11,15 @@
 
 class UMDAbilitySystemComponent;
 class UMDBlinkComponent;
+class UMDEnemyBehaviourComponent;
 class UMDCombatFeedbackComponent;
 class UMDEnemyArchetype;
 class UMDEnemyAttackComponent;
 class UMDEnemyAttributeSet;
 class UMDPoiseComponent;
 class UMDTargetableComponent;
+class UMaterialInstanceDynamic;
+class UMaterialInterface;
 class UMotionWarpingComponent;
 
 // Base class of every V1 enemy (v1-design 2.2). Blueprint children carry defaults only (mesh, anim class, Archetype asset).
@@ -80,6 +83,19 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMDEnemyAttackComponent> AttackComponent;
 
+	// V1 WP5: timers and the long actions of the advanced behaviours (feint, blink, charge, ranged draw), the behaviour cues.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMDEnemyBehaviourComponent> Behaviour;
+
+	// V1 WP5 ambush: hidden, collision-free and dormant until the marker's trigger fires. Replicated so a client never sees
+	// (or bumps into) an ambusher that has not arrived yet.
+	UPROPERTY(ReplicatedUsing = OnRep_AmbushHidden, BlueprintReadOnly, Category = "Enemy|AI")
+	bool bAmbushHidden = false;
+
+	// Server: hide / reveal the enemy for an ambush. Revealing restores walking.
+	void SetAmbushHidden(bool bNewHidden);
+	bool IsAmbushHidden() const { return bAmbushHidden; }
+
 	// "AttackTarget" warp for the attack montages (the same warp name the player's combo steps use).
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMotionWarpingComponent> MotionWarping;
@@ -95,6 +111,29 @@ public:
 
 	// Server: the brain's current intent, mirrored for clients.
 	void SetReplicatedIntent(EMDIntent Intent);
+
+	// ---- Off-screen threat (V1 WP4, v1-design 1.3) ----
+	// True while this enemy holds an attack token on ThreatTarget and is about to swing (or swinging). Replicated so a client
+	// knows which enemies threaten it; a late joiner gets the current values on first replication. The local player's
+	// UMDThreatIndicatorSubsystem draws the screen-edge arrow for threatening enemies that are off-screen.
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Enemy|AI")
+	bool bThreatening = false;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Enemy|AI")
+	TObjectPtr<AActor> ThreatTarget;
+
+	// Server: the brain says who this enemy threatens (null = nobody). Only writes on a change.
+	void SetThreat(AActor* Target);
+
+	// ---- Attack tell (V1 WP4) ----
+	// Every machine, from the MDAN_Tell anim notify at the start of an attack wind-up: the archetype's TellSound at low volume
+	// plus a brief overlay flash on the enemy. Cosmetic; a dedicated server skips it. The montage is multicast, so the notify
+	// fires on each machine and the cue reaches everyone (and a late joiner simply sees the next tell).
+	// bWithSound = false: the flash only (the V1 WP5 behaviour cues bring their own sound).
+	void PlayTellCue(bool bWithSound = true);
+
+	// Every enemy that exists on this machine (server and clients), for the threat indicator.
+	static const TArray<TWeakObjectPtr<AMDEnemyCharacter>>& GetAllEnemies();
 
 	UFUNCTION(BlueprintPure, Category = "Enemy|AI")
 	EMDIntent GetIntent() const;
@@ -127,9 +166,13 @@ public:
 protected:
 	virtual void PostInitializeComponents() override;
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION()
 	void OnRep_Archetype();
+
+	UFUNCTION()
+	void OnRep_AmbushHidden();
 
 private:
 	// Bound to the ASC's OnDeath on every machine (the server fires it directly, clients through the replicated dead state).
@@ -141,6 +184,18 @@ private:
 
 	void AwardKillRewards();
 
+	void EndTellFlash();
+
+	void ApplyAmbushHidden();
+
 	bool bDeathHandled = false;
 	bool bFacingTarget = false;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> TellFlashMID;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> TellFlashPreviousOverlay;
+
+	FTimerHandle TellFlashTimer;
 };

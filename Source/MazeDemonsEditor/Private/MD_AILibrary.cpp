@@ -5,6 +5,7 @@
 #include "AI/MDEnemyCharacter.h"
 #include "AI/MDEnemyController.h"
 #include "AI/StateTree/MDSTEnemyTasks.h"
+#include "AI/StateTree/MDSTBehaviourTasks.h"
 #include "MDGameplayTags.h"
 #include "AnimGraphNode_BlendSpacePlayer.h"
 #include "AnimGraphNode_Inertialization.h"
@@ -131,6 +132,16 @@ bool UMD_AILibrary::BuildEnemyStateTree(const FString& PackagePath, TArray<FStri
 	AddLeaf(TEXT("Retreat"), MDIntentToTag(EMDIntent::Retreat), TEXT("The pack is regrouping (T2+): run to the rally point the pack director picked."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyRetreat>(); });
 	AddLeaf(TEXT("Regroup"), MDIntentToTag(EMDIntent::Regroup), TEXT("At the rally point: wait until the regroup ends, then the brain chases again."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyRegroup>(); });
 	AddLeaf(TEXT("Attack"), MDIntentToTag(EMDIntent::Attack), TEXT("Play the chosen attack montage (motion warp to the target, claw trace window). The montage end returns control to the brain."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyAttack>(); });
+	// V1 WP5 advanced behaviours (thin tasks; the scorer gates and MDBehaviourRules decide).
+	AddLeaf(TEXT("Swarm"), MDIntentToTag(EMDIntent::Swarm), TEXT("T1+ pack of 3+: evenly spaced ring slots; no token = hold the threat ring."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemySwarm>(); });
+	AddLeaf(TEXT("Bait"), MDIntentToTag(EMDIntent::Bait), TEXT("T2+: face the player, half-step back, taunt; never holds a token, stays within 8 m of the pack."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyBait>(); });
+	AddLeaf(TEXT("Kite"), MDIntentToTag(EMDIntent::Kite), TEXT("Ranged archetypes: keep range, reposition at most once a second, fire with a token."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyKite>(); });
+	AddLeaf(TEXT("Flank"), MDIntentToTag(EMDIntent::Flank), TEXT("T2+: walk to the flank point behind the target; the attack still needs a token."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyFlank>(); });
+	AddLeaf(TEXT("Feint"), MDIntentToTag(EMDIntent::Feint), TEXT("T3+: token holder winds up, cancels with a visible jerk, attacks for real 0.3-0.6 s later."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyFeint>(); });
+	AddLeaf(TEXT("Guard"), MDIntentToTag(EMDIntent::Guard), TEXT("T2+: stand on the guard line between the caster and the player (defence token, no attack token)."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyGuard>(); });
+	AddLeaf(TEXT("Ambush"), MDIntentToTag(EMDIntent::Ambush), TEXT("Ambush arrival: stand still through the 0.5 s no-attack grace."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyAmbush>(); });
+	AddLeaf(TEXT("Blink"), MDIntentToTag(EMDIntent::Blink), TEXT("T3+: 0.4 s pre-blink cue, then a validated teleport, 0.3 s grace."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyBlink>(); });
+	AddLeaf(TEXT("Charge"), MDIntentToTag(EMDIntent::Charge), TEXT("Brute: line up and run straight; a sideways dodge-slide cancels it."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyCharge>(); });
 	AddLeaf(TEXT("Stagger"), MDIntentToTag(EMDIntent::Stagger), TEXT("Poise broke: stop until the stun ends (interrupt, token returned)."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyStagger>(); });
 	AddLeaf(TEXT("Dead"), MDIntentToTag(EMDIntent::Dead), TEXT("Dead: stop; the character ragdolls and detaches its controller."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyDead>(); });
 

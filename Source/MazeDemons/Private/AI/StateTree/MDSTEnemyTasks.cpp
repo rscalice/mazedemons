@@ -1,5 +1,6 @@
 #include "AI/StateTree/MDSTEnemyTasks.h"
 
+#include "AI/MDAISubsystem.h"
 #include "AI/MDEnemyAttackComponent.h"
 #include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyCharacter.h"
@@ -16,6 +17,18 @@ namespace MDSTLocal
 	{
 		const UWorld* World = Context.GetWorld();
 		return World ? World->GetTimeSeconds() : 0.0;
+	}
+
+	// One path request out of the frame's budget of 10 (v1-design 2.9). False = over budget: the task retries next tick.
+	bool TryPath(const AMDEnemyController& Controller)
+	{
+		UMDAISubsystem* AI = UMDAISubsystem::Get(Controller.GetWorld());
+		return !AI || AI->TryConsumePathRequest();
+	}
+
+	bool IsMoving(const AMDEnemyController& Controller)
+	{
+		return Controller.GetMoveStatus() == EPathFollowingStatus::Moving;
 	}
 
 	// Stop moving and face a target (focus) or, with none, the movement direction. The facing rule lives in AMDEnemyCharacter.
@@ -83,30 +96,48 @@ void FMDST_EnemyChase::IssueMove(AMDEnemyController& Controller, FInstanceDataTy
 	{
 		// V1 WP2: approach the ring slot the pack director gave this enemy, so a pack spreads around the player instead of
 		// stacking on one point. Without a slot (a loose enemy, the focus is another player) go straight at the target.
+		// Repath only when the goal moved more than 1.5 m (2.9), and only within the frame's path request budget.
 		FVector SlotPoint;
 		if (Brain->GetSlotPoint(SlotPoint))
 		{
-			if (Data.LastTarget != Target || FVector::Dist2D(SlotPoint, Data.LastGoal) > 60.0f || Controller.GetMoveStatus() != EPathFollowingStatus::Moving)
+			if (Data.LastTarget != Target || MDNav::ShouldRepath(MDSTLocal::IsMoving(Controller), Data.LastGoal, SlotPoint))
 			{
+				if (!MDSTLocal::TryPath(Controller))
+				{
+					Data.NextUpdateTime = 0.0; // over budget: ask again next tick
+					return;
+				}
 				Controller.MoveToLocation(SlotPoint, 50.0f, true, true, true, true);
 				Data.LastTarget = Target;
 				Data.LastGoal = SlotPoint;
 			}
 			return;
 		}
-		if (Data.LastTarget != Target || Controller.GetMoveStatus() != EPathFollowingStatus::Moving)
+		const FVector TargetLocation = Target->GetActorLocation();
+		if (Data.LastTarget != Target || MDNav::ShouldRepath(MDSTLocal::IsMoving(Controller), Data.LastGoal, TargetLocation))
 		{
-			Controller.MoveToActor(Target, Acceptance, /*bStopOnOverlap*/ true, /*bUsePathfinding*/ true, /*bCanStrafe*/ true);
+			if (!MDSTLocal::TryPath(Controller))
+			{
+				Data.NextUpdateTime = 0.0;
+				return;
+			}
+			// A location goal (not MoveToActor) so the 1.5 m rule and the budget apply; the target's own radius is added back.
+			Controller.MoveToLocation(TargetLocation, Acceptance + Target->GetSimpleCollisionRadius(), /*bStopOnOverlap*/ true, /*bUsePathfinding*/ true, /*bProjectDestinationToNavigation*/ true, /*bCanStrafe*/ true);
 			Data.LastTarget = Target;
-			Data.LastGoal = Target->GetActorLocation();
+			Data.LastGoal = TargetLocation;
 		}
 	}
 	else
 	{
 		// Out of sight: go to where it was last seen (the brain forgets it after LoseTargetTime).
 		const FVector Goal = Brain->GetTargetLocation();
-		if (Data.LastTarget != nullptr || FVector::Dist2D(Goal, Data.LastGoal) > 100.0f || Controller.GetMoveStatus() != EPathFollowingStatus::Moving)
+		if (Data.LastTarget != nullptr || MDNav::ShouldRepath(MDSTLocal::IsMoving(Controller), Data.LastGoal, Goal))
 		{
+			if (!MDSTLocal::TryPath(Controller))
+			{
+				Data.NextUpdateTime = 0.0;
+				return;
+			}
 			Controller.MoveToLocation(Goal, Acceptance, true, true, false, true);
 			Data.LastTarget = nullptr;
 			Data.LastGoal = Goal;
@@ -225,8 +256,13 @@ EStateTreeRunStatus FMDST_EnemyHoldThreat::Tick(FStateTreeExecutionContext& Cont
 		// The threat ring point on this enemy's slot angle: 4-6 m out, spread around the target like the melee slots.
 		if (FVector::Dist2D(RingPoint, Enemy->GetActorLocation()) > Tolerance)
 		{
-			if (FVector::Dist2D(RingPoint, Data.LastGoal) > 50.0f || Controller->GetMoveStatus() != EPathFollowingStatus::Moving)
+			if (MDNav::ShouldRepath(MDSTLocal::IsMoving(*Controller), Data.LastGoal, RingPoint))
 			{
+				if (!MDSTLocal::TryPath(*Controller))
+				{
+					Data.NextUpdateTime = 0.0; // over the frame's path budget: retry next tick
+					return EStateTreeRunStatus::Running;
+				}
 				Controller->MoveToLocation(RingPoint, 40.0f, true, true, true, true);
 				Data.LastGoal = RingPoint;
 			}
@@ -238,8 +274,13 @@ EStateTreeRunStatus FMDST_EnemyHoldThreat::Tick(FStateTreeExecutionContext& Cont
 	}
 	else if (ComputeHoldPoint(Brain->GetTargetLocation(), Enemy->GetActorLocation(), Brain->GetThreatRange(), Tolerance, Point))
 	{
-		if (FVector::Dist2D(Point, Data.LastGoal) > 50.0f || Controller->GetMoveStatus() != EPathFollowingStatus::Moving)
+		if (MDNav::ShouldRepath(MDSTLocal::IsMoving(*Controller), Data.LastGoal, Point))
 		{
+			if (!MDSTLocal::TryPath(*Controller))
+			{
+				Data.NextUpdateTime = 0.0;
+				return EStateTreeRunStatus::Running;
+			}
 			Controller->MoveToLocation(Point, 40.0f, true, true, true, true);
 			Data.LastGoal = Point;
 		}
@@ -299,8 +340,13 @@ EStateTreeRunStatus FMDST_EnemyRetreat::Tick(FStateTreeExecutionContext& Context
 	{
 		return EStateTreeRunStatus::Running; // the brain ends the state when the regroup is over
 	}
-	if (FVector::Dist2D(Rally, Data.LastGoal) > 50.0f || Controller->GetMoveStatus() != EPathFollowingStatus::Moving)
+	if (MDNav::ShouldRepath(MDSTLocal::IsMoving(*Controller), Data.LastGoal, Rally))
 	{
+		if (!MDSTLocal::TryPath(*Controller))
+		{
+			Data.NextUpdateTime = 0.0;
+			return EStateTreeRunStatus::Running;
+		}
 		Controller->MoveToLocation(Rally, Acceptance, true, true, false, true);
 		Data.LastGoal = Rally;
 	}

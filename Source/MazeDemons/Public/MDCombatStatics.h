@@ -8,12 +8,41 @@
 class UGameplayAbility;
 class UMDLocalSettings;
 
+// R1: everything ApplyRangedHit needs to know about one projectile hit (built by AMDProjectile from the weapon data).
+struct FMDRangedHitParams
+{
+	// Final damage handed to ApplyDamage (falloff, headshot, perks and condition already applied).
+	float Damage = 0.0f;
+	float PoiseDamage = 0.0f;
+	// Strongest reaction the weapon may cause (poise break included): Flinch for pistols and repeaters, Stagger for a bolter.
+	EMDHitReaction ReactionCap = EMDHitReaction::Flinch;
+	// Damage.Type.* of the hit (empty = Physical).
+	FGameplayTag DamageType;
+	FGameplayTag ImpactTag;
+	bool bHeadshot = false;
+	EMDHitKind Kind = EMDHitKind::Projectile;
+	// Where the shot started (hit direction for the victim's reaction).
+	FVector ShotOrigin = FVector::ZeroVector;
+	// Hit-stop frames sent to the shooter when this hit kills (guns: 3). Non-lethal gun hits never freeze the game.
+	int32 KillHitStopFrames = 3;
+	// Camera shake scale sent to the shooter (CS_Hit_Light x this).
+	float ShakeScale = 0.5f;
+};
+
 UCLASS()
 class MAZEDEMONS_API UMDCombatStatics : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 
 public:
+	// R1, server only. A projectile (or later a beam tick) hit Victim. The same C1 pipeline as ApplyMeleeHit: team rules and the
+	// friendly-fire toggle, crit, i-frames, poise with the weapon's reaction cap, then Client_ConfirmHit to the shooter (damage
+	// number coloured by Damage.Type, hit marker, kill hit-stop) and the replicated hit record that plays the impact cue.
+	// Attacker may be null (unattributed damage). A gun's durability wear (0.5 per landed hit) is applied here when the attacker
+	// is a player holding a gun. Returns true when damage was applied; false means the bolt should fly on (blocked by team rules,
+	// dodge i-frames, a corpse).
+	static bool ApplyRangedHit(AActor* Attacker, AActor* Victim, const FHitResult& Hit, const FMDRangedHitParams& Params);
+
 	// Server only. The one entry point AC_Combat's weapon trace calls for each target it hits (once per target per swing).
 	// Builds the hit context from the attacker's active combo step (or a default light step without one), runs
 	// ApplyDamage(FMDHitContext) (team rules, crit, Executioner, i-frames), and only if damage went through: poise and reaction,

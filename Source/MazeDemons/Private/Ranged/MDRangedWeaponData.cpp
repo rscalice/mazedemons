@@ -4,6 +4,7 @@
 #include "Engine/StaticMesh.h"
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_RangedMode, "State.RangedMode");
+UE_DEFINE_GAMEPLAY_TAG(TAG_State_Reloading, "State.Reloading");
 
 UObject* UMDRangedWeaponData::LoadWeaponMesh() const
 {

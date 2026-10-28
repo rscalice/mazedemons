@@ -1,9 +1,16 @@
-#include "AI/MDPackDirectorSubsystem.h"
+﻿#include "AI/MDPackDirectorSubsystem.h"
 
+#include "AI/MDAIQueries.h"
 #include "AI/MDAISubsystem.h"
+#include "AI/MDBehaviourRules.h"
+#include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyCharacter.h"
+#include "AI/MDEnemyArchetype.h"
 #include "AI/MDRallyPoint.h"
 #include "MDAbilitySystemComponent.h"
+#include "MDInventoryComponent.h"
+#include "MDMapZone.h"
+#include "MDPerkComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDPlayerState.h"
 #include "MDPoiseComponent.h"
@@ -12,6 +19,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
 #include "Math/RandomStream.h"
 
@@ -86,12 +94,14 @@ bool UMDPackDirectorSubsystem::IsDebugSlotsEnabled()
 void UMDPackDirectorSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	const double Start = FPlatformTime::Seconds();
 	StepAccumulator += DeltaTime;
 	if (StepAccumulator >= MDPackDirectorLocal::StepInterval)
 	{
 		StepAccumulator = 0.0f;
 		StepPacks(Now());
 	}
+	Profile.Add(FPlatformTime::Seconds() - Start); // the 0.3 ms/frame director budget (2.9), averaged over frames
 	if (IsDebugSlotsEnabled())
 	{
 		DrawSlotsDebug();
@@ -171,6 +181,10 @@ int32 UMDPackDirectorSubsystem::RegisterEnemy(AActor* Enemy, int32 PackId)
 	}
 	AddToPack(*Pack, Enemy);
 	++Pack->SpawnCount;
+	if (!Pack->bTierSet)
+	{
+		ComputeTier(*Pack, Enemy);
+	}
 	return Pack->PackId;
 }
 
@@ -207,6 +221,10 @@ int32 UMDPackDirectorSubsystem::RegisterSpawnGroup(const TArray<AActor*>& Enemie
 		}
 		AddToPack(*Pack, Enemy);
 		++Pack->SpawnCount;
+		if (!Pack->bTierSet)
+		{
+			ComputeTier(*Pack, Enemy);
+		}
 	}
 	return Id;
 }
@@ -266,6 +284,101 @@ void UMDPackDirectorSubsystem::PruneMembers(FMDPack& Pack)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Intelligence tier (V1 WP4)
+// ---------------------------------------------------------------------------------------------------------------------
+
+MDTier::FInputs UMDPackDirectorSubsystem::GatherTierInputs(const AActor* Sample, int32 PackId) const
+{
+	MDTier::FInputs In;
+	In.PackId = PackId;
+	if (const UMDAISubsystem* AI = UMDAISubsystem::Get(GetWorld()))
+	{
+		In.RunSeed = AI->GetRunSeed();
+		TArray<AActor*> Players;
+		AI->CollectPlayerPawns(Players);
+		In.NumPlayers = Players.Num();
+		float PerkSum = 0.0f;
+		float UpgradeSum = 0.0f;
+		for (const AActor* Player : Players)
+		{
+			if (const UMDPerkComponent* Perks = UMDPerkComponent::FindFor(Player))
+			{
+				PerkSum += static_cast<float>(Perks->GetPointsSpent());
+			}
+			const APawn* Pawn = Cast<APawn>(Player);
+			const APlayerState* PS = Pawn ? Pawn->GetPlayerState() : nullptr;
+			if (const UMDInventoryComponent* Inventory = PS ? PS->FindComponentByClass<UMDInventoryComponent>() : nullptr)
+			{
+				// Average upgrade level over the equipped items.
+				float Levels = 0.0f;
+				int32 Equipped = 0;
+				for (const FMDEquippedSlot& Slot : Inventory->GetEquipped())
+				{
+					if (!Slot.ItemRowName.IsNone())
+					{
+						Levels += static_cast<float>(Inventory->GetSlotUpgradeLevel(Slot.Slot));
+						++Equipped;
+					}
+				}
+				UpgradeSum += Equipped > 0 ? Levels / static_cast<float>(Equipped) : 0.0f;
+			}
+		}
+		if (Players.Num() > 0)
+		{
+			In.AvgPerksSpent = PerkSum / static_cast<float>(Players.Num());
+			In.AvgUpgradeLevel = UpgradeSum / static_cast<float>(Players.Num());
+		}
+	}
+	if (Sample)
+	{
+		if (const AMDMapZone* Zone = AMDMapZone::FindZoneAt(this, Sample->GetActorLocation()))
+		{
+			In.ZoneIndex = Zone->ZoneIndex;
+		}
+		if (const AMDEnemyCharacter* Enemy = Cast<AMDEnemyCharacter>(Sample))
+		{
+			if (Enemy->Archetype)
+			{
+				In.MinTier = Enemy->Archetype->MinTier;
+				In.MaxTier = Enemy->Archetype->MaxTier;
+			}
+		}
+	}
+	return In;
+}
+
+void UMDPackDirectorSubsystem::ComputeTier(FMDPack& Pack, const AActor* Sample)
+{
+	const MDTier::FInputs In = GatherTierInputs(Sample, Pack.PackId);
+	const MDTier::FResult Result = MDTier::Compute(In);
+	Pack.bTierSet = true;
+	Pack.Tier = Result.Tier;
+	Pack.ITValue = Result.Value;
+	Pack.PlayersAtSpawn = In.NumPlayers;
+	Pack.AppliedTier = GetPackTier(Pack);
+	Pack.bRolesDirty = true;
+}
+
+EMDIntelligenceTier UMDPackDirectorSubsystem::GetPackTier(const FMDPack& Pack) const
+{
+	EMDIntelligenceTier Forced;
+	if (UMDAISubsystem::TryGetForcedTier(Forced))
+	{
+		return Forced;
+	}
+	return Pack.bTierSet ? Pack.Tier : EMDIntelligenceTier::T0;
+}
+
+EMDIntelligenceTier UMDPackDirectorSubsystem::GetTierOf(const AActor* Enemy) const
+{
+	if (const FMDPack* Pack = FindPackOf(Enemy))
+	{
+		return GetPackTier(*Pack);
+	}
+	return UMDAISubsystem::ResolveTier();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Reports and assignment
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -295,6 +408,34 @@ void UMDPackDirectorSubsystem::ReportDamage(AActor* Enemy, AActor* Instigator, f
 	}
 }
 
+int32 UMDPackDirectorSubsystem::ShareSighting(AActor* Seer, AActor* Player, const FVector& Location, double SightTime, float ShareDelay)
+{
+	if (!Seer || !Player || ShareDelay < 0.0f)
+	{
+		return 0;
+	}
+	const FMDPack* Pack = FindPackOf(Seer);
+	if (!Pack)
+	{
+		return 0;
+	}
+	int32 Told = 0;
+	for (const FMDPackMember& M : Pack->Members)
+	{
+		AActor* Mate = M.Enemy.Get();
+		if (!Mate || Mate == Seer)
+		{
+			continue;
+		}
+		if (UMDEnemyBrainComponent* Brain = UMDEnemyBrainComponent::FindFor(Mate))
+		{
+			Brain->ReceiveSharedSighting(Player, Location, SightTime, ShareDelay);
+			++Told;
+		}
+	}
+	return Told;
+}
+
 bool UMDPackDirectorSubsystem::GetAssignment(const AActor* Enemy, FMDEnemyAssignment& Out) const
 {
 	const FMDPack* Pack = FindPackOf(Enemy);
@@ -307,10 +448,56 @@ bool UMDPackDirectorSubsystem::GetAssignment(const AActor* Enemy, FMDEnemyAssign
 	Out.PackId = Pack->PackId;
 	Out.Role = Member->Role;
 	Out.PackState = Pack->State;
+	Out.Tier = GetPackTier(*Pack);
+	Out.ITValue = Pack->ITValue;
 	Out.FocusTarget = Pack->FocusTarget;
 	Out.Slot = Member->Slot;
 	Out.bHasRally = Pack->bHasRally && Pack->State == EMDPackState::Regroup;
 	Out.RallyPoint = Pack->RallyPoint;
+	Out.PackAlive = Pack->NumAlive();
+
+	// V1 WP5: the centroid of the other living members (the bait's leash) and the guard line point.
+	{
+		FVector Sum = FVector::ZeroVector;
+		int32 Count = 0;
+		for (const FMDPackMember& M : Pack->Members)
+		{
+			if (M.Enemy.IsValid() && M.Enemy.Get() != Enemy && M.Role != EMDRole::Bait)
+			{
+				Sum += M.Enemy->GetActorLocation();
+				++Count;
+			}
+		}
+		if (Count > 0)
+		{
+			Out.bHasPackCentre = true;
+			Out.PackCentre = Sum / static_cast<double>(Count);
+		}
+	}
+	if (Member->Role == EMDRole::Guard && Pack->FocusTarget.IsValid())
+	{
+		const FMDPackMember* Caster = Pack->Members.FindByPredicate([](const FMDPackMember& M) { return M.Report.bCaster && M.Enemy.IsValid(); });
+		TArray<int32> GuardIds;
+		for (const FMDPackMember& M : Pack->Members)
+		{
+			if (M.Role == EMDRole::Guard)
+			{
+				GuardIds.Add(M.EnemyId);
+			}
+		}
+		GuardIds.Sort();
+		const int32 GuardIndex = GuardIds.IndexOfByKey(Member->EnemyId);
+		if (Caster && GuardIndex != INDEX_NONE)
+		{
+			TArray<FVector> Line;
+			MDBehaviour::ComputeGuardLine(Caster->Enemy->GetActorLocation(), Pack->FocusTarget->GetActorLocation(), GuardIds.Num(), Line);
+			if (Line.IsValidIndex(GuardIndex))
+			{
+				Out.bHasGuardPoint = true;
+				Out.GuardPoint = Line[GuardIndex];
+			}
+		}
+	}
 	const AActor* Focus = Pack->FocusTarget.Get();
 	if (Focus && Member->Slot >= 0)
 	{
@@ -334,21 +521,27 @@ bool UMDPackDirectorSubsystem::RequestToken(AActor* Enemy, AActor* Target)
 		return false;
 	}
 	EMDRole Role = EMDRole::None;
+	int32 MaxTokens = UMDAISubsystem::ResolveTierParams().MaxTokensPerPlayer;
 	if (const FMDPack* Pack = FindPackOf(Enemy))
 	{
-		if (Pack->State == EMDPackState::Regroup)
+		MaxTokens = FMDTierParams::ForTier(GetPackTier(*Pack)).MaxTokensPerPlayer; // the requester's own pack tier
+		if (Pack->State == EMDPackState::Regroup || Pack->State == EMDPackState::AmbushArmed)
 		{
-			return false; // a retreating pack does not attack
+			return false; // a retreating pack does not attack, nor does an ambush that has not sprung
 		}
 		if (const FMDPackMember* Member = Pack->FindMember(Enemy))
 		{
 			Role = Member->Role;
 		}
 	}
+	if (!MDBehaviour::CanHoldAttackToken(Role))
+	{
+		return false; // V1 WP5: the Bait never holds a token; Guards hold defence slots on the guard line instead
+	}
 	const int32 EnemyId = AI->GetActorId(Enemy);
 	const float Dist = static_cast<float>(FVector::Dist2D(Enemy->GetActorLocation(), Target->GetActorLocation()));
 	const float Priority = MDPackRules::TokenPriority(Role, Dist, AI->GetRunSeed(), EnemyId);
-	return Tokens.TryGrant(EnemyId, AI->GetActorId(Target), Now(), UMDAISubsystem::ResolveTierParams().MaxTokensPerPlayer, Priority).bGranted;
+	return Tokens.TryGrant(EnemyId, AI->GetActorId(Target), Now(), MaxTokens, Priority).bGranted;
 }
 
 bool UMDPackDirectorSubsystem::HoldsToken(const AActor* Enemy) const
@@ -398,15 +591,6 @@ int32 UMDPackDirectorSubsystem::CountTokensOn(const AActor* Target) const
 
 void UMDPackDirectorSubsystem::StepPacks(double InNow)
 {
-	const EMDIntelligenceTier Tier = UMDAISubsystem::ResolveTier();
-	if (Tier != LastTier)
-	{
-		LastTier = Tier;
-		for (FMDPack& Pack : Packs)
-		{
-			Pack.bRolesDirty = true;
-		}
-	}
 	Tokens.Purge(InNow);
 
 	for (FMDPack& Pack : Packs)
@@ -415,10 +599,16 @@ void UMDPackDirectorSubsystem::StepPacks(double InNow)
 	}
 	Packs.RemoveAll([](const FMDPack& P) { return P.Members.Num() == 0; });
 
-	MergePacks(Tier);
+	MergePacks();
 
 	for (FMDPack& Pack : Packs)
 	{
+		const EMDIntelligenceTier Tier = GetPackTier(Pack);
+		if (Tier != Pack.AppliedTier)
+		{
+			Pack.AppliedTier = Tier; // md.AI.ForceTier changed: assign the roles again
+			Pack.bRolesDirty = true;
+		}
 		Pack.Damage.RemoveAll([InNow](const FMDPackDamageRecord& R) { return InNow - R.Time > MDPack::ThreatWindow || !R.Instigator.IsValid(); });
 		UpdateRoles(Pack, Tier);
 		UpdateFocus(Pack, Tier, InNow);
@@ -449,18 +639,19 @@ void UMDPackDirectorSubsystem::CollectCandidates(const FMDPack& Pack, TArray<AAc
 	}
 }
 
-void UMDPackDirectorSubsystem::MergePacks(EMDIntelligenceTier Tier)
+void UMDPackDirectorSubsystem::MergePacks()
 {
-	if (static_cast<int32>(Tier) < static_cast<int32>(EMDIntelligenceTier::T2))
-	{
-		return;
-	}
 	bool bMerged = true;
 	while (bMerged)
 	{
 		bMerged = false;
 		for (int32 i = 0; i < Packs.Num() && !bMerged; ++i)
 		{
+			const EMDIntelligenceTier Tier = GetPackTier(Packs[i]); // the older pack decides whether it takes others in
+			if (static_cast<int32>(Tier) < static_cast<int32>(EMDIntelligenceTier::T2))
+			{
+				continue;
+			}
 			TArray<AActor*> KnownA;
 			CollectCandidates(Packs[i], KnownA);
 			if (KnownA.Num() == 0)
@@ -538,6 +729,7 @@ void UMDPackDirectorSubsystem::UpdateRoles(FMDPack& Pack, EMDIntelligenceTier Ti
 		FMDRoleCandidate& C = Candidates.AddDefaulted_GetRef();
 		C.Id = M.EnemyId;
 		C.AllowedMask = M.Report.AllowedMask;
+		C.bIsCaster = M.Report.bCaster;
 	}
 	TArray<EMDRole> Roles;
 	MDPackRules::AssignRoles(Candidates, Tier, Roles);
@@ -629,8 +821,54 @@ void UMDPackDirectorSubsystem::UpdateFocus(FMDPack& Pack, EMDIntelligenceTier Ti
 	}
 }
 
+void UMDPackDirectorSubsystem::SetAmbushArmed(int32 PackId, bool bArmed)
+{
+	if (FMDPack* Pack = FindPackMutable(PackId))
+	{
+		Pack->bAmbushArmed = bArmed;
+		if (bArmed)
+		{
+			Pack->State = EMDPackState::AmbushArmed;
+		}
+		else if (Pack->State == EMDPackState::AmbushArmed)
+		{
+			Pack->State = EMDPackState::Engage;
+		}
+	}
+}
+
+bool UMDPackDirectorSubsystem::TryPackBark(const AActor* Enemy, uint8 Cue)
+{
+	FMDPack* Pack = FindPackOfMutable(Enemy);
+	if (!Pack)
+	{
+		return true;
+	}
+	const double* Last = Pack->LastBarkTime.Find(Cue);
+	if (!MDBehaviour::BarkAllowed(Now(), Last ? *Last : -1.0))
+	{
+		return false;
+	}
+	Pack->LastBarkTime.Add(Cue, Now());
+	return true;
+}
+
+int32 UMDPackDirectorSubsystem::FindGroupPack(FName GroupKey) const
+{
+	if (const int32* Found = GroupPacks.Find(GroupKey))
+	{
+		return FindPack(*Found) ? *Found : 0;
+	}
+	return 0;
+}
+
 void UMDPackDirectorSubsystem::UpdatePackState(FMDPack& Pack, EMDIntelligenceTier Tier, double InNow)
 {
+	if (Pack.bAmbushArmed)
+	{
+		Pack.State = EMDPackState::AmbushArmed; // waiting for the trigger: no retreat, no pressing
+		return;
+	}
 	const UMDAISubsystem* AI = UMDAISubsystem::Get(GetWorld());
 	const bool bAnyRally = HasAnyRallyPoint(InNow);
 	const int32 Alive = Pack.NumAlive();
@@ -641,7 +879,7 @@ void UMDPackDirectorSubsystem::UpdatePackState(FMDPack& Pack, EMDIntelligenceTie
 		Pack.bRetreatDone = false; // recovered (reinforcements, a merge): the pack may retreat again at the next low point
 	}
 
-	const int32 MaxTokens = UMDAISubsystem::ResolveTierParams().MaxTokensPerPlayer;
+	const int32 MaxTokens = FMDTierParams::ForTier(Tier).MaxTokensPerPlayer;
 	int32 TokensOnFocus = 0;
 	if (const AActor* Focus = Pack.FocusTarget.Get())
 	{
@@ -710,6 +948,10 @@ void UMDPackDirectorSubsystem::UpdateSlots(FMDPack& Pack)
 		{
 			continue;
 		}
+		if (M.Role == EMDRole::Bait || M.Role == EMDRole::Guard)
+		{
+			continue; // V1 WP5: the bait and the guards stand where their own rules put them, not on the attack ring
+		}
 		Indices.Add(i);
 		FMDSlotMember& S = Request.AddDefaulted_GetRef();
 		S.Id = M.EnemyId;
@@ -727,7 +969,9 @@ void UMDPackDirectorSubsystem::UpdateSlots(FMDPack& Pack)
 	Pack.ThreatRadius = ThreatSum / static_cast<float>(Request.Num());
 
 	TArray<int32> Slots;
-	MDPackRules::AssignSlots(Request, Pack.RingYawDeg, Focus->GetActorRotation().Yaw, Slots);
+	// V1 WP5 Swarm (T1+, 3 or more): the attackers take evenly spaced slots, never bunched on one side.
+	const bool bSwarm = static_cast<int32>(GetPackTier(Pack)) >= static_cast<int32>(EMDIntelligenceTier::T1) && Request.Num() >= MDBehaviour::SwarmMinPack;
+	MDPackRules::AssignSlots(Request, Pack.RingYawDeg, Focus->GetActorRotation().Yaw, Slots, bSwarm);
 	for (int32 k = 0; k < Indices.Num(); ++k)
 	{
 		Pack.Members[Indices[k]].Slot = Slots[k];
@@ -740,43 +984,14 @@ void UMDPackDirectorSubsystem::UpdateSlots(FMDPack& Pack)
 
 bool UMDPackDirectorSubsystem::HasAnyRallyPoint(double InNow)
 {
-	if (InNow >= NextRallyRefresh)
-	{
-		NextRallyRefresh = InNow + MDPackDirectorLocal::RallyRefreshInterval;
-		RallyActors.Reset();
-		if (UWorld* World = GetWorld())
-		{
-			for (TActorIterator<AActor> It(World); It; ++It)
-			{
-				if (It->ActorHasTag(AMDRallyPoint::RallyTag))
-				{
-					RallyActors.Add(*It);
-				}
-			}
-		}
-	}
-	RallyActors.RemoveAll([](const TWeakObjectPtr<AActor>& A) { return !A.IsValid(); });
-	return RallyActors.Num() > 0;
+	// V1 WP3: the rally actors (cached by the AI subsystem) filtered through the room-reveal gate, with the room-entry fallback.
+	FVector Unused;
+	return FindRallyPoint(FVector::ZeroVector, Unused);
 }
 
 bool UMDPackDirectorSubsystem::FindRallyPoint(const FVector& Near, FVector& OutPoint) const
 {
-	double Best = TNumericLimits<double>::Max();
-	bool bFound = false;
-	for (const TWeakObjectPtr<AActor>& A : RallyActors)
-	{
-		if (const AActor* Actor = A.Get())
-		{
-			const double D = FVector::DistSquared(Near, Actor->GetActorLocation());
-			if (D < Best)
-			{
-				Best = D;
-				OutPoint = Actor->GetActorLocation();
-				bFound = true;
-			}
-		}
-	}
-	return bFound;
+	return MDAIQueries::FindRallyPointFor(GetWorld(), Near, OutPoint);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

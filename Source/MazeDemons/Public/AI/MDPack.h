@@ -24,6 +24,9 @@ struct FMDMemberReport
 
 	// In a stagger / stun reaction (recovering).
 	bool bRecovering = false;
+
+	// V1 WP5: a caster (archetype bIsCaster): the pack's Guards screen it.
+	bool bCaster = false;
 };
 
 struct FMDPackMember
@@ -72,6 +75,13 @@ struct FMDPack
 
 	bool bRolesDirty = true;
 
+	// V1 WP5: an ambush group waiting for its trigger (state AmbushArmed, no tokens, no retreat).
+	bool bAmbushArmed = false;
+
+	// V1 WP5 pack barks (swarm howl / fall back): world time of the last one per cue (EMDBehaviourCue as int), so a pack barks
+	// once per MDBehaviour::BarkInterval, not once per member.
+	TMap<uint8, double> LastBarkTime;
+
 	// The ring's rotation in the world (degrees), fixed per pack so the ring does not spin as the target turns.
 	float RingYawDeg = 0.0f;
 	float SlotRadius = 200.0f;
@@ -82,6 +92,17 @@ struct FMDPack
 	// The rally point the retreat runs to (chosen when the retreat starts).
 	FVector RallyPoint = FVector::ZeroVector;
 	bool bHasRally = false;
+
+	// V1 WP4: the intelligence tier, computed once when the pack gets its first member and fixed for the pack's life
+	// (UMDPackDirectorSubsystem::ComputeTier). ITValue is the 3.1 value including the seeded jitter. md.AI.ForceTier overrides
+	// the tier at read time (GetPackTier) without touching these.
+	bool bTierSet = false;
+	EMDIntelligenceTier Tier = EMDIntelligenceTier::T0;
+	float ITValue = 0.0f;
+	// Players counted when the tier was computed (late joiners only affect packs spawned after them).
+	int32 PlayersAtSpawn = 0;
+	// The tier the roles were last assigned for (a changed force-tier re-runs the role assignment).
+	EMDIntelligenceTier AppliedTier = EMDIntelligenceTier::T0;
 
 	int32 NumAlive() const { return Members.Num(); }
 
@@ -101,6 +122,9 @@ struct FMDEnemyAssignment
 	int32 PackId = 0;
 	EMDRole Role = EMDRole::None;
 	EMDPackState PackState = EMDPackState::Engage;
+	// The pack's effective tier (md.AI.ForceTier applied) and its ITValue (debug overlay).
+	EMDIntelligenceTier Tier = EMDIntelligenceTier::T0;
+	float ITValue = 0.0f;
 	TWeakObjectPtr<AActor> FocusTarget;
 
 	int32 Slot = -1;
@@ -111,4 +135,16 @@ struct FMDEnemyAssignment
 
 	bool bHasRally = false;
 	FVector RallyPoint = FVector::ZeroVector;
+
+	// ---- V1 WP5 ----
+	// Members alive in the pack.
+	int32 PackAlive = 0;
+
+	// Centroid of the other living members (the bait's 8 m leash is measured from it).
+	bool bHasPackCentre = false;
+	FVector PackCentre = FVector::ZeroVector;
+
+	// A Guard's point on the guard line between the pack's caster and the focus target (its "defence token" is this slot).
+	bool bHasGuardPoint = false;
+	FVector GuardPoint = FVector::ZeroVector;
 };

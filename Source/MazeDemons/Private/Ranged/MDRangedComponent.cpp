@@ -18,10 +18,44 @@
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 #include "Ranged/MDRangedWeaponData.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Components/CapsuleComponent.h"
+#include "DrawDebugHelpers.h"
+#include "GameFramework/GameStateBase.h"
+#include "GameFramework/PlayerController.h"
+#include "HAL/IConsoleManager.h"
+#include "MDAbilitySystemComponent.h"
+#include "MDCombatFeedbackComponent.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "Ranged/MDProjectile.h"
+#include "Ranged/MDRangedFX.h"
+#include "MDUISettings.h"
+#include "Ranged/MDReloadAbility.h"
+#include "Ranged/MDRangedFireAbility.h"
+#include "Ranged/MDRangedReticleWidget.h"
+#include "Ranged/MDRangedStatics.h"
+
+namespace MDRangedComponentLocal
+{
+	TAutoConsoleVariable<int32> CVarAutoReload(TEXT("md.Ranged.AutoReload"), 1,
+		TEXT("R3: 1 = reload automatically when the magazine runs empty (and when the trigger is pulled on an empty one); 0 = manual reload only."));
+
+	TAutoConsoleVariable<float> CVarReloadScale(TEXT("md.Ranged.ReloadScale"), 1.0f, TEXT("Tuning: multiplier on every gun's reload time."));
+
+	TAutoConsoleVariable<float> CVarDamageScale(TEXT("md.Ranged.DamageScale"), 1.0f, TEXT("Tuning: multiplier on every gun's damage per shot."));
+
+	TAutoConsoleVariable<int32> CVarDrawShots(TEXT("md.Ranged.DrawShots"), 0, TEXT("1 = draw every shot request on the server (green accepted, red rejected)."));
+
+	constexpr float SemiBufferSeconds = 0.15f;
+	constexpr float AimTraceRange = 6000.0f;
+	constexpr float MovingSpeed = 50.0f;
+}
 
 UMDRangedComponent::UMDRangedComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false; // switched on while the owner holds fire or the recoil / kick is settling
 	SetIsReplicatedByDefault(true);
 }
 
@@ -31,6 +65,11 @@ void UMDRangedComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(UMDRangedComponent, bRangedMode);
 	DOREPLIFETIME(UMDRangedComponent, bAimed);
 	DOREPLIFETIME_CONDITION(UMDRangedComponent, Mags, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UMDRangedComponent, ShotAck, COND_OwnerOnly);
+	DOREPLIFETIME(UMDRangedComponent, bReloading);
+	DOREPLIFETIME(UMDRangedComponent, ReloadStartServerTime);
+	DOREPLIFETIME(UMDRangedComponent, ReloadDuration);
+	DOREPLIFETIME(UMDRangedComponent, bAutoReloadPref);
 }
 
 UMDRangedComponent* UMDRangedComponent::Find(const AActor* Actor)
@@ -80,11 +119,35 @@ void UMDRangedComponent::BeginPlay()
 		BoundInventory = Inv;
 		Inv->OnEquipmentChanged.AddUniqueDynamic(this, &UMDRangedComponent::HandleEquipmentChanged);
 	}
+	// R1: the LocalPredicted fire ability lives on the player's ASC (PlayerState). Granted once by the server; it replicates to the owner.
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+		{
+			if (!ASC->FindAbilitySpecFromClass(UMDRangedFireAbility::StaticClass()))
+			{
+				ASC->GrantAbility(UMDRangedFireAbility::StaticClass());
+			}
+			if (!ASC->FindAbilitySpecFromClass(UMDReloadAbility::StaticClass()))
+			{
+				ASC->GrantAbility(UMDReloadAbility::StaticClass());
+			}
+		}
+	}
 	ApplyModeLocally();
 }
 
 void UMDRangedComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (Reticle)
+	{
+		Reticle->RemoveFromParent();
+		Reticle = nullptr;
+	}
+	if (const UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReloadTimer);
+	}
 	if (UMDInventoryComponent* Inv = BoundInventory.Get())
 	{
 		Inv->OnEquipmentChanged.RemoveDynamic(this, &UMDRangedComponent::HandleEquipmentChanged);
@@ -94,6 +157,10 @@ void UMDRangedComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 UMDRangedWeaponData* UMDRangedComponent::GetEquippedWeaponData() const
 {
+	if (TestData)
+	{
+		return TestData;
+	}
 	const UMDInventoryComponent* Inv = GetInventory();
 	return Inv ? Inv->GetEquippedRangedData() : nullptr;
 }
@@ -152,6 +219,7 @@ void UMDRangedComponent::SetRangedMode(bool bNewMode)
 	if (!bRangedMode)
 	{
 		bAimed = false;
+		CancelReload(); // holstering the gun aborts a reload; nothing was moved yet
 	}
 	ApplyModeLocally();
 	OnRangedModeChanged.Broadcast(bRangedMode);
@@ -182,6 +250,12 @@ void UMDRangedComponent::ApplyModeLocally()
 	}
 	SetMeleeWeaponsHidden(bRangedMode);
 	RefreshWeaponMesh();
+	UpdateReticle();
+	if (!bRangedMode)
+	{
+		bFireHeld = false;
+		bSemiPending = false;
+	}
 }
 
 void UMDRangedComponent::SetMeleeWeaponsHidden(bool bHidden)
@@ -229,7 +303,12 @@ void UMDRangedComponent::HandleEquipmentChanged()
 	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
 	const FName GunRow = Data && Inv ? Inv->GetEquippedRangedRow() : NAME_None;
 	const bool bGunJustEquipped = !GunRow.IsNone() && GunRow != LastGunRow;
+	const FName PreviousGunRow = LastGunRow;
 	LastGunRow = GunRow;
+	if (GunRow != PreviousGunRow)
+	{
+		CancelReload(); // a different gun in the hand: the old reload means nothing
+	}
 
 	if (FMDRangedRules::ShouldLeaveRangedMode(bRangedMode, Data != nullptr))
 	{
@@ -240,12 +319,22 @@ void UMDRangedComponent::HandleEquipmentChanged()
 		SetRangedMode(true);
 	}
 
-	// A new gun starts with a full magazine for now (R1 owns real ammo flow).
-	if (Data && Inv)
+	// R3: the magazine belongs to the gun. Swapping away remembers the rounds; swapping back restores them. A gun this player has
+	// never held starts with a full magazine, once.
+	if (GunRow != PreviousGunRow)
 	{
-		if (GetMagRounds(MDItemType::RangedSlot) == 0 && bGunJustEquipped)
+		if (!PreviousGunRow.IsNone())
 		{
-			SetMagRounds(MDItemType::RangedSlot, Data->MagSize);
+			StashedMags.Add(PreviousGunRow, GetMagRounds(MDItemType::RangedSlot));
+		}
+		if (Data && !GunRow.IsNone())
+		{
+			const int32* Stashed = StashedMags.Find(GunRow);
+			SetMagRounds(MDItemType::RangedSlot, Stashed ? FMath::Min(*Stashed, Data->MagSize) : Data->MagSize);
+		}
+		else
+		{
+			SetMagRounds(MDItemType::RangedSlot, 0);
 		}
 	}
 }
@@ -324,6 +413,8 @@ void UMDRangedComponent::RefreshWeaponMesh()
 			Rel = NewComp->GetSocketTransform(Data->GripRSocket, RTS_Component).Inverse();
 		}
 		NewComp->SetRelativeTransform(Rel);
+		WeaponBaseRelative = Rel;
+		bKickApplied = false;
 		WeaponMeshComp = NewComp;
 		WeaponMeshRow = Row;
 	}
@@ -367,6 +458,7 @@ void UMDRangedComponent::DebugSetHandOffset(const FTransform& HandOffset, FName 
 			WeaponMeshComp->AttachToComponent(WeaponMeshComp->GetAttachParent(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, Socket);
 		}
 		WeaponMeshComp->SetRelativeTransform(HandOffset);
+		WeaponBaseRelative = HandOffset;
 	}
 }
 
@@ -406,3 +498,839 @@ void UMDRangedComponent::SetMagRounds(uint8 Slot, int32 Rounds)
 	NewMag.Rounds = Rounds;
 	Mags.Add(NewMag);
 }
+
+// =====================================================================================================================
+// R1 fire pipeline
+// =====================================================================================================================
+
+APawn* UMDRangedComponent::GetPawn() const
+{
+	if (TestPawn.IsValid())
+	{
+		return TestPawn.Get();
+	}
+	const APlayerState* PS = Cast<APlayerState>(GetOwner());
+	return PS ? PS->GetPawn() : nullptr;
+}
+
+APlayerController* UMDRangedComponent::GetOwnerController() const
+{
+	const APlayerState* PS = Cast<APlayerState>(GetOwner());
+	return PS ? PS->GetPlayerController() : nullptr;
+}
+
+bool UMDRangedComponent::IsOwnerLocal() const
+{
+	const APlayerController* PC = GetOwnerController();
+	return PC && PC->IsLocalController();
+}
+
+double UMDRangedComponent::GetServerNow() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return 0.0;
+	}
+	if (const AGameStateBase* GS = World->GetGameState())
+	{
+		return GS->GetServerWorldTimeSeconds();
+	}
+	return World->GetTimeSeconds();
+}
+
+int32 UMDRangedComponent::GetViewMagRounds() const
+{
+	return FMath::Max(GetMagRounds(MDItemType::RangedSlot) - PendingShotIds.Num(), 0);
+}
+
+float UMDRangedComponent::GetBloomNow(bool bServer) const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	const UWorld* World = GetWorld();
+	if (!Data || !World)
+	{
+		return 0.0f;
+	}
+	const float Bloom = bServer ? ServerBloom : LocalBloom;
+	const double Since = World->GetTimeSeconds() - (bServer ? ServerBloomTime : LocalBloomTime);
+	return FMDRangedMath::DecayBloom(Bloom, Data->SpreadBloomDecay, static_cast<float>(Since));
+}
+
+float UMDRangedComponent::GetCurrentSpread(bool bServer) const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	if (!Data)
+	{
+		return 0.0f;
+	}
+	const APawn* Pawn = GetPawn();
+	const bool bMoving = Pawn && Pawn->GetVelocity().Size2D() > MDRangedComponentLocal::MovingSpeed;
+	const float Base = bAimed ? Data->SpreadAimed : Data->SpreadHip;
+	// SpreadMoving is a multiplier on the base spread while the shooter moves.
+	return FMDRangedMath::ComputeSpread(Base, bMoving, Data->SpreadMoving, GetBloomNow(bServer));
+}
+
+bool UMDRangedComponent::GetMuzzleWorld(FVector& OutMuzzle) const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	if (WeaponMeshComp && Data)
+	{
+		if (WeaponMeshComp->DoesSocketExist(Data->MuzzleSocket))
+		{
+			OutMuzzle = WeaponMeshComp->GetSocketLocation(Data->MuzzleSocket);
+			return true;
+		}
+		if (Data->bHasMuzzleLocal)
+		{
+			OutMuzzle = WeaponMeshComp->GetComponentTransform().TransformPosition(Data->MuzzleLocal);
+			return true;
+		}
+	}
+	// No visual gun on this machine (dedicated server, tests): a point in front of the eyes.
+	if (const APawn* Pawn = GetPawn())
+	{
+		OutMuzzle = Pawn->GetPawnViewLocation() + Pawn->GetBaseAimRotation().Vector() * 40.0f
+			- FVector(0.0, 0.0, 20.0);
+		return true;
+	}
+	return false;
+}
+
+bool UMDRangedComponent::ComputeAimLocal(FVector& OutMuzzle, FVector& OutAimDir, float& OutAimDistance) const
+{
+	const APlayerController* PC = GetOwnerController();
+	const APawn* Pawn = GetPawn();
+	UWorld* World = GetWorld();
+	if (!PC || !Pawn || !World || !GetMuzzleWorld(OutMuzzle))
+	{
+		return false;
+	}
+	FVector CamLoc;
+	FRotator CamRot;
+	PC->GetPlayerViewPoint(CamLoc, CamRot);
+	const FVector Fwd = CamRot.Vector();
+	// Start the trace past the pawn so a third-person camera does not aim at the player's own back or at a wall behind them.
+	const double Ahead = FMath::Max(FVector::DotProduct(Pawn->GetActorLocation() - CamLoc, Fwd), 0.0);
+	const FVector Start = CamLoc + Fwd * Ahead;
+	const FVector End = Start + Fwd * MDRangedComponentLocal::AimTraceRange;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDRangedAim), false, Pawn);
+	FHitResult Hit;
+	const FVector AimPoint = World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params) ? FVector(Hit.ImpactPoint) : End;
+	FVector ToAim = AimPoint - OutMuzzle;
+	OutAimDistance = static_cast<float>(ToAim.Size());
+	if (OutAimDistance < 30.0f || FVector::DotProduct(ToAim, Fwd) <= 0.0)
+	{
+		OutAimDir = Fwd; // aim point is behind / on the muzzle (wall right in front of the player): shoot straight along the view
+		OutAimDistance = FMath::Max(OutAimDistance, 30.0f);
+		return true;
+	}
+	OutAimDir = ToAim / OutAimDistance;
+	return true;
+}
+
+bool UMDRangedComponent::ComputeAimServer(const FVector& ClaimedOrigin, FVector& OutAimDir, float& OutAimDistance) const
+{
+	const APawn* Pawn = GetPawn();
+	UWorld* World = GetWorld();
+	if (!Pawn || !World)
+	{
+		return false;
+	}
+	const FVector Eye = Pawn->GetPawnViewLocation();
+	const FVector Fwd = Pawn->GetBaseAimRotation().Vector();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDRangedAimServer), false, Pawn);
+	FHitResult Hit;
+	const FVector End = Eye + Fwd * MDRangedComponentLocal::AimTraceRange;
+	const FVector AimPoint = World->LineTraceSingleByChannel(Hit, Eye, End, ECC_Visibility, Params) ? FVector(Hit.ImpactPoint) : End;
+	FVector ToAim = AimPoint - ClaimedOrigin;
+	OutAimDistance = static_cast<float>(ToAim.Size());
+	if (OutAimDistance < 30.0f || FVector::DotProduct(ToAim, Fwd) <= 0.0)
+	{
+		OutAimDir = Fwd;
+		OutAimDistance = FMath::Max(OutAimDistance, 30.0f);
+		return true;
+	}
+	OutAimDir = ToAim / OutAimDistance;
+	return true;
+}
+
+void UMDRangedComponent::SetFireHeld(bool bHeld)
+{
+	if (bHeld)
+	{
+		if (!IsOwnerLocal() || !bRangedMode)
+		{
+			return;
+		}
+		bFireHeld = true;
+		bSemiPending = true;
+		const UWorld* World = GetWorld();
+		SemiBufferUntil = (World ? World->GetTimeSeconds() : 0.0) + MDRangedComponentLocal::SemiBufferSeconds;
+		SetComponentTickEnabled(true);
+	}
+	else
+	{
+		bFireHeld = false;
+		bSemiPending = false;
+	}
+}
+
+bool UMDRangedComponent::TryActivateFire()
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	const UWorld* World = GetWorld();
+	if (!Data || !World || !bRangedMode || bReloading)
+	{
+		return false;
+	}
+	if (GetViewMagRounds() <= 0)
+	{
+		// R3: an empty magazine cannot fire; pulling the trigger asks for the reload (when auto-reload is on).
+		if (IsAutoReloadEnabled() && !Data->AmmoRow.IsNone())
+		{
+			TryActivateReload();
+		}
+		return false;
+	}
+	if (World->GetTimeSeconds() < NextLocalShotTime)
+	{
+		return false;
+	}
+	if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		if (ASC->FindAbilitySpecFromClass(UMDRangedFireAbility::StaticClass()))
+		{
+			return ASC->TryActivateAbilityByClass(UMDRangedFireAbility::StaticClass());
+		}
+	}
+	return FireShotLocal();
+}
+
+bool UMDRangedComponent::FireShotLocal()
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	UWorld* World = GetWorld();
+	APawn* Pawn = GetPawn();
+	if (!Data || !World || !Pawn || !bRangedMode || Data->HitModel != EMDRangedHitModel::Projectile)
+	{
+		return false;
+	}
+	const double Now = World->GetTimeSeconds();
+	if (Now < NextLocalShotTime || GetViewMagRounds() <= 0 || bReloading || UMDGameplayStatics::IsPawnDead(Pawn) || UMDPoiseComponent::IsActorStunned(Pawn))
+	{
+		return false;
+	}
+	FVector Muzzle;
+	FVector AimDir;
+	float AimDistance = 0.0f;
+	if (!ComputeAimLocal(Muzzle, AimDir, AimDistance))
+	{
+		return false;
+	}
+
+	const int32 Seed = FMath::Rand();
+	const float Spread = GetCurrentSpread(false);
+	const FVector Dir = FMDRangedMath::SpreadDirection(AimDir, Spread, Seed);
+
+	FMDShotRequest Request;
+	Request.ShotId = NextShotId++;
+	Request.ClientTime = static_cast<float>(GetServerNow());
+	Request.Origin = Muzzle;
+	Request.Dir = Dir;
+	Request.SpreadSeed = Seed;
+
+	NextLocalShotTime = Now + 1.0 / FMath::Max(Data->RoundsPerSecond, 0.1f);
+	LocalBloom = FMDRangedMath::AddBloom(GetBloomNow(false), Data->SpreadBloom, Data->MaxBloom);
+	LocalBloomTime = Now;
+
+	AddRecoil(*Data, Seed);
+	ApplyWeaponKick();
+	PlayShotCosmetics(Muzzle, Dir);
+
+	if (GetOwner()->HasAuthority())
+	{
+		ProcessShot(Request, 0.0f);
+	}
+	else
+	{
+		PendingShotIds.Add(Request.ShotId);
+		FMDProjectileParams Twin;
+		Twin.Data = const_cast<UMDRangedWeaponData*>(Data);
+		Twin.Shooter = Pawn;
+		Twin.Origin = Muzzle;
+		Twin.Dir = Dir;
+		Twin.ShotId = Request.ShotId;
+		AMDProjectile::SpawnTwin(World, Twin);
+		Server_Fire(Request);
+	}
+	SetComponentTickEnabled(true);
+	return true;
+}
+
+void UMDRangedComponent::Server_Fire_Implementation(const FMDShotRequest& Request)
+{
+	ProcessShot(Request, -1.0f);
+}
+
+EMDShotReject UMDRangedComponent::ProcessShot(const FMDShotRequest& Request, float RTTOverrideSeconds)
+{
+	UWorld* World = GetWorld();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !World)
+	{
+		return EMDShotReject::State;
+	}
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	APawn* Pawn = GetPawn();
+	const uint8 Slot = MDItemType::RangedSlot;
+
+	FMDShotValidationInput In;
+	In.bRangedMode = bRangedMode;
+	In.bGunEquipped = Data != nullptr && Data->HitModel == EMDRangedHitModel::Projectile;
+	In.bDead = !Pawn || UMDGameplayStatics::IsPawnDead(Pawn);
+	In.bStaggered = Pawn && UMDPoiseComponent::IsActorStunned(Pawn);
+	In.bBusy = bReloading;
+	In.MagRounds = GetMagRounds(Slot);
+	In.RoundsPerSecond = Data ? Data->RoundsPerSecond : 0.0f;
+	In.SecondsSinceLastShot = LastAcceptedClientTime < -999.0 ? 1000.0f : static_cast<float>(Request.ClientTime - LastAcceptedClientTime);
+	In.ClientTimeAheadOfServer = static_cast<float>(Request.ClientTime - GetServerNow());
+	In.Origin = Request.Origin;
+	In.Dir = Request.Dir;
+	In.SpreadDeg = GetCurrentSpread(true);
+
+	FVector ServerMuzzle = Request.Origin;
+	if (Pawn)
+	{
+		GetMuzzleWorld(ServerMuzzle);
+	}
+	In.ServerMuzzle = ServerMuzzle;
+
+	float AimDistance = 1000.0f;
+	FVector ServerAim = Request.Dir;
+	if (Pawn)
+	{
+		ComputeAimServer(Request.Origin, ServerAim, AimDistance);
+	}
+	In.ServerAimDir = ServerAim;
+	// The client aims along the camera ray, the server along the eye ray: at short range the two aim points differ by the camera offset.
+	In.AimLagSlackDeg = FMath::RadiansToDegrees(FMath::Atan(150.0f / FMath::Max(AimDistance, 200.0f))) + 4.0f;
+
+	const EMDShotReject Verdict = UMDRangedStatics::ValidateShot(In);
+	if (MDRangedComponentLocal::CVarDrawShots.GetValueOnGameThread() != 0)
+	{
+		DrawDebugLine(World, Request.Origin, Request.Origin + FVector(Request.Dir) * 500.0, Verdict == EMDShotReject::None ? FColor::Green : FColor::Red, false, 1.5f, 0, 1.0f);
+	}
+	if (Verdict != EMDShotReject::None)
+	{
+		FinishShotServer(Request, Verdict);
+		return Verdict;
+	}
+
+	// ---- accepted ----
+	LastAcceptedClientTime = Request.ClientTime;
+	++AcceptedShots;
+	LastReject = EMDShotReject::None;
+	ServerBloom = FMDRangedMath::AddBloom(GetBloomNow(true), Data->SpreadBloom, Data->MaxBloom);
+	ServerBloomTime = World->GetTimeSeconds();
+
+	const int32 NewRounds = In.MagRounds - 1;
+	SetMagRounds(Slot, NewRounds);
+	++ShotsSinceAmmoDrop; // pity counter for the ammo drops
+	if (NewRounds <= 0 && IsAutoReloadEnabled())
+	{
+		BeginReloadServer();
+	}
+
+	float Damage = Data->DamagePerShot * MDRangedComponentLocal::CVarDamageScale.GetValueOnGameThread();
+	if (const UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		Damage *= 1.0f + ASC->GetPerkAttackPct();
+	}
+	if (const UMDInventoryComponent* Inv = GetInventory())
+	{
+		Damage *= Inv->GetSlotConditionMultiplier(Slot);
+	}
+
+	float RTT = RTTOverrideSeconds;
+	if (RTT < 0.0f)
+	{
+		const APlayerState* PS = Cast<APlayerState>(GetOwner());
+		RTT = PS ? PS->GetPingInMilliseconds() / 1000.0f : 0.0f;
+	}
+	const float FastForward = UMDRangedStatics::ComputeSpawnFastForward(RTT);
+
+	const int32 Pellets = FMath::Max(Data->Pellets, 1);
+	for (int32 i = 0; i < Pellets; ++i)
+	{
+		FMDProjectileParams P;
+		P.Data = const_cast<UMDRangedWeaponData*>(Data);
+		P.Shooter = Pawn;
+		P.Origin = Request.Origin;
+		P.Dir = i == 0 ? FVector(Request.Dir) : FMDRangedMath::SpreadDirection(Request.Dir, In.SpreadDeg, Request.SpreadSeed + i);
+		P.Damage = Damage;
+		P.FastForward = FastForward;
+		P.ShotId = Request.ShotId;
+		AMDProjectile::SpawnReal(World, P);
+	}
+
+	UMDRangedStatics::ReportGunshot(World, Request.Origin, Pawn);
+	Multicast_ShotFX(Request.Origin, Request.Dir);
+	FinishShotServer(Request, EMDShotReject::None);
+	return EMDShotReject::None;
+}
+
+void UMDRangedComponent::FinishShotServer(const FMDShotRequest& Request, EMDShotReject Reason)
+{
+	ShotAck = Request.ShotId;
+	if (Reason != EMDShotReject::None)
+	{
+		LastReject = Reason;
+		Client_CorrectMag(MDItemType::RangedSlot, GetMagRounds(MDItemType::RangedSlot), Request.ShotId);
+	}
+	// PlayerStates replicate slowly; the ack and the magazine should reach the owner now.
+	if (AActor* Owner = GetOwner())
+	{
+		Owner->ForceNetUpdate();
+	}
+}
+
+void UMDRangedComponent::Client_CorrectMag_Implementation(uint8 Slot, int32 Rounds, uint16 ShotId)
+{
+	++MagCorrections;
+	LastCorrectedRounds = Rounds;
+	if (FMDSlotMag* Mag = Mags.FindByPredicate([Slot](const FMDSlotMag& M) { return M.Slot == Slot; }))
+	{
+		Mag->Rounds = Rounds;
+	}
+	PendingShotIds.RemoveAll([ShotId](uint16 Id) { return FMDRangedMath::IsShotAcked(Id, ShotId); });
+}
+
+void UMDRangedComponent::Multicast_ShotFX_Implementation(FVector_NetQuantize Origin, FVector_NetQuantizeNormal Dir)
+{
+	const UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer || IsOwnerLocal())
+	{
+		return; // the shooter already played it when pulling the trigger
+	}
+	PlayShotCosmetics(Origin, Dir);
+}
+
+void UMDRangedComponent::OnRep_ShotAck()
+{
+	TrimPendingShots();
+}
+
+void UMDRangedComponent::TrimPendingShots()
+{
+	const uint16 Ack = ShotAck;
+	PendingShotIds.RemoveAll([Ack](uint16 Id) { return FMDRangedMath::IsShotAcked(Id, Ack); });
+}
+
+void UMDRangedComponent::NotifyShotLanded()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	UMDInventoryComponent* Inv = GetInventory();
+	if (!Data || !Inv)
+	{
+		return;
+	}
+	const int32 Points = FMDRangedMath::AccumulateWear(WearAccumulator, Data->WearPerHit);
+	if (Points > 0)
+	{
+		Inv->ApplyWearToSlot(MDItemType::RangedSlot, Points);
+	}
+}
+
+void UMDRangedComponent::PlayShotCosmetics(const FVector& Origin, const FVector& Dir)
+{
+	UWorld* World = GetWorld();
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	if (!World || !Data || World->GetNetMode() == NM_DedicatedServer || Data->MuzzleFlashFX.IsNull())
+	{
+		return;
+	}
+	if (UNiagaraSystem* FX = Data->MuzzleFlashFX.LoadSynchronous())
+	{
+		// Capped one-shot: a looping muzzle system would otherwise stay alive (and pile up) for the rest of the session.
+		MDRangedFX::SpawnOneShot(World, FX, Origin, FRotator(Dir.Rotation()), FVector::OneVector, MDRangedFX::MuzzleMaxSeconds);
+	}
+}
+
+void UMDRangedComponent::AddRecoil(const UMDRangedWeaponData& Data, int32 Seed)
+{
+	APlayerController* PC = GetOwnerController();
+	if (!PC)
+	{
+		return;
+	}
+	const FVector2D Kick = FMDRangedMath::RecoilKick(Data.RecoilPitch, Data.RecoilYaw, Seed);
+	FRotator Rot = PC->GetControlRotation();
+	Rot.Pitch += Kick.X;
+	Rot.Yaw += Kick.Y;
+	PC->SetControlRotation(Rot);
+	RecoilPitch += static_cast<float>(Kick.X);
+	RecoilYaw += static_cast<float>(Kick.Y);
+}
+
+void UMDRangedComponent::ApplyWeaponKick()
+{
+	KickAlpha = 1.0f;
+	bKickApplied = true;
+}
+
+void UMDRangedComponent::UpdateReticle()
+{
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	SyncAutoReloadPref();
+	const bool bWant = bRangedMode && IsOwnerLocal() && GetEquippedWeaponData() != nullptr;
+	if (bWant && !Reticle)
+	{
+		if (APlayerController* PC = GetOwnerController())
+		{
+			Reticle = CreateWidget<UMDRangedReticleWidget>(PC);
+			if (Reticle)
+			{
+				Reticle->SetRanged(this);
+				Reticle->AddToViewport(50);
+				if (UMDCombatFeedbackComponent* Feedback = UMDCombatFeedbackComponent::FindLocal(World))
+				{
+					Feedback->OnRangedHitConfirmed.AddUniqueDynamic(Reticle, &UMDRangedReticleWidget::OnHitConfirmed);
+				}
+			}
+		}
+	}
+	else if (!bWant && Reticle)
+	{
+		Reticle->RemoveFromParent();
+		Reticle = nullptr;
+	}
+}
+
+void UMDRangedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	const UWorld* World = GetWorld();
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	if (!World)
+	{
+		return;
+	}
+	const double Now = World->GetTimeSeconds();
+
+	// ---- reload: the server cancels it when the shooter is staggered or dead (nothing was moved yet, so nothing is lost) ----
+	if (bReloading && GetOwner() && GetOwner()->HasAuthority())
+	{
+		const APawn* ReloadPawn = GetPawn();
+		if (ReloadPawn && (UMDGameplayStatics::IsPawnDead(ReloadPawn) || UMDPoiseComponent::IsActorStunned(ReloadPawn)))
+		{
+			CancelReload();
+		}
+	}
+
+	// ---- trigger ----
+	if (bFireHeld && IsOwnerLocal() && bRangedMode && Data)
+	{
+		if (Data->FireMode == EMDFireMode::Auto)
+		{
+			TryActivateFire();
+		}
+		else if (bSemiPending)
+		{
+			if (Now > SemiBufferUntil)
+			{
+				bSemiPending = false; // the press expired while the cadence cap was still running
+			}
+			else if (TryActivateFire())
+			{
+				bSemiPending = false;
+			}
+		}
+	}
+
+	// ---- camera recoil recovery ----
+	if (RecoilPitch != 0.0f || RecoilYaw != 0.0f)
+	{
+		const float Recovery = Data ? Data->RecoilRecovery : 0.25f;
+		const float NewPitch = FMDRangedMath::RecoilRemaining(RecoilPitch, Recovery, DeltaTime);
+		const float NewYaw = FMDRangedMath::RecoilRemaining(RecoilYaw, Recovery, DeltaTime);
+		if (APlayerController* PC = GetOwnerController())
+		{
+			FRotator Rot = PC->GetControlRotation();
+			Rot.Pitch -= RecoilPitch - NewPitch;
+			Rot.Yaw -= RecoilYaw - NewYaw;
+			PC->SetControlRotation(Rot);
+		}
+		RecoilPitch = NewPitch;
+		RecoilYaw = NewYaw;
+	}
+
+	// ---- additive weapon kick ----
+	if (bKickApplied && WeaponMeshComp && Data)
+	{
+		KickAlpha = FMath::FInterpTo(KickAlpha, 0.0f, DeltaTime, 18.0f);
+		const bool bDone = KickAlpha < 0.01f;
+		if (bDone)
+		{
+			KickAlpha = 0.0f;
+			bKickApplied = false;
+			WeaponMeshComp->SetRelativeTransform(WeaponBaseRelative);
+		}
+		else if (const USceneComponent* Parent = WeaponMeshComp->GetAttachParent())
+		{
+			const APawn* Pawn = GetPawn();
+			const FTransform ParentWorld = Parent->GetSocketTransform(WeaponMeshComp->GetAttachSocketName());
+			const FTransform BaseWorld = WeaponBaseRelative * ParentWorld;
+			const FVector Fwd = Pawn ? Pawn->GetActorForwardVector() : FVector::ForwardVector;
+			const FVector Right = Pawn ? Pawn->GetActorRightVector() : FVector::RightVector;
+			const FQuat Tip(Right, FMath::DegreesToRadians(Data->KickPitchDeg * KickAlpha));
+			FTransform Kicked(Tip * BaseWorld.GetRotation(), BaseWorld.GetLocation() - Fwd * (Data->KickBackCm * KickAlpha), BaseWorld.GetScale3D());
+			WeaponMeshComp->SetRelativeTransform(Kicked.GetRelativeTransform(ParentWorld));
+		}
+	}
+	else if (bKickApplied)
+	{
+		KickAlpha = 0.0f;
+		bKickApplied = false;
+	}
+
+	if (!bFireHeld && !bSemiPending && RecoilPitch == 0.0f && RecoilYaw == 0.0f && !bKickApplied && !bReloading)
+	{
+		SetComponentTickEnabled(false);
+	}
+}
+
+// =====================================================================================================================
+// R3 reload, reserves, pity
+// =====================================================================================================================
+
+int32 UMDRangedComponent::GetReserveAmmo() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	const UMDInventoryComponent* Inv = GetInventory();
+	return Data && Inv && !Data->AmmoRow.IsNone() ? Inv->GetAmmoCount(Data->AmmoRow) : 0;
+}
+
+int32 UMDRangedComponent::GetMagSize() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	return Data ? Data->MagSize : 0;
+}
+
+float UMDRangedComponent::GetHeat() const { return 0.0f; }
+float UMDRangedComponent::GetMaxHeat() const { return 0.0f; }
+float UMDRangedComponent::GetCharge() const { return 0.0f; }
+float UMDRangedComponent::GetMaxCharge() const { return 0.0f; }
+bool UMDRangedComponent::IsOverheated() const { return false; }
+
+bool UMDRangedComponent::IsBeamWeapon() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	return Data && (Data->HitModel == EMDRangedHitModel::Beam || Data->FireMode == EMDFireMode::Beam);
+}
+
+bool UMDRangedComponent::IsChargeStyleBeam() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	return IsBeamWeapon() && Data->Beam.ChargeDrainPerSecond > 0.0f;
+}
+
+void UMDRangedComponent::SyncAutoReloadPref()
+{
+	if (!IsOwnerLocal())
+	{
+		return;
+	}
+	const bool bWanted = GetDefault<UMDLocalSettings>()->bAutoReload;
+	if (bWanted == bAutoReloadPref)
+	{
+		return;
+	}
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		bAutoReloadPref = bWanted;
+	}
+	else
+	{
+		Server_SetAutoReload(bWanted);
+	}
+}
+
+void UMDRangedComponent::Server_SetAutoReload_Implementation(bool bAuto)
+{
+	bAutoReloadPref = bAuto;
+}
+
+bool UMDRangedComponent::IsAutoReloadEnabled() const
+{
+	return MDRangedComponentLocal::CVarAutoReload.GetValueOnGameThread() != 0 && bAutoReloadPref;
+}
+
+float UMDRangedComponent::GetReloadProgress() const
+{
+	if (!bReloading || ReloadDuration <= 0.0f)
+	{
+		return 0.0f;
+	}
+	return FMath::Clamp(static_cast<float>(GetServerNow() - ReloadStartServerTime) / ReloadDuration, 0.0f, 1.0f);
+}
+
+int32 UMDRangedComponent::GetStashedMag(FName GunRow) const
+{
+	const int32* Rounds = StashedMags.Find(GunRow);
+	return Rounds ? *Rounds : 0;
+}
+
+EMDReloadReject UMDRangedComponent::GetReloadReject() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	const APawn* Pawn = GetPawn();
+	const bool bGun = Data != nullptr && Data->HitModel == EMDRangedHitModel::Projectile;
+	return FMDAmmoRules::CanReload(bRangedMode, bGun, Data && !Data->AmmoRow.IsNone(), bReloading,
+		!Pawn || UMDGameplayStatics::IsPawnDead(Pawn), Pawn && UMDPoiseComponent::IsActorStunned(Pawn),
+		GetMagRounds(MDItemType::RangedSlot), Data ? Data->MagSize : 0, GetReserveAmmo());
+}
+
+bool UMDRangedComponent::TryActivateReload()
+{
+	if (!IsOwnerLocal() || GetReloadReject() != EMDReloadReject::None)
+	{
+		return false;
+	}
+	if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		if (ASC->FindAbilitySpecFromClass(UMDReloadAbility::StaticClass()))
+		{
+			return ASC->TryActivateAbilityByClass(UMDReloadAbility::StaticClass());
+		}
+	}
+	RequestReload();
+	return true;
+}
+
+void UMDRangedComponent::RequestReload()
+{
+	if (!GetOwner())
+	{
+		return;
+	}
+	if (GetOwner()->HasAuthority())
+	{
+		BeginReloadServer();
+		return;
+	}
+	const UWorld* World = GetWorld();
+	const double Now = World ? World->GetTimeSeconds() : 0.0;
+	if (Now < NextReloadRequestTime)
+	{
+		return; // the trigger can ask every tick on an empty magazine; one request per quarter second is plenty
+	}
+	NextReloadRequestTime = Now + 0.25;
+	Server_Reload();
+}
+
+void UMDRangedComponent::Server_Reload_Implementation()
+{
+	BeginReloadServer();
+}
+
+EMDReloadReject UMDRangedComponent::BeginReloadServer()
+{
+	UWorld* World = GetWorld();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !World)
+	{
+		return EMDReloadReject::NoGun;
+	}
+	const EMDReloadReject Verdict = GetReloadReject();
+	if (Verdict != EMDReloadReject::None)
+	{
+		return Verdict;
+	}
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	bReloading = true;
+	ReloadStartServerTime = static_cast<float>(GetServerNow());
+	ReloadDuration = FMath::Max(0.05f, Data->ReloadSeconds * MDRangedComponentLocal::CVarReloadScale.GetValueOnGameThread());
+	World->GetTimerManager().SetTimer(ReloadTimer, FTimerDelegate::CreateWeakLambda(this, [this]() { CompleteReload(); }), ReloadDuration, false);
+	ApplyReloadTagLocally();
+	SetComponentTickEnabled(true); // the tick watches for a stagger or death while the reload runs
+	GetOwner()->ForceNetUpdate();
+	return EMDReloadReject::None;
+}
+
+int32 UMDRangedComponent::CompleteReload()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !bReloading)
+	{
+		return 0;
+	}
+	const APawn* Pawn = GetPawn();
+	if (Pawn && (UMDGameplayStatics::IsPawnDead(Pawn) || UMDPoiseComponent::IsActorStunned(Pawn)))
+	{
+		CancelReload();
+		return 0;
+	}
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	UMDInventoryComponent* Inv = const_cast<UMDInventoryComponent*>(GetInventory());
+	int32 Moved = 0;
+	if (Data && Inv && !Data->AmmoRow.IsNone())
+	{
+		const int32 Mag = GetMagRounds(MDItemType::RangedSlot);
+		const int32 Want = FMDAmmoRules::ReloadAmount(Mag, Data->MagSize, Inv->GetAmmoCount(Data->AmmoRow));
+		Moved = Inv->ConsumeAmmo(Data->AmmoRow, Want);
+		SetMagRounds(MDItemType::RangedSlot, Mag + Moved);
+	}
+	ClearReloadState();
+	GetOwner()->ForceNetUpdate();
+	return Moved;
+}
+
+void UMDRangedComponent::CancelReload()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !bReloading)
+	{
+		return;
+	}
+	ClearReloadState();
+	GetOwner()->ForceNetUpdate();
+}
+
+void UMDRangedComponent::ClearReloadState()
+{
+	bReloading = false;
+	ReloadDuration = 0.0f;
+	if (const UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReloadTimer);
+	}
+	ApplyReloadTagLocally();
+}
+
+void UMDRangedComponent::OnRep_Reloading()
+{
+	ApplyReloadTagLocally();
+}
+
+void UMDRangedComponent::ApplyReloadTagLocally()
+{
+	if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		const bool bHasTag = ASC->HasMatchingGameplayTag(TAG_State_Reloading);
+		if (bReloading && !bHasTag)
+		{
+			ASC->AddLooseGameplayTag(TAG_State_Reloading);
+		}
+		else if (!bReloading && bHasTag)
+		{
+			ASC->RemoveLooseGameplayTag(TAG_State_Reloading);
+		}
+	}
+}
+
+

@@ -13,7 +13,8 @@ enum class EMDStationService : uint8
 	None = 0 UMETA(Hidden),
 	Repair = 1 << 0,
 	Upgrade = 1 << 1,
-	Respec = 1 << 2
+	Respec = 1 << 2,
+	Ammo = 1 << 3 // R3: sells Light / Heavy rounds
 };
 
 // A forge / anvil: an interactable that opens the repair + upgrade panel for the player using it. All rules (range, funds,
@@ -30,7 +31,7 @@ public:
 
 	// Bit mask of EMDStationService. Default: all services.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category = "Station", meta = (Bitmask, BitmaskEnum = "/Script/MazeDemons.EMDStationService"))
-	int32 Services = 7;
+	int32 Services = 15;
 
 	// Shown in the focus prompt ("Use Forge") and the panel header.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Station")

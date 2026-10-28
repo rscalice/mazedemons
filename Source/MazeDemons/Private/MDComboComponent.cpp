@@ -1,5 +1,6 @@
 #include "MDComboComponent.h"
 
+#include "AI/MDPerceptionRules.h"
 #include "MDAfterImageComponent.h"
 #include "MDComboSet.h"
 #include "MDGameplayStatics.h"
@@ -349,6 +350,10 @@ void UMDComboComponent::BeginDodge(EMDDodgeDirection Direction, float SlideDurat
 	PlayDodgeCosmetics(Direction, SlideDuration);
 	if (IsAuthority())
 	{
+		if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(GetOwner()))
+		{
+			Ranged->CancelReload(); // R3: a dodge aborts a reload; the rounds never left the bag
+		}
 		Multicast_Dodge(Direction, SlideDuration);
 	}
 }
@@ -463,6 +468,7 @@ void UMDComboComponent::StartStep(EMDAttackKind Kind, int32 Index)
 
 	if (IsAuthority())
 	{
+		MDNoise::Report(this, GetOwner()->GetActorLocation(), GetOwner(), FName(MDNoise::Attack)); // enemies hear every swing (V1 WP3)
 		Multicast_PlayStep(Kind, Index);
 	}
 }

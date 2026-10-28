@@ -190,7 +190,7 @@ bool FMDAIBrainScorerDeterministicForSeedTest::RunTest(const FString& Parameters
 	const FMDBrainContext Far = MakeContext(900.0f, false);
 	const MDAI::FScores A = FMDUtilityScorer::Score(Far, Params, T0);
 	const MDAI::FScores B = FMDUtilityScorer::Score(Far, Params, T0);
-	if (!TestEqual(TEXT("scores one slot per scored intent (Idle, Chase, HoldThreat, Attack, Retreat, Regroup)"), A.Num(), 6) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
+	if (!TestEqual(TEXT("scores one slot per scored intent (Idle, Chase, HoldThreat, Attack, Retreat, Regroup + the 9 WP5 behaviours)"), A.Num(), 15) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
 	{
 		return false;
 	}
@@ -565,7 +565,8 @@ bool FMDAIBrainSchedulerAndRulesTest::RunTest(const FString& Parameters)
 	// Intent tags and task instance data.
 	TestTrue(TEXT("chase tag"), MDIntentToTag(EMDIntent::Chase) == TAG_AI_Intent_Chase.GetTag());
 	TestTrue(TEXT("attack tag"), MDIntentToTag(EMDIntent::Attack) == TAG_AI_Intent_Attack.GetTag());
-	TestFalse(TEXT("no tag for a WP5 intent"), MDIntentToTag(EMDIntent::Feint).IsValid());
+	TestTrue(TEXT("WP5 intents have a tag too"), MDIntentToTag(EMDIntent::Feint) == TAG_AI_Intent_Feint.GetTag());
+	TestFalse(TEXT("each WP5 intent has its own tag"), MDIntentToTag(EMDIntent::Swarm) == MDIntentToTag(EMDIntent::Feint));
 	TestEqual(TEXT("dead tag name"), MDIntentToTag(EMDIntent::Dead).ToString(), FString(TEXT("AI.Intent.Dead")));
 	TestEqual(TEXT("intent name"), FString(MDIntentToString(EMDIntent::HoldThreat)), FString(TEXT("HoldThreat")));
 	const FMDST_EnemyChase Chase;
@@ -688,7 +689,38 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDAIBrainGhoulAttackRootMotionTest, "MazeDemon
 bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 {
 	using namespace MDAIBrainTestsLocal;
-	UMDEnemyArchetype* Ghoul = LoadObject<UMDEnemyArchetype>(nullptr, TEXT("/Game/Data/Enemies/DA_Archetype_Ghoul.DA_Archetype_Ghoul"));
+	UMDEnemyArchetype* ShippedGhoul = LoadObject<UMDEnemyArchetype>(nullptr, TEXT("/Game/Data/Enemies/DA_Archetype_Ghoul.DA_Archetype_Ghoul"));
+	UAnimMontage* LungeMontage = LoadObject<UAnimMontage>(nullptr, TEXT("/Game/Animations/Enemies/Ghoul/AM_Ghoul_Lunge.AM_Ghoul_Lunge"));
+	if (!TestNotNull(TEXT("DA_Archetype_Ghoul"), ShippedGhoul) || !TestNotNull(TEXT("AM_Ghoul_Lunge asset (kept for when the Lunge returns)"), LungeMontage))
+	{
+		return false;
+	}
+	// The Lunge is disabled in the shipped archetype for now (Robert, 2026-10-28): only the Swipe is in its attack list. The montage
+	// asset stays and is tested here directly: this test works on a transient copy of the archetype with the Lunge put back, so the
+	// leap's root motion, warp window and runtime travel keep being verified. To re-enable it in the game: Scripts/Python/ghoullunge.py.
+	TestEqual(TEXT("the shipped ghoul has one attack (Swipe)"), ShippedGhoul->Attacks.Num(), 1);
+	for (const FMDEnemyAttack& Shipped : ShippedGhoul->Attacks)
+	{
+		TestFalse(TEXT("the shipped ghoul has no Lunge while it is disabled"), Shipped.Name == FName(TEXT("Lunge")));
+	}
+	UMDEnemyArchetype* Ghoul = DuplicateObject<UMDEnemyArchetype>(ShippedGhoul, GetTransientPackage());
+	{
+		FMDEnemyAttack& Lunge = Ghoul->Attacks.AddDefaulted_GetRef();
+		Lunge.Name = TEXT("Lunge");
+		Lunge.Montage = LungeMontage;
+		Lunge.Range = 450.0f;
+		Lunge.TellTime = 0.9f;
+		Lunge.Cooldown = 1.5f;
+		Lunge.TraceSockets = { TEXT("hand_r"), TEXT("hand_l") };
+		Lunge.Step.DamageMult = 1.3f;
+		Lunge.Step.PoiseDamage = 25.0f;
+		Lunge.Step.Reaction = EMDHitReaction::Flinch;
+		Lunge.Step.KnockbackStrength = 350.0f;
+		Lunge.Step.HitStopFrames = 4;
+		Lunge.Step.WarpRange = 520.0f;
+		Lunge.Step.WarpStopDistance = 90.0f;
+		Lunge.Step.RootMotionScale = 1.0f;
+	}
 	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/Enemies/Ghoul/SK_Ghoul.SK_Ghoul"));
 	UClass* AnimClass = LoadObject<UClass>(nullptr, TEXT("/Game/Animations/Enemies/Ghoul/ABP_Ghoul.ABP_Ghoul_C"));
 	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));

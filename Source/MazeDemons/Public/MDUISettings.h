@@ -85,4 +85,25 @@ public:
 
 	UPROPERTY(Config, BlueprintReadWrite, Category = "Combat")
 	bool bAfterImagesEnabled = true;
+
+	// ---- Ranged (R7, Options > Gameplay). Local; UMDHUDOptions sets them, saves and applies them. ----
+	// Aim assist strength 0..1 (R4 reads it; no effect until then).
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Ranged", meta = (ClampMin = "0", ClampMax = "1"))
+	float AimAssistStrength = 0.5f;
+
+	// False: hold the aim button. True: it toggles aim (R4 reads it).
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Ranged")
+	bool bAimToggle = false;
+
+	// Reticle size multiplier (tick length and hit marker; the gap always shows the real spread).
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Ranged", meta = (ClampMin = "0.5", ClampMax = "2"))
+	float ReticleScale = 1.0f;
+
+	// Reload by itself when the magazine runs dry (R3). Pushed to the server by the ranged component.
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Ranged")
+	bool bAutoReload = true;
+
+	// Off-screen threat arrows and tell pings (md.UI.OffscreenThreat).
+	UPROPERTY(Config, BlueprintReadWrite, Category = "Ranged")
+	bool bOffscreenThreat = true;
 };

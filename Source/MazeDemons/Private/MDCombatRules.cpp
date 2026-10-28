@@ -170,6 +170,17 @@ FMDReactionResult UMDCombatRules::ResolveReaction(const FMDReactionInput& In)
 		Out.bStartStun = true;
 	}
 
+	// R1 per-weapon cap (a pistol flinches, only a bolter staggers): a capped hit never starts the stun, so the poise stays broken
+	// for the next melee hit to finish.
+	if (Rank(Out.Reaction) > Rank(In.MaxReaction))
+	{
+		Out.Reaction = In.MaxReaction;
+		if (Rank(In.MaxReaction) < Rank(EMDHitReaction::Stagger))
+		{
+			Out.bStartStun = false;
+		}
+	}
+
 	if (Out.bStartStun)
 	{
 		Out.PoiseAfter = In.MaxPoise; // poise resets when the stun starts

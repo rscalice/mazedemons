@@ -62,6 +62,8 @@ struct FMDRoleCandidate
 	int32 Id = 0;
 	// Bit mask of EMDRole (MDPack::RoleBit). 0 = the archetype lists no roles: treated as Striker only.
 	uint32 AllowedMask = 0;
+	// V1 WP5: a caster (archetype bIsCaster). At T2+ the members that allow Guard screen it (up to MDBehaviour::MaxGuards).
+	bool bIsCaster = false;
 };
 
 // Candidates for the focus target, already reduced to the five inputs of the score.
@@ -160,7 +162,9 @@ namespace MDPackRules
 	// Gives each member one of the NumRingSlots slots (OutSlots parallel to Members, -1 for the overflow). Flankers pick first
 	// and prefer slots >= FlankMinAngle from FacingYaw, then Strikers, then the rest; each takes the free slot nearest to its
 	// current angle (its current slot keeps a small bonus so the ring does not shuffle).
-	MAZEDEMONS_API void AssignSlots(const TArray<FMDSlotMember>& Members, float BaseYawDeg, float FacingYawDeg, TArray<int32>& OutSlots);
+	// bEvenSpread (V1 WP5 Swarm): with N members on a 6-slot ring only the N evenly spaced slots (MDBehaviour::EvenSlotSet) are
+	// used, rotated to the position that costs the pack the least movement, so attackers never bunch on one side.
+	MAZEDEMONS_API void AssignSlots(const TArray<FMDSlotMember>& Members, float BaseYawDeg, float FacingYawDeg, TArray<int32>& OutSlots, bool bEvenSpread = false);
 }
 
 // Attack tokens (1.3 / 2.4), per player: at most MaxPerTarget valid tokens per target. A token is void at its expiry (grant +
@@ -202,6 +206,13 @@ struct MAZEDEMONS_API FMDPackTokenPool
 	void Purge(double Now);
 
 	int32 Num() const { return Entries.Num(); }
+
+	// Every valid entry (md.AI.DumpTokens, tests): holder, target, seconds left, committed.
+	void ForEachValid(double Now, TFunctionRef<void(int32 Holder, int32 Target, double SecondsLeft, bool bCommitted)> Fn) const;
+
+	// The longest a valid token has left before it expires on its own (0 when the pool is empty). Nothing extends a token
+	// past Now + Timeout: TryGrant refreshes it, ReleaseAfter shortens it, Commit only protects it from eviction.
+	double MaxSecondsLeft(double Now) const;
 
 private:
 	TArray<FEntry> Entries;

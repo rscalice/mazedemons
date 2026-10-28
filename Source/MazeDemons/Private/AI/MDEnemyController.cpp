@@ -5,12 +5,19 @@
 #include "AI/MDEnemyCharacter.h"
 #include "MDGameplayStatics.h"
 #include "Components/StateTreeAIComponent.h"
+#include "Navigation/CrowdFollowingComponent.h"
 #include "Perception/AIPerceptionComponent.h"
+#include "Perception/AISense_Damage.h"
+#include "Perception/AISense_Hearing.h"
+#include "Perception/AISense_Sight.h"
 #include "Perception/AISenseConfig_Damage.h"
+#include "Perception/AISenseConfig_Hearing.h"
 #include "Perception/AISenseConfig_Sight.h"
 #include "StateTree.h"
 
-AMDEnemyController::AMDEnemyController()
+// The path follower is a UCrowdFollowingComponent (Detour crowd: avoidance and separation between enemies, v1-design 2.6).
+AMDEnemyController::AMDEnemyController(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCrowdFollowingComponent>(TEXT("PathFollowingComponent")))
 {
 	bWantsPlayerState = false;
 	SetGenericTeamId(FGenericTeamId(MDTeams::Demons));
@@ -34,7 +41,17 @@ AMDEnemyController::AMDEnemyController()
 	SightConfig->DetectionByAffiliation.bDetectFriendlies = true;
 	Perception->ConfigureSense(*SightConfig);
 
+	// Hearing consumes any noise tag (Attack / Sprint / Gunshot ...); the loudness the reporter gives scales the range.
+	HearingConfig = CreateDefaultSubobject<UAISenseConfig_Hearing>(TEXT("HearingConfig"));
+	HearingConfig->HearingRange = MDPerception::HearingRange(EMDIntelligenceTier::T0);
+	HearingConfig->SetMaxAge(static_cast<float>(MDPerception::LoseSightTime));
+	HearingConfig->DetectionByAffiliation.bDetectEnemies = true;
+	HearingConfig->DetectionByAffiliation.bDetectNeutrals = true;
+	HearingConfig->DetectionByAffiliation.bDetectFriendlies = true;
+	Perception->ConfigureSense(*HearingConfig);
+
 	DamageConfig = CreateDefaultSubobject<UAISenseConfig_Damage>(TEXT("DamageConfig"));
+	DamageConfig->SetMaxAge(static_cast<float>(MDPerception::LoseSightTime));
 	Perception->ConfigureSense(*DamageConfig);
 	Perception->SetDominantSense(SightConfig->GetSenseImplementation());
 
@@ -75,6 +92,17 @@ void AMDEnemyController::OnPossess(APawn* InPawn)
 		Brain->OnIntentSelected.AddUObject(this, &AMDEnemyController::HandleIntentSelected);
 	}
 	ConfigureSenses();
+	if (UCrowdFollowingComponent* Crowd = Cast<UCrowdFollowingComponent>(GetPathFollowingComponent()))
+	{
+		// RVO avoidance plus separation so a pack spreads around the player instead of stacking on one point.
+		Crowd->SetCrowdSimulationState(ECrowdSimulationState::Enabled);
+		Crowd->SetCrowdAvoidanceQuality(ECrowdAvoidanceQuality::Medium);
+		Crowd->SetCrowdSeparation(true);
+		Crowd->SetCrowdSeparationWeight(2.0f);
+		Crowd->SetCrowdAnticipateTurns(true);
+		Crowd->SetCrowdOptimizeVisibility(true);
+		Crowd->SetCrowdRotateToVelocity(false); // facing belongs to AMDEnemyCharacter::FaceMovement / FaceTarget, not the crowd
+	}
 	TryStartExecutor();
 }
 
@@ -101,10 +129,27 @@ void AMDEnemyController::ConfigureSenses()
 	}
 	const FMDTierParams& Tier = Brain->GetTier();
 	SightConfig->SightRadius = Tier.SightRadius;
-	SightConfig->LoseSightRadius = Tier.SightRadius + 300.0f;
+	SightConfig->LoseSightRadius = Tier.SightRadius + MDPerception::LoseSightExtraRadius;
 	SightConfig->PeripheralVisionAngleDegrees = FMath::Clamp(Tier.SightFOV * 0.5f, 1.0f, 180.0f);
+	SightConfig->SetMaxAge(static_cast<float>(MDPerception::LoseSightTime));
 	Perception->ConfigureSense(*SightConfig);
+	if (HearingConfig)
+	{
+		HearingConfig->HearingRange = MDPerception::HearingRange(Tier.Tier);
+		Perception->ConfigureSense(*HearingConfig);
+	}
 	Perception->RequestStimuliListenerUpdate();
+}
+
+void AMDEnemyController::SetSensesActive(bool bActive)
+{
+	if (!Perception)
+	{
+		return;
+	}
+	Perception->SetSenseEnabled(UAISense_Sight::StaticClass(), bActive);
+	Perception->SetSenseEnabled(UAISense_Hearing::StaticClass(), bActive);
+	// The damage sense is never switched off: being hurt wakes a dormant enemy.
 }
 
 void AMDEnemyController::TryStartExecutor()
@@ -154,8 +199,19 @@ void AMDEnemyController::HandleIntentSelected(EMDIntent Intent, bool bRestart)
 
 void AMDEnemyController::HandleTargetPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {
-	if (Brain && Actor)
+	if (!Brain || !Actor)
 	{
-		Brain->ReportStimulus(Actor, Stimulus.WasSuccessfullySensed(), Stimulus.StimulusLocation);
+		return;
 	}
+	const bool bSensed = Stimulus.WasSuccessfullySensed();
+	if (Stimulus.Type == UAISense::GetSenseID<UAISense_Hearing>())
+	{
+		if (bSensed)
+		{
+			Brain->ReportHeard(Actor, Stimulus.StimulusLocation, Stimulus.Tag); // any tag; Gunshot is loud
+		}
+		return; // a noise that ages out is not "lost sight": the brain's own 3 s memory covers it
+	}
+	const EMDStimulusKind Kind = Stimulus.Type == UAISense::GetSenseID<UAISense_Damage>() ? EMDStimulusKind::Damage : EMDStimulusKind::Sight;
+	Brain->ReportStimulus(Actor, bSensed, Stimulus.StimulusLocation, Kind);
 }

@@ -222,7 +222,8 @@ private:
 	void OnRep_IsDeadState(bool bOldValue);
 
 	// The shared damage path behind both ApplyDamage overloads. OutResult may be null.
-	void ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult);
+	// bWearAttackerWeapon = false for ranged / beam hits (a gun wears its own durability, never the melee weapon).
+	void ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult, bool bWearAttackerWeapon = true);
 
 	void BindAttributeDelegates();
 	bool bDelegatesBound = false;

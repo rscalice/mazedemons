@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "AI/MDAIRules.h"
+#include "AI/MDBehaviourRules.h"
 #include "AI/MDAITypes.h"
 #include "AI/MDPack.h"
 #include "MDCombatTypes.h"
@@ -42,7 +43,38 @@ public:
 	// ---- Input ----
 	// A perception event: Source seen / heard / felt (bSensed) at Location, or lost (bSensed false). Timestamped now and
 	// delivered to the brain ReactionTime later.
-	void ReportStimulus(AActor* Source, bool bSensed, const FVector& Location);
+	// Kind (V1 WP3) says how it was sensed: Sight keeps the source's live position known; Hearing / Damage / Shared only give
+	// the position they report (the last-known one). A sensed Sight (and a loud Hearing) stimulus is also shared with the
+	// pack through the director after the tier's ShareDelay.
+	void ReportStimulus(AActor* Source, bool bSensed, const FVector& Location, EMDStimulusKind Kind = EMDStimulusKind::Sight, FName Tag = NAME_None);
+
+	// A noise heard at Location, made by Source (any tag; Gunshot is loud). Same reaction delay as sight.
+	void ReportHeard(AActor* Source, const FVector& Location, FName Tag);
+
+	// A pack mate saw Source at Location at SightTime (the pack director calls this). It reaches the brain at
+	// SightTime + max(ShareDelay, ReactionTime) as a last-known position, never the live one.
+	void ReceiveSharedSighting(AActor* Source, const FVector& Location, double SightTime, float ShareDelay);
+
+	// ---- Dormancy (V1 WP3, 2.9) ----
+	// Dormant brains are skipped by the scheduler, their senses are off and they drop what they knew. UMDAISubsystem decides
+	// (40 m from every player); damage wakes the enemy at once.
+	bool IsDormant() const { return bDormant; }
+	void SetDormant(bool bNewDormant, double Now);
+	double GetLastDamageTime() const { return LastDamageTime; }
+	// Reduces / restores the pawn's NetUpdateFrequency (10 Hz beyond 25 m from every player).
+	void ApplyNetFrequency(float Hz);
+	float GetDefaultNetFrequency() const { return DefaultNetUpdateFrequency; }
+
+	// The last noise this brain heard (for the debug draw and tests); ZeroVector / NAME_None / -1 before any.
+	FVector GetLastHeardLocation() const { return LastHeardLocation; }
+	FName GetLastHeardTag() const { return LastHeardTag; }
+	double GetLastHeardTime() const { return LastHeardTime; }
+
+	// Where Actor was last seen / heard / shared; false when the brain does not know it.
+	bool GetKnownLocation(const AActor* Actor, FVector& OutLocation, bool& bOutSensedNow) const;
+
+	// md.AI.DebugPerception 1: the sight cone, last-known positions and the last heard noise. Life = seconds the lines stay.
+	void DrawPerceptionDebug(float Life) const;
 
 	// One decision (the scheduler's entry point; tests call it directly with their own clock).
 	void RunDecision(double Now);
@@ -97,6 +129,20 @@ public:
 	// Within reach of the rally point.
 	bool IsAtRally() const;
 
+	// ---- V1 WP5 behaviours ----
+	// Points the thin StateTree tasks walk to. False when the point does not exist (no flank point cached, not a guard, ...).
+	bool GetFlankPoint(FVector& OutPoint) const;
+	bool GetGuardPoint(FVector& OutPoint) const;
+	bool GetPackCentre(FVector& OutPoint) const;
+	class UMDEnemyBehaviourComponent* GetBehaviour() const;
+
+	// Roll (0..1) the current feint uses to pick its 0.3 - 0.6 s delay.
+	float GetFeintRoll() const { return FeintRoll; }
+	bool IsPunishCounterActive() const { return Greed.bBraced; }
+
+	// md.AI.ForceIntent: the intent forced for PIE testing (Idle = none). Server only; tests set it directly.
+	static EMDIntent GetForcedIntent();
+
 	int32 GetEnemyId() const { return EnemyId; }
 	AMDEnemyCharacter* GetEnemy() const { return Enemy.Get(); }
 	UMDAISubsystem* GetAISubsystem() const;
@@ -111,8 +157,12 @@ public:
 
 	FMDIntentSelectedNative OnIntentSelected;
 
-	// Debug overlay (md.AI.Debug 1): intent, top 3 scores, token. Server side.
-	void DrawDebug() const;
+	// Debug overlay (server side). UMDAISubsystem draws it for the nearest enemies only: md.AI.Debug 1 = DescribeCompact
+	// (two lines: intent, token, tier, role; target distance and whether it is sensed), md.AI.Debug 2 = DescribeVerbose
+	// (the pack line, the top 3 scores). Life = seconds the text stays; FontScale shrinks it.
+	void DrawDebug(bool bVerbose, float Life, float FontScale) const;
+	FString DescribeCompact() const;
+	FString DescribeVerbose() const;
 
 	static UMDEnemyBrainComponent* FindFor(const AActor* Actor);
 
@@ -138,9 +188,23 @@ private:
 
 	void HandleAttackEnded(bool bInterrupted);
 	void HandleDamageApplied(AActor* Instigator, float Applied);
+	void HandleBehaviourActionEnded(EMDIntent Intent, bool bCompleted);
+	void FillBehaviourContext(FMDBrainContext& Context, double Now);
+	int32 PickCounterAttack(float Distance) const;
 
 	void SetIntent(EMDIntent Intent, bool bRestart);
+
+	// The tier params for this enemy: its pack's tier (V1 WP4), or md.AI.ForceTier.
+	FMDTierParams ResolveTierParams() const;
+
+	// V1 WP4 off-screen threat: mirrors "holds an attack token on a player and is ready to swing" to the pawn's replicated
+	// bThreatening / ThreatTarget (only writes on a change). Called wherever the token, the intent or the cooldown changes.
+	void SyncThreat();
+
 	void UpdateKnownActors(double Now);
+	// The near sense (MDPerception::NearSenseRange): players this close with only world geometry in between are sensed now.
+	void ApplyNearSense(double Now);
+	bool HasClearWorldLine(const FVector& From, const FVector& To) const;
 	void UpdateTarget(double Now);
 	bool IsValidTargetActor(const AActor* Actor) const;
 	FMDBrainContext BuildContext(double Now) const;
@@ -178,4 +242,21 @@ private:
 	int32 EnemyId = 0;
 	bool bDead = false;
 	bool bBound = false;
+
+	// V1 WP3
+	bool bDormant = false;
+	double LastDamageTime = -1.0;
+	FVector LastHeardLocation = FVector::ZeroVector;
+	FName LastHeardTag = NAME_None;
+	double LastHeardTime = -1000.0;
+	float DefaultNetUpdateFrequency = 0.0f;
+	float AppliedNetFrequency = 0.0f;
+	void ShareToPack(AActor* Source, const FVector& Location, double SightTime);
+	void SetSensing(bool bActive);
+
+	// V1 WP5
+	MDBehaviour::FMDFeintOpportunity FeintOpportunity;
+	MDBehaviour::FMDGreedTracker Greed;
+	float FeintRoll = 0.5f;
+	EMDIntent LastBarkedIntent = EMDIntent::Idle;
 };
