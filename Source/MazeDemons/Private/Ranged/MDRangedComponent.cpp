@@ -29,6 +29,7 @@
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "Ranged/MDProjectile.h"
+#include "Ranged/MDRangedFX.h"
 #include "Ranged/MDRangedFireAbility.h"
 #include "Ranged/MDRangedReticleWidget.h"
 #include "Ranged/MDRangedStatics.h"
@@ -899,7 +900,7 @@ void UMDRangedComponent::NotifyShotLanded()
 
 void UMDRangedComponent::PlayShotCosmetics(const FVector& Origin, const FVector& Dir)
 {
-	const UWorld* World = GetWorld();
+	UWorld* World = GetWorld();
 	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
 	if (!World || !Data || World->GetNetMode() == NM_DedicatedServer || Data->MuzzleFlashFX.IsNull())
 	{
@@ -907,7 +908,8 @@ void UMDRangedComponent::PlayShotCosmetics(const FVector& Origin, const FVector&
 	}
 	if (UNiagaraSystem* FX = Data->MuzzleFlashFX.LoadSynchronous())
 	{
-		UNiagaraFunctionLibrary::SpawnSystemAtLocation(World, FX, Origin, FRotator(Dir.Rotation()));
+		// Capped one-shot: a looping muzzle system would otherwise stay alive (and pile up) for the rest of the session.
+		MDRangedFX::SpawnOneShot(World, FX, Origin, FRotator(Dir.Rotation()), FVector::OneVector, MDRangedFX::MuzzleMaxSeconds);
 	}
 }
 

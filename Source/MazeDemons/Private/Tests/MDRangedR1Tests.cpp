@@ -9,12 +9,21 @@
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyCharacter.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/DataTable.h"
+#include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/WorldSettings.h"
 #include "MDAbilitySystemComponent.h"
+#include "MDImpactSet.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
+#include "Ranged/MDRangedFX.h"
 #include "MDCombatRules.h"
 #include "MDCombatStatics.h"
 #include "MDGameState.h"
@@ -877,6 +886,200 @@ bool FMDRangedR1WearTest::RunTest(const FString& Parameters)
 	UMDRangedStatics::FireFromData(Fx.ShooterPawn, Real, Origin, Target)->AdvanceSimulation(0.2f);
 	Inv->GetSlotDurability(MDItemType::RangedSlot, Cur, Max);
 	TestEqual(TEXT("two landed hits: one point"), Cur, Before - 1);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Leaks: projectiles and effects must all be gone shortly after a volley (the "pink clouds pile up" PIE report).
+// ---------------------------------------------------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDRangedR1LifetimeSettingsTest, "MazeDemons.Ranged.Projectile.LifetimeAndImpactSetup", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDRangedR1LifetimeSettingsTest::RunTest(const FString& Parameters)
+{
+	using namespace MDRangedR1TestsLocal;
+	// range / speed + margin, capped: a 4000 cm shot at 20000 cm/s lives 0.7 s; a slow or unlimited one is capped below 3 s.
+	TestTrue(TEXT("fast bolt: range / speed + margin"), FMath::IsNearlyEqual(AMDProjectile::ComputeMaxLifetime(4000.0f, 20000.0f), 0.7f, 0.001f));
+	TestTrue(TEXT("slow bolt is capped"), AMDProjectile::ComputeMaxLifetime(4000.0f, 100.0f) <= 2.75f + KINDA_SMALL_NUMBER);
+	TestTrue(TEXT("zero speed is capped, not infinite"), AMDProjectile::ComputeMaxLifetime(4000.0f, 0.0f) <= 2.75f + KINDA_SMALL_NUMBER);
+	TestTrue(TEXT("cap + backstop is at most 3 s"), AMDProjectile::MaxLifetimeCap + AMDProjectile::LifetimeBackstop <= 3.0f + KINDA_SMALL_NUMBER);
+
+	FR1Fixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	for (const bool bTwin : { false, true })
+	{
+		AMDProjectile* Bolt = bTwin ? AMDProjectile::SpawnTwin(Fx.World, Fx.MakeParams(FVector(40.0, 0.0, 44.0), FVector::ForwardVector, 9))
+			: AMDProjectile::SpawnReal(Fx.World, Fx.MakeParams(FVector(40.0, 0.0, 44.0), FVector::ForwardVector, 9));
+		if (!TestNotNull(bTwin ? TEXT("twin") : TEXT("real bolt"), Bolt))
+		{
+			return false;
+		}
+		const TCHAR* Who = bTwin ? TEXT("twin") : TEXT("real bolt");
+		TestTrue(*FString::Printf(TEXT("%s has a max lifetime of 0.7 s"), Who), FMath::IsNearlyEqual(Bolt->GetMaxLifetime(), 0.7f, 0.001f));
+		TestTrue(*FString::Printf(TEXT("%s has an actor lifespan (%.2f s) of at most 3 s"), Who, Bolt->InitialLifeSpan), Bolt->InitialLifeSpan > 0.0f && Bolt->InitialLifeSpan <= 3.0f);
+	}
+
+	// The bullet impact set (C1's data asset family): a spark / dust entry that is not the pink laser hit.
+	UMDImpactSet* Set = LoadObject<UMDImpactSet>(nullptr, TEXT("/Game/Data/Combat/DA_Impact_Bullet.DA_Impact_Bullet"));
+	if (TestNotNull(TEXT("DA_Impact_Bullet"), Set))
+	{
+		TestNotNull(TEXT("DA_Impact_Bullet default VFX"), Set->Default.VFX.Get());
+		TestFalse(TEXT("the bullet impact is not a FreeStylizedLaserBeamVFX system"), GetPathNameSafe(Set->Default.VFX).Contains(TEXT("FreeStylizedLaserBeamVFX")));
+		TestTrue(TEXT("the bullet impact is small"), Set->Default.VFXScale > 0.0f && Set->Default.VFXScale <= 1.0f);
+	}
+	for (const TCHAR* GunPath : { TEXT("/Game/Data/Ranged/DA_Ranged_HollowPistol.DA_Ranged_HollowPistol"), TEXT("/Game/Data/Ranged/DA_Ranged_CatacombRepeater.DA_Ranged_CatacombRepeater") })
+	{
+		if (const UMDRangedWeaponData* Gun = LoadObject<UMDRangedWeaponData>(nullptr, GunPath))
+		{
+			TestTrue(*FString::Printf(TEXT("%s does not use the pink laser hit for its bullets"), *Gun->GetName()), Gun->ImpactFX.IsNull());
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDRangedR1NoLeaksTest, "MazeDemons.Ranged.Projectile.NoLeftoverActorsOrFX", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDRangedR1NoLeaksTest::RunTest(const FString& Parameters)
+{
+	using namespace MDRangedR1TestsLocal;
+	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (!TestNotNull(TEXT("engine cube"), Cube))
+	{
+		return false;
+	}
+	FR1Fixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	// A world context so the world can be ticked (timers, lifespans, actor ticks).
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(Fx.World);
+	struct FContextGuard
+	{
+		UWorld* World;
+		~FContextGuard() { GEngine->DestroyWorldContext(World); }
+	} Guard{ Fx.World };
+
+	AStaticMeshActor* Floor = Fx.World->SpawnActor<AStaticMeshActor>(FVector(0.0, 0.0, -50.0), FRotator::ZeroRotator);
+	if (!TestNotNull(TEXT("floor"), Floor))
+	{
+		return false;
+	}
+	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Static);
+	Floor->GetStaticMeshComponent()->SetStaticMesh(Cube);
+	Floor->SetActorScale3D(FVector(200.0, 200.0, 1.0));
+	Floor->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	AMDEnemyCharacter* Enemy = Fx.SpawnEnemy(FVector(800.0, 0.0, 100.0));
+	if (!TestNotNull(TEXT("enemy"), Enemy))
+	{
+		return false;
+	}
+	Fx.World->GetWorldSettings()->NotifyBeginPlay();
+	Fx.World->GetWorldSettings()->NotifyMatchStarted();
+
+	const float Dt = 1.0f / 60.0f;
+	auto TickSeconds = [&Fx, Dt](float Seconds)
+	{
+		for (int32 i = 0; i < FMath::CeilToInt(Seconds / Dt); ++i)
+		{
+			++GFrameCounter; // tick functions run once per frame counter value
+			Fx.World->Tick(LEVELTICK_All, Dt);
+		}
+	};
+
+	// A volley of 12 shots, each a real bolt plus the shooter's twin: 4 into the creature, 4 into the floor, 4 into the sky (a miss).
+	constexpr int32 Shots = 12;
+	for (int32 i = 0; i < Shots; ++i)
+	{
+		FVector Dir = FVector::ForwardVector;
+		FVector Origin(40.0, 0.0, 44.0);
+		if (i % 3 == 1)
+		{
+			Dir = FVector(0.0, 0.0, -1.0); // the floor
+			Origin = FVector(40.0 + i * 10.0, 0.0, 200.0);
+		}
+		else if (i % 3 == 2)
+		{
+			Dir = FVector(0.0, 0.0, 1.0); // the sky: nothing to hit, flies to its range / lifetime
+		}
+		AMDProjectile::SpawnReal(Fx.World, Fx.MakeParams(Origin, Dir, static_cast<uint16>(100 + i)));
+		AMDProjectile::SpawnTwin(Fx.World, Fx.MakeParams(Origin, Dir, static_cast<uint16>(100 + i)));
+	}
+	TestEqual(TEXT("the volley is in flight (a real bolt and a twin per shot)"), Fx.CountProjectiles(), Shots * 2);
+	TickSeconds(0.15f);
+	AddInfo(FString::Printf(TEXT("0.15 s after the volley: %d projectiles, %d one-shot FX components"), Fx.CountProjectiles(), MDRangedFX::CountActive(Fx.World)));
+
+	// Tick past the longest lifetime (+ backstop), the impact FX cap and its destroy grace.
+	TickSeconds(AMDProjectile::MaxLifetimeCap + AMDProjectile::LifetimeBackstop + 0.5f);
+	TestEqual(TEXT("no AMDProjectile (real or twin) is left after the lifetime"), Fx.CountProjectiles(), 0);
+	TickSeconds(MDRangedFX::ImpactMaxSeconds + MDRangedFX::DestroyGraceSeconds + 0.5f);
+	// (A headless run spawns no Niagara components at all, so this count is trivially 0 there; Ranged.FX.OneShotCapsLoopingSystems
+	// proves the cap on hand-made components, and the world-hit impact spawn goes through the same SpawnOneShot.)
+	TestEqual(TEXT("no projectile or impact Niagara component is still alive"), MDRangedFX::CountActive(Fx.World), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDRangedR1OneShotFXTest, "MazeDemons.Ranged.FX.OneShotCapsLoopingSystems", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDRangedR1OneShotFXTest::RunTest(const FString& Parameters)
+{
+	using namespace MDRangedR1TestsLocal;
+	FR1Fixture Fx;
+	if (!Fx.Init(*this))
+	{
+		return false;
+	}
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(Fx.World);
+	struct FContextGuard
+	{
+		UWorld* World;
+		~FContextGuard() { GEngine->DestroyWorldContext(World); }
+	} Guard{ Fx.World };
+	Fx.World->GetWorldSettings()->NotifyBeginPlay();
+	Fx.World->GetWorldSettings()->NotifyMatchStarted();
+
+	// The Fab laser systems are the ones that were left alive: spawn every one the project referenced as a one-shot and
+	// require them all gone after the cap, whatever the system does (a looping emitter never completes on its own).
+	const TCHAR* const Systems[] = {
+		TEXT("/Game/Fab/FreeStylizedLaserBeamVFX/VFX/Hit/NS_Hit_01.NS_Hit_01"),
+		TEXT("/Game/Fab/FreeStylizedLaserBeamVFX/VFX/Hit/NS_Hit_02.NS_Hit_02"),
+		TEXT("/Game/Fab/FreeStylizedLaserBeamVFX/VFX/MuzzleFlash/NS_MuzzleFlash_01.NS_MuzzleFlash_01"),
+		TEXT("/Game/Fab/FreeStylizedLaserBeamVFX/VFX/MuzzleFlash/NS_MuzzleFlash_02.NS_MuzzleFlash_02"),
+	};
+	// UNiagaraFunctionLibrary::SpawnSystemAtLocation returns nothing in a headless run (no renderer), so the cap is armed on
+	// hand-made components of those systems: the same CapLifetime that SpawnOneShot calls.
+	AActor* Holder = Fx.World->SpawnActor<AActor>();
+	if (!TestNotNull(TEXT("holder actor"), Holder))
+	{
+		return false;
+	}
+	int32 Spawned = 0;
+	for (const TCHAR* Path : Systems)
+	{
+		UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, Path);
+		if (!TestNotNull(Path, System))
+		{
+			continue;
+		}
+		UNiagaraComponent* Comp = NewObject<UNiagaraComponent>(Holder);
+		Comp->SetAsset(System);
+		Holder->AddInstanceComponent(Comp); // owned by the actor so a GC pass cannot take it mid-test
+		MDRangedFX::CapLifetime(Fx.World, Comp, MDRangedFX::MuzzleMaxSeconds);
+		++Spawned;
+	}
+	TestTrue(TEXT("the laser systems loaded"), Spawned == UE_ARRAY_COUNT(Systems));
+	AddInfo(FString::Printf(TEXT("%d one-shot components spawned, %d counted alive"), Spawned, MDRangedFX::CountActive(Fx.World)));
+	TestEqual(TEXT("every spawned one-shot is counted"), MDRangedFX::CountActive(Fx.World), Spawned);
+
+	const float Dt = 1.0f / 60.0f;
+	for (int32 i = 0; i < FMath::CeilToInt((MDRangedFX::MuzzleMaxSeconds + MDRangedFX::DestroyGraceSeconds + 0.5f) / Dt); ++i)
+	{
+		++GFrameCounter;
+		Fx.World->Tick(LEVELTICK_All, Dt);
+	}
+	TestEqual(TEXT("all of them are destroyed after the cap"), MDRangedFX::CountActive(Fx.World), 0);
 	return true;
 }
 

@@ -10,10 +10,13 @@
 #include "GameFramework/Pawn.h"
 #include "MDCombatStatics.h"
 #include "MDDamageNumbers.h"
+#include "MDImpactMath.h"
+#include "MDImpactSet.h"
+#include "MDUISettings.h"
 #include "Materials/MaterialInterface.h"
-#include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "Net/UnrealNetwork.h"
+#include "Ranged/MDRangedFX.h"
 #include "Ranged/MDRangedMath.h"
 #include "Ranged/MDRangedWeaponData.h"
 #include "UObject/ConstructorHelpers.h"
@@ -29,7 +32,15 @@ namespace MDProjectileLocal
 
 	// A sweep step never covers more than this (cm): keeps the gravity arc and the hit order accurate at 200 m/s.
 	constexpr float MaxStepCm = 100.0f;
-	constexpr float MaxFlightSeconds = 8.0f;
+
+	// The C1 impact set a projectile's own world impact comes from: bullets are not blades, so DA_Impact_Bullet (a small spark / dust
+	// puff on walls and floors). Creatures get C1's blood through the feedback component, not from here.
+	const TCHAR* const BulletImpactPath = TEXT("/Game/Data/Combat/DA_Impact_Bullet.DA_Impact_Bullet");
+}
+
+float AMDProjectile::ComputeMaxLifetime(float MaxRange, float Speed)
+{
+	return FMath::Clamp(MaxRange / FMath::Max(Speed, 1.0f) + MaxLifetimeMargin, MaxLifetimeMargin, MaxLifetimeCap);
 }
 
 AMDProjectile::AMDProjectile()
@@ -40,7 +51,9 @@ AMDProjectile::AMDProjectile()
 	SetCanBeDamaged(false);
 	NetUpdateFrequency = 20.0f;
 	NetPriority = 3.0f;
-	InitialLifeSpan = MDProjectileLocal::MaxFlightSeconds + 2.0f;
+	// Backstop on the authority (the server's real bolt, a local twin): nothing lives longer than ~3 s. A client's replicated copy
+	// goes when the server destroys the real one.
+	InitialLifeSpan = MaxLifetimeCap + LifetimeBackstop;
 
 	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
@@ -66,6 +79,7 @@ void AMDProjectile::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 	DOREPLIFETIME(AMDProjectile, WeaponData);
 	DOREPLIFETIME(AMDProjectile, bImpacted);
 	DOREPLIFETIME(AMDProjectile, ImpactPoint);
+	DOREPLIFETIME(AMDProjectile, bImpactOnCreature);
 }
 
 TSubclassOf<AMDProjectile> AMDProjectile::ResolveClass(const UMDRangedWeaponData* Data)
@@ -114,6 +128,10 @@ void AMDProjectile::Configure(const FMDProjectileParams& Params, bool bTwin)
 	Launch.ShotId = Params.ShotId;
 	Launch.StartServerTime = static_cast<float>(ServerNow()) - (bTwin ? 0.0f : Params.FastForward);
 	AppliedFastForward = bTwin ? 0.0f : Params.FastForward;
+
+	// Real bolt and twin both end by MaxLifetime at the latest (a miss, a bolt that never hits); the actor lifespan backs that up.
+	MaxLifetime = ComputeMaxLifetime(MaxRange, Speed);
+	SetLifeSpan(MaxLifetime + LifetimeBackstop);
 
 	if (AActor* ShooterActor = Params.Shooter)
 	{
@@ -281,11 +299,11 @@ void AMDProjectile::OnRep_Impact()
 		// The shooter's twin owns the visual; make it end where the server says (it may already be gone).
 		if (AMDProjectile* Twin = FindTwin(GetWorld(), Launch.ShotId))
 		{
-			Twin->FinishAt(ImpactPoint, FVector::ZeroVector);
+			Twin->FinishAt(ImpactPoint, FVector::ZeroVector, bImpactOnCreature);
 		}
 		return;
 	}
-	PlayImpactLocal(ImpactPoint);
+	PlayImpactLocal(ImpactPoint, bImpactOnCreature);
 }
 
 void AMDProjectile::Tick(float DeltaSeconds)
@@ -376,7 +394,8 @@ void AMDProjectile::AdvanceSimulation(float DeltaSeconds)
 			// sweep of the same segment skips the victim.
 			if (bIsTwin)
 			{
-				FinishAt(Hit.ImpactPoint, Hit.ImpactNormal);
+				// The twin ends on the first thing it touches (it never damages and never pierces); the server's impact then confirms it.
+				FinishAt(Hit.ImpactPoint, Hit.ImpactNormal, Hit.GetActor() && MDDamageNumbers::IsEligibleVictim(Hit.GetActor()));
 				return;
 			}
 			if (HandleHit(Hit))
@@ -388,7 +407,7 @@ void AMDProjectile::AdvanceSimulation(float DeltaSeconds)
 			Remaining += Step;
 			continue;
 		}
-		if (FVector::Dist(B, Launch.Origin) >= MaxRange || SimTime >= MDProjectileLocal::MaxFlightSeconds)
+		if (FVector::Dist(B, Launch.Origin) >= MaxRange || SimTime >= MaxLifetime)
 		{
 			bFinished = true;
 			if (bIsTwin || HasAuthority())
@@ -444,11 +463,11 @@ bool AMDProjectile::HandleHit(const FHitResult& Hit)
 		--PierceRemaining;
 		return false;
 	}
-	FinishAt(Hit.ImpactPoint, Hit.ImpactNormal);
+	FinishAt(Hit.ImpactPoint, Hit.ImpactNormal, true);
 	return true;
 }
 
-void AMDProjectile::FinishAt(const FVector& Point, const FVector& Normal)
+void AMDProjectile::FinishAt(const FVector& Point, const FVector& Normal, bool bOnCreature)
 {
 	if (bFinished)
 	{
@@ -464,31 +483,48 @@ void AMDProjectile::FinishAt(const FVector& Point, const FVector& Normal)
 
 	if (bIsTwin)
 	{
-		PlayImpactLocal(Point);
-		Destroy();
+		PlayImpactLocal(Point, bOnCreature);
+		Destroy(); // the twin is done the moment it resolves (own hit, or the server's impact)
 		return;
 	}
 	bImpacted = true;
 	ImpactPoint = Point;
-	PlayImpactLocal(Point); // the host (and a test) sees it too
+	bImpactOnCreature = bOnCreature;
+	PlayImpactLocal(Point, bOnCreature); // the host (and a test) sees it too
 	ForceNetUpdate();
 	SetLifeSpan(0.5f); // clients get the impact before the actor goes
 }
 
-void AMDProjectile::PlayImpactLocal(const FVector& Point)
+void AMDProjectile::PlayImpactLocal(const FVector& Point, bool bOnCreature)
 {
 	if (bImpactPlayed)
 	{
 		return;
 	}
 	bImpactPlayed = true;
-	const UWorld* World = GetWorld();
-	if (!World || World->GetNetMode() == NM_DedicatedServer || !WeaponData || WeaponData->ImpactFX.IsNull())
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer || bOnCreature)
+	{
+		return; // a creature's blood is C1's (the feedback component plays it from the replicated hit reaction)
+	}
+	// A wall or the floor: the bullet impact set's small spark / dust puff, as a capped one-shot. (WeaponData->ImpactFX is the beam
+	// hit now; the pink laser hit systems loop and are not a bullet effect.)
+	static TWeakObjectPtr<UMDImpactSet> CachedSet;
+	if (!CachedSet.IsValid())
+	{
+		CachedSet = Cast<UMDImpactSet>(FSoftObjectPath(MDProjectileLocal::BulletImpactPath).TryLoad());
+	}
+	const UMDImpactSet* Set = CachedSet.Get();
+	if (!Set)
 	{
 		return;
 	}
-	if (UNiagaraSystem* FX = WeaponData->ImpactFX.LoadSynchronous())
+	const FMDImpactEntry Entry = Set->FindEntry(SurfaceType_Default);
+	UNiagaraSystem* FX = Cast<UNiagaraSystem>(Entry.VFX);
+	if (!FX)
 	{
-		UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), FX, Point, (-Launch.Velocity).Rotation());
+		return;
 	}
+	const FVector Scale(MDImpactMath::VFXScaleForLevel(Entry.VFXScale, GetDefault<UMDLocalSettings>()->VFXLevel));
+	MDRangedFX::SpawnOneShot(World, FX, Point, (-Launch.Velocity).Rotation(), Scale, MDRangedFX::ImpactMaxSeconds);
 }

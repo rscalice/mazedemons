@@ -272,7 +272,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues")
 	TSoftObjectPtr<UNiagaraSystem> MuzzleFlashFX;
 
-	// Spawned where a projectile ends (world or victim), on top of the victim's own impact set.
+	// Beam hit effect (R5, the Duskray's FreeStylizedLaserBeamVFX hit). Projectiles do NOT use it: a bullet's world impact comes from
+	// DA_Impact_Bullet (a small spark / dust puff) and a creature's from C1's blood. Leave it empty on projectile guns.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues")
 	TSoftObjectPtr<UNiagaraSystem> ImpactFX;
 

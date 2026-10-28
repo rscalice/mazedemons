@@ -80,6 +80,14 @@ public:
 	// The class a data asset fires: Projectile.ProjectileClass when it is an AMDProjectile subclass, else AMDProjectile.
 	static TSubclassOf<AMDProjectile> ResolveClass(const UMDRangedWeaponData* Data);
 
+	// Hard ceiling of a projectile's flight (s): range / speed + MaxLifetimeMargin, never above MaxLifetimeCap. Real bolts and twins
+	// end (silently on a miss) at this time; the actor lifespan is LifetimeBackstop longer, so nothing can outlive ~3 s.
+	static constexpr float MaxLifetimeCap = 2.75f;
+	static constexpr float MaxLifetimeMargin = 0.5f;
+	static constexpr float LifetimeBackstop = 0.25f;
+	static float ComputeMaxLifetime(float MaxRange, float Speed);
+	float GetMaxLifetime() const { return MaxLifetime; }
+
 	bool IsTwin() const { return bIsTwin; }
 	uint16 GetShotId() const { return Launch.ShotId; }
 	const FMDProjectileLaunch& GetLaunch() const { return Launch; }
@@ -122,9 +130,10 @@ private:
 	// Server: resolves one hit. Returns true when the bolt ends here.
 	bool HandleHit(const FHitResult& Hit);
 
-	// Server: ends the flight at Point (replicates the impact, hides, short lifespan so clients see it).
-	void FinishAt(const FVector& Point, const FVector& Normal);
-	void PlayImpactLocal(const FVector& Point);
+	// Server: ends the flight at Point (replicates the impact, hides, short lifespan so clients see it). bOnCreature: the bolt ended in a
+	// creature (C1 already plays blood for it), so only world hits get the projectile's own spark / dust.
+	void FinishAt(const FVector& Point, const FVector& Normal, bool bOnCreature = false);
+	void PlayImpactLocal(const FVector& Point, bool bOnCreature);
 
 	// ---- Replicated ----
 	UPROPERTY(ReplicatedUsing = OnRep_Launch)
@@ -139,6 +148,9 @@ private:
 	UPROPERTY(Replicated)
 	FVector_NetQuantize ImpactPoint = FVector::ZeroVector;
 
+	UPROPERTY(Replicated)
+	bool bImpactOnCreature = false;
+
 	// ---- Server / twin simulation state ----
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMeshComponent> Bolt;
@@ -148,6 +160,7 @@ private:
 	float BaseDamage = 0.0f;
 	float Radius = 10.0f;
 	float MaxRange = 4000.0f;
+	float MaxLifetime = MaxLifetimeCap;
 	int32 PierceRemaining = 0;
 	int32 HitCount = 0;
 	float SimTime = 0.0f;

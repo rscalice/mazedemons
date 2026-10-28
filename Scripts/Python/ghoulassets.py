@@ -390,8 +390,9 @@ montages = sec("Montages", s_montages) or {}
 def s_archetype():
     da = unreal.load_asset("/Game/Data/Enemies/DA_Archetype_Ghoul")
     attacks = []
-    specs = [("Swipe", "AM_Ghoul_Swipe", 170.0, 0.8, 0.8, 1.0, 15.0, 0.0, 180.0),
-             ("Lunge", "AM_Ghoul_Lunge", 450.0, 0.9, 1.5, 1.3, 25.0, 350.0, 520.0)]
+    # The Lunge is disabled in the shipped archetype (2026-10-28, see ghoullunge.py): re-running this script must not bring it back.
+    specs = [("Swipe", "AM_Ghoul_Swipe", 170.0, 0.8, 0.8, 1.0, 15.0, 0.0, 180.0)]
+    # ("Lunge", "AM_Ghoul_Lunge", 450.0, 0.9, 1.5, 1.3, 25.0, 350.0, 520.0)  # re-enable with Scripts/Python/ghoullunge.py (ENABLE = True)
     for nm, mn, rng, tell, cd, dmg, poise, kb, warp in specs:
         if mn not in montages: continue
         m, sockets, d = montages[mn]
