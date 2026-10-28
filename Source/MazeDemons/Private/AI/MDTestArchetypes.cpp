@@ -3,7 +3,9 @@
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyCharacter.h"
 #include "Engine/Engine.h"
+#include "Engine/HitResult.h"
 #include "Engine/World.h"
+#include "MDCombatStatics.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
@@ -18,11 +20,16 @@ namespace MDTestArchetypes
 		if (Text.Equals(TEXT("brute"), ESearchCase::IgnoreCase)) { OutKind = EKind::Brute; return true; }
 		if (Text.Equals(TEXT("werewolf"), ESearchCase::IgnoreCase)) { OutKind = EKind::Werewolf; return true; }
 		if (Text.Equals(TEXT("caster"), ESearchCase::IgnoreCase)) { OutKind = EKind::Caster; return true; }
+		if (Text.Equals(TEXT("ghoul"), ESearchCase::IgnoreCase)) { OutKind = EKind::Ghoul; return true; }
 		return false;
 	}
 
 	UMDEnemyArchetype* Make(UObject* Outer, EKind Kind)
 	{
+		if (Kind == EKind::Ghoul)
+		{
+			return LoadObject<UMDEnemyArchetype>(nullptr, TEXT("/Game/Data/Enemies/DA_Archetype_Ghoul.DA_Archetype_Ghoul"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+		}
 		UMDEnemyArchetype* A = NewObject<UMDEnemyArchetype>(Outer ? Outer : GetTransientPackage());
 		A->MaxHealth = 80.0f;
 		A->MaxPoise = 40.0f;
@@ -81,6 +88,8 @@ namespace MDTestArchetypes
 			AI.bIsCaster = true;
 			AI.AllowedRoles = { EMDRole::Harasser };
 			break;
+		default:
+			break;
 		}
 		return A;
 	}
@@ -108,12 +117,19 @@ static FAutoConsoleCommandWithWorldAndArgs GMDSpawnTestEnemy(
 			return;
 		}
 		UMDEnemyArchetype* Archetype = MDTestArchetypes::Make(World, Kind);
+		if (!Archetype)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("md.AI.SpawnTest: no archetype for %s"), *Args[0]);
+			return;
+		}
+		// Optional third argument: the spawn distance in metres (default 6).
+		const double DistanceCm = Args.Num() > 2 ? FMath::Clamp(FCString::Atof(*Args[2]), 2.0f, 40.0f) * 100.0 : 600.0;
 		const FVector Forward = Pawn->GetActorForwardVector();
 		const FVector Right = Pawn->GetActorRightVector();
 		const FName Group(*FString::Printf(TEXT("SpawnTest_%d"), static_cast<int32>(World->GetTimeSeconds() * 10.0)));
 		for (int32 i = 0; i < Count; ++i)
 		{
-			const FVector Offset = Forward * 600.0 + Right * ((i - (Count - 1) * 0.5) * 150.0);
+			const FVector Offset = Forward * DistanceCm + Right * ((i - (Count - 1) * 0.5) * 150.0);
 			FActorSpawnParameters Params;
 			Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 			AMDEnemyCharacter* Enemy = World->SpawnActorDeferred<AMDEnemyCharacter>(Class, FTransform(FRotator(0.0, (-Forward).Rotation().Yaw, 0.0), Pawn->GetActorLocation() + Offset), nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn);
@@ -124,4 +140,44 @@ static FAutoConsoleCommandWithWorldAndArgs GMDSpawnTestEnemy(
 				Enemy->FinishSpawning(FTransform(FRotator(0.0, (-Forward).Rotation().Yaw, 0.0), Pawn->GetActorLocation() + Offset));
 			}
 		}
+	}));
+
+// md.AI.HurtAll <damage> [radius m]: applies damage from the first player to every live enemy within the radius (host only),
+// through the ranged hit pipeline, so hit reactions (the flinch montage and the physical upper-body reaction) can be
+// reproduced without aiming a gun.
+static FAutoConsoleCommandWithWorldAndArgs GMDHurtAll(
+	TEXT("md.AI.HurtAll"),
+	TEXT("md.AI.HurtAll <damage> [radius m]: damage every enemy near the first player as a pistol shot would (host only)."),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+	{
+		if (!World || World->GetNetMode() == NM_Client)
+		{
+			return;
+		}
+		const float Damage = Args.Num() > 0 ? FCString::Atof(*Args[0]) : 5.0f;
+		const double Radius = (Args.Num() > 1 ? FCString::Atof(*Args[1]) : 8.0f) * 100.0;
+		const APlayerController* PC = World->GetFirstPlayerController();
+		APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+		if (!Pawn)
+		{
+			return;
+		}
+		int32 Hit = 0;
+		const TArray<TWeakObjectPtr<AMDEnemyCharacter>> Enemies = AMDEnemyCharacter::GetAllEnemies();
+		for (const TWeakObjectPtr<AMDEnemyCharacter>& Weak : Enemies)
+		{
+			AMDEnemyCharacter* Enemy = Weak.Get();
+			if (Enemy && Enemy->GetWorld() == World && !Enemy->IsEnemyDead() && FVector::Dist(Enemy->GetActorLocation(), Pawn->GetActorLocation()) <= Radius)
+			{
+				FHitResult HitResult;
+				HitResult.ImpactPoint = Enemy->GetActorLocation() + FVector(0.0, 0.0, 40.0);
+				HitResult.ImpactNormal = (Pawn->GetActorLocation() - Enemy->GetActorLocation()).GetSafeNormal();
+				FMDRangedHitParams Params;
+				Params.Damage = Damage;
+				Params.PoiseDamage = Damage;
+				Params.ShotOrigin = Pawn->GetActorLocation();
+				Hit += UMDCombatStatics::ApplyRangedHit(Pawn, Enemy, HitResult, Params) ? 1 : 0;
+			}
+		}
+		UE_LOG(LogTemp, Log, TEXT("md.AI.HurtAll: %d enemies took %.0f"), Hit, Damage);
 	}));

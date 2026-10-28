@@ -91,6 +91,11 @@ double MDPerception::SharedQueueTime(double SightTime, float ShareDelay, float R
 	return SightTime + static_cast<double>(FMath::Max(ShareDelay - ReactionTime, 0.0f));
 }
 
+bool MDPerception::IsInNearSense(float Distance2D, float Range)
+{
+	return Distance2D >= 0.0f && Range > 0.0f && Distance2D <= Range;
+}
+
 // ---- Dormancy ----
 
 bool MDDormancy::ShouldSleep(float NearestPlayerDistance, double SecondsSinceDamage)

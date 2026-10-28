@@ -15,7 +15,8 @@ namespace MDTestArchetypes
 		Archer,   // kiter: PreferredRange 9 m, RangedData = DA_Ranged_HollowPistol, no melee
 		Brute,    // bCanCharge, PunishGreedHits 3, heavy swing; allowed Guard / Striker
 		Werewolf, // bCanBlink
-		Caster    // bIsCaster: screened by Guards
+		Caster,   // bIsCaster: screened by Guards
+		Ghoul     // the real DA_Archetype_Ghoul (no test archetype): the base ghoul pack for AI repro runs
 	};
 
 	// Builds an archetype of Kind (owned by Outer). The melee attack set of a plain enemy is a single 200 cm swipe.

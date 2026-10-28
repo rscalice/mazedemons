@@ -149,5 +149,8 @@ private:
 public:
 	// Time spent in this subsystem's Tick (the pack step), for the 40-enemy budget test and tuning.
 	const MDAIPerf::FFrameProfile& GetProfile() const { return Profile; }
+
+	// The token pool itself (md.AI.DumpTokens, the token timeout tests).
+	const FMDPackTokenPool& GetTokens() const { return Tokens; }
 	void ResetProfile() { Profile = MDAIPerf::FFrameProfile(); }
 };

@@ -94,6 +94,14 @@ namespace MDPerception
 	// The timestamp to queue the shared stimulus with in a brain whose delayed queue releases it ReactionTime later, so that
 	// it is delivered exactly at SharedArrivalTime. Negative = not shared.
 	MAZEDEMONS_API double SharedQueueTime(double SightTime, float ShareDelay, float ReactionTime);
+
+	// Near sense: an awake enemy always knows a living player this close (cm) as long as only world geometry stands between
+	// them. The sight sense alone loses a player who stands 2 m away: its line trace is blocked by the pack mates crowding
+	// the same player (their capsules block Visibility for the weapon sweeps), and its cone drops a player the enemy is
+	// turning past. A lost sight is "(lost)" on the overlay, which gates the token request, so the pack stood and never
+	// attacked. The near sense needs no reaction delay: the enemy is already in the fight.
+	constexpr float NearSenseRange = 450.0f;
+	MAZEDEMONS_API bool IsInNearSense(float Distance2D, float Range = NearSenseRange);
 }
 
 namespace MDDormancy

@@ -1,5 +1,6 @@
 ﻿#include "AI/MDEnemyCharacter.h"
 
+#include "AI/MDAIVoice.h"
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttributeSet.h"
 #include "AI/MDEnemyAttackComponent.h"
@@ -132,9 +133,14 @@ void AMDEnemyCharacter::PlayTellCue(bool bWithSound)
 	}
 	if (bWithSound && Archetype && !Archetype->TellSound.IsNull())
 	{
+		// Through the voice gate: a tell is cut to 0.7 s, at most two play at once, one per enemy per 1.2 s, and the pack
+		// cannot stack them on the listener (UMDAIVoiceSubsystem).
 		if (USoundBase* Sound = Archetype->TellSound.LoadSynchronous())
 		{
-			UGameplayStatics::PlaySoundAtLocation(this, Sound, GetActorLocation(), Archetype->TellVolume);
+			if (UMDAIVoiceSubsystem* Voice = UMDAIVoiceSubsystem::Get(World))
+			{
+				Voice->Play(EMDVoiceKind::Tell, static_cast<int32>(GetUniqueID()), Sound, GetActorLocation(), Archetype->TellVolume);
+			}
 		}
 	}
 

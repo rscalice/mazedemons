@@ -1,6 +1,7 @@
 #include "AI/MDThreatIndicator.h"
 
 #include "AI/MDAITypes.h"
+#include "AI/MDAIVoice.h"
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyCharacter.h"
 #include "Engine/World.h"
@@ -200,7 +201,11 @@ void UMDThreatIndicatorSubsystem::Tick(float DeltaTime)
 		{
 			if (USoundBase* Sting = Enemy->Archetype->ThreatSting.LoadSynchronous())
 			{
-				UGameplayStatics::PlaySoundAtLocation(this, Sting, Enemy->GetActorLocation(), Enemy->Archetype->ThreatStingVolume);
+				// Voice gate: at most one sting per 2 s on this listener, cut at 1 s.
+				if (UMDAIVoiceSubsystem* Voice = UMDAIVoiceSubsystem::Get(World))
+				{
+					Voice->Play(EMDVoiceKind::Sting, static_cast<int32>(Enemy->GetUniqueID()), Sting, Enemy->GetActorLocation(), Enemy->Archetype->ThreatStingVolume);
+				}
 			}
 		}
 	}

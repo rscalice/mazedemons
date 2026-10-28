@@ -514,6 +514,8 @@ void UMDEnemyBrainComponent::UpdateKnownActors(double Now)
 		}
 	});
 
+	ApplyNearSense(Now);
+
 	for (auto It = Known.CreateIterator(); It; ++It)
 	{
 		const bool bGone = !It.Key().IsValid() || !IsValidTargetActor(It.Key().Get());
@@ -522,6 +524,55 @@ void UMDEnemyBrainComponent::UpdateKnownActors(double Now)
 		{
 			It.RemoveCurrent();
 		}
+	}
+}
+
+bool UMDEnemyBrainComponent::HasClearWorldLine(const FVector& From, const FVector& To) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return true;
+	}
+	// World geometry only: pawns (pack mates crowding the same player, the player's own capsule) never block the near sense.
+	FCollisionObjectQueryParams Objects;
+	Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+	Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDNearSense), false, Enemy.Get());
+	FHitResult Hit;
+	return !World->LineTraceSingleByObjectType(Hit, From, To, Objects, Params);
+}
+
+void UMDEnemyBrainComponent::ApplyNearSense(double Now)
+{
+	// Near sense (MDPerception::NearSenseRange): every living player within reach and not behind world geometry is known
+	// and sensed now, whatever the sight sense says. The sight trace is blocked by the pack mates around the same player and
+	// its cone drops a player the enemy turns past, which left the whole pack "(lost)" at 2-3 m and unable to ask for a token.
+	AMDEnemyCharacter* E = Enemy.Get();
+	UMDAISubsystem* Sub = GetAISubsystem();
+	if (!E || !Sub || bDormant)
+	{
+		return;
+	}
+	TArray<AActor*> Players;
+	Sub->CollectPlayerPawns(Players);
+	const FVector Self = E->GetActorLocation();
+	const FVector Eye = Self + FVector(0.0, 0.0, 60.0);
+	for (AActor* Player : Players)
+	{
+		if (!Player || !IsValidTargetActor(Player))
+		{
+			continue;
+		}
+		const FVector Location = Player->GetActorLocation();
+		if (!MDPerception::IsInNearSense(static_cast<float>(FVector::Dist2D(Self, Location))) || !HasClearWorldLine(Eye, Location))
+		{
+			continue;
+		}
+		FKnownActor& K = Known.FindOrAdd(Player);
+		K.LastLocation = Location;
+		K.LastSensedTime = Now;
+		K.bSensedNow = true;
 	}
 }
 
@@ -657,10 +708,11 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 
 	FMDBrainContext Context = BuildContext(Now);
 
-	// Ask for a token only when it is about to matter: in reach (with margin for the approach), ready, target in sight.
-	// Charge-capable archetypes ask from charge range too (the run-up needs the token).
+	// Ask for a token when it is about to matter: ready, target in sight, and within MDAI::TokenRequestReach: attack reach
+	// with a margin, the threat ring (an enemy holding at threat range must be able to ask, or the pack deadlocks: nobody
+	// closes in without a token and nobody is close enough to get one), or the charge range (the run-up needs the token).
 	UMDAISubsystem* Sub = GetAISubsystem();
-	const float TokenReach = GetAIParams().bCanCharge ? FMath::Max(Context.AttackRange * 1.5f, MDBehaviour::ChargeMaxDistance) : Context.AttackRange * 1.5f;
+	const float TokenReach = MDAI::TokenRequestReach(Context.AttackRange, Context.ThreatRange, GetAIParams().bCanCharge, MDBehaviour::ChargeMaxDistance);
 	const bool bKiterNow = GetAIParams().bKiter || (E->Archetype && E->Archetype->RangedData);
 	const bool bInShotReach = bKiterNow && Context.DistanceToTarget <= GetAIParams().PreferredRange + MDBehaviour::KiteMaxRangeSlack;
 	if (Sub && Context.bHasTarget && Context.bTargetSensed && Context.bAttackReady && !Context.bHasToken
@@ -724,11 +776,7 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 	const bool bRestart = bIntentFinished || Chosen != CurrentIntent;
 	SetIntent(Chosen, bRestart);
 	SyncThreat(); // SetIntent does nothing when the intent is unchanged, but the token may have been granted or lost
-
-	if (UMDAISubsystem::IsDebugEnabled())
-	{
-		DrawDebug();
-	}
+	// md.AI.Debug: UMDAISubsystem draws the overlay (the nearest enemies only), not every brain on every decision.
 }
 
 void UMDEnemyBrainComponent::SetIntent(EMDIntent Intent, bool bRestart)
@@ -1098,7 +1146,7 @@ bool UMDEnemyBrainComponent::IsAtRally() const
 // Debug
 // ---------------------------------------------------------------------------------------------------------------------
 
-void UMDEnemyBrainComponent::DrawDebug() const
+void UMDEnemyBrainComponent::DrawDebug(bool bVerbose, float Life, float FontScale) const
 {
 	const AMDEnemyCharacter* E = Enemy.Get();
 	UWorld* World = GetWorld();
@@ -1106,10 +1154,44 @@ void UMDEnemyBrainComponent::DrawDebug() const
 	{
 		return;
 	}
+	const FColor Color = CurrentIntent == EMDIntent::Attack ? FColor::Red : (HoldsAttackToken() ? FColor::Orange : FColor::White);
+	DrawDebugString(World, E->GetActorLocation() + FVector(0.0f, 0.0f, bVerbose ? 120.0f : 100.0f), bVerbose ? DescribeVerbose() : DescribeCompact(), nullptr, Color, Life, true, FontScale);
+}
+
+FString UMDEnemyBrainComponent::DescribeCompact() const
+{
+	// Two short lines: "#4 HoldThreat tok:- T1 Striker" / "-> 306cm lost  top HoldThreat 0.58"
+	const AMDEnemyCharacter* E = Enemy.Get();
+	MDAI::FScores Sorted = LastScores;
+	FMDUtilityScorer::SortDescending(Sorted);
+	FString RoleName = UEnum::GetValueAsString(Assignment.Role);
+	RoleName.RemoveFromStart(TEXT("EMDRole::"));
+	FString Text = FString::Printf(TEXT("#%d %s%s tok:%s T%d %s"), EnemyId, MDIntentToString(CurrentIntent),
+		CurrentIntent == EMDIntent::Attack && E && E->Archetype && E->Archetype->Attacks.IsValidIndex(ChosenAttackIndex)
+			? *FString::Printf(TEXT("(%s)"), *E->Archetype->Attacks[ChosenAttackIndex].Name.ToString()) : TEXT(""),
+		HoldsAttackToken() ? TEXT("Y") : TEXT("-"), static_cast<int32>(Tier.Tier), Assignment.PackId != 0 ? *RoleName : TEXT("solo"));
+	if (const AActor* T = Target.Get(); T && E)
+	{
+		Text += FString::Printf(TEXT("\n-> %.0fcm %s"), FVector::Dist2D(E->GetActorLocation(), GetTargetLocation()), IsTargetSensed() ? TEXT("seen") : TEXT("lost"));
+	}
+	else
+	{
+		Text += TEXT("\nno target");
+	}
+	if (Sorted.Num() > 0 && Sorted[0].Intent != CurrentIntent)
+	{
+		Text += FString::Printf(TEXT("  top %s %.2f"), MDIntentToString(Sorted[0].Intent), Sorted[0].Score);
+	}
+	return Text;
+}
+
+FString UMDEnemyBrainComponent::DescribeVerbose() const
+{
+	const AMDEnemyCharacter* E = Enemy.Get();
 	MDAI::FScores Sorted = LastScores;
 	FMDUtilityScorer::SortDescending(Sorted);
 	FString Text = FString::Printf(TEXT("#%d %s%s  tok:%s  T%d"), EnemyId, MDIntentToString(CurrentIntent),
-		CurrentIntent == EMDIntent::Attack && ChosenAttackIndex != INDEX_NONE && E->Archetype && E->Archetype->Attacks.IsValidIndex(ChosenAttackIndex)
+		CurrentIntent == EMDIntent::Attack && ChosenAttackIndex != INDEX_NONE && E && E->Archetype && E->Archetype->Attacks.IsValidIndex(ChosenAttackIndex)
 			? *FString::Printf(TEXT("(%s)"), *E->Archetype->Attacks[ChosenAttackIndex].Name.ToString()) : TEXT(""),
 		HoldsAttackToken() ? TEXT("YES") : TEXT("no"), static_cast<int32>(Tier.Tier));
 	if (Assignment.PackId != 0)
@@ -1127,12 +1209,11 @@ void UMDEnemyBrainComponent::DrawDebug() const
 	{
 		Text += FString::Printf(TEXT("\n%s %.2f"), MDIntentToString(Sorted[i].Intent), Sorted[i].Score);
 	}
-	if (const AActor* T = Target.Get())
+	if (const AActor* T = Target.Get(); T && E)
 	{
 		Text += FString::Printf(TEXT("\n-> %s %.0f cm%s"), *T->GetName(), FVector::Dist2D(E->GetActorLocation(), GetTargetLocation()), IsTargetSensed() ? TEXT("") : TEXT(" (lost)"));
 	}
-	const FColor Color = CurrentIntent == EMDIntent::Attack ? FColor::Red : (HoldsAttackToken() ? FColor::Orange : FColor::White);
-	DrawDebugString(World, E->GetActorLocation() + FVector(0.0f, 0.0f, 120.0f), Text, nullptr, Color, 1.0f / UMDAISubsystem::GetBrainHz() + 0.05f, true);
+	return Text;
 }
 
 // md.AI.DebugPerception 1 (server): green cone = awake, grey = dormant, red = a player is in sight. Yellow sphere + line = the

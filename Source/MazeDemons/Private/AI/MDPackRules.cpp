@@ -559,3 +559,24 @@ void FMDPackTokenPool::Purge(double Now)
 {
 	Entries.RemoveAll([Now](const FEntry& E) { return Now >= E.ExpireTime; });
 }
+
+void FMDPackTokenPool::ForEachValid(double Now, TFunctionRef<void(int32, int32, double, bool)> Fn) const
+{
+	for (const FEntry& E : Entries)
+	{
+		if (Now < E.ExpireTime)
+		{
+			Fn(E.Holder, E.Target, E.ExpireTime - Now, E.bCommitted);
+		}
+	}
+}
+
+double FMDPackTokenPool::MaxSecondsLeft(double Now) const
+{
+	double Max = 0.0;
+	for (const FEntry& E : Entries)
+	{
+		Max = FMath::Max(Max, E.ExpireTime - Now);
+	}
+	return Max;
+}

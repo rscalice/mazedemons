@@ -70,10 +70,29 @@ namespace MDRangedDebug
 		return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("ClaudeDump"));
 	}
 
+	// "-MDCmdFile" reads md_cmd.txt / writes md_cmd.log; "-MDCmdFile=host" reads host.txt / writes host.log, so a listen
+	// server and a client started from the same project can each be driven by their own script.
+	FString CmdFileBase()
+	{
+		FString Name;
+		if (FParse::Value(FCommandLine::Get(), TEXT("MDCmdFile="), Name) && !Name.IsEmpty())
+		{
+			return Name;
+		}
+		return TEXT("md_cmd");
+	}
+
+	// "-MDCmdFile" or "-MDCmdFile=<name>" on the command line (FParse::Param alone does not match the "=" form).
+	bool HasCmdFile()
+	{
+		FString Name;
+		return FParse::Param(FCommandLine::Get(), TEXT("MDCmdFile")) || FParse::Value(FCommandLine::Get(), TEXT("MDCmdFile="), Name);
+	}
+
 	void AppendLog(const FString& Text)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[MDRangedDebug] %s"), *Text);
-		FFileHelper::SaveStringToFile(Text + LINE_TERMINATOR, *(DumpDir() / TEXT("md_cmd.log")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,
+		FFileHelper::SaveStringToFile(Text + LINE_TERMINATOR, *(DumpDir() / (CmdFileBase() + TEXT(".log"))), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,
 			&IFileManager::Get(), FILEWRITE_Append);
 	}
 
@@ -519,7 +538,7 @@ namespace MDRangedDebug
 				return true;
 			}
 			S.PollAccum = 0.0f;
-			const FString File = DumpDir() / TEXT("md_cmd.txt");
+			const FString File = DumpDir() / (CmdFileBase() + TEXT(".txt"));
 			FString Text;
 			if (IFileManager::Get().FileExists(*File) && FFileHelper::LoadFileToString(Text, *File))
 			{
@@ -561,7 +580,7 @@ namespace MDRangedDebug
 	// support-hand IK) fails to load and the character stays in the reference pose. Load the module before the map does.
 	FDelayedAutoRegisterHelper EditorModuleRegistration(EDelayedRegisterRunPhase::ObjectSystemReady, []()
 	{
-		if (!GIsEditor && FParse::Param(FCommandLine::Get(), TEXT("MDCmdFile")))
+		if (!GIsEditor && HasCmdFile())
 		{
 			FModuleManager::Get().LoadModule(TEXT("MazeDemonsEditor"));
 		}
@@ -571,7 +590,7 @@ namespace MDRangedDebug
 	// Command-file watcher: only when the game was started with -MDCmdFile.
 	FDelayedAutoRegisterHelper WatcherRegistration(EDelayedRegisterRunPhase::EndOfEngineInit, []()
 	{
-		if (FParse::Param(FCommandLine::Get(), TEXT("MDCmdFile")))
+		if (HasCmdFile())
 		{
 			FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&TickWatcher), 0.0f);
 			AppendLog(TEXT("MDCmdFile watcher active"));

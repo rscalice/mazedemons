@@ -157,8 +157,12 @@ public:
 
 	FMDIntentSelectedNative OnIntentSelected;
 
-	// Debug overlay (md.AI.Debug 1): intent, top 3 scores, token. Server side.
-	void DrawDebug() const;
+	// Debug overlay (server side). UMDAISubsystem draws it for the nearest enemies only: md.AI.Debug 1 = DescribeCompact
+	// (two lines: intent, token, tier, role; target distance and whether it is sensed), md.AI.Debug 2 = DescribeVerbose
+	// (the pack line, the top 3 scores). Life = seconds the text stays; FontScale shrinks it.
+	void DrawDebug(bool bVerbose, float Life, float FontScale) const;
+	FString DescribeCompact() const;
+	FString DescribeVerbose() const;
 
 	static UMDEnemyBrainComponent* FindFor(const AActor* Actor);
 
@@ -198,6 +202,9 @@ private:
 	void SyncThreat();
 
 	void UpdateKnownActors(double Now);
+	// The near sense (MDPerception::NearSenseRange): players this close with only world geometry in between are sensed now.
+	void ApplyNearSense(double Now);
+	bool HasClearWorldLine(const FVector& From, const FVector& To) const;
 	void UpdateTarget(double Now);
 	bool IsValidTargetActor(const AActor* Actor) const;
 	FMDBrainContext BuildContext(double Now) const;

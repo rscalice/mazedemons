@@ -1,6 +1,7 @@
 #include "AI/MDEnemyBehaviourComponent.h"
 
 #include "AI/MDAIQueries.h"
+#include "AI/MDAIVoice.h"
 #include "AI/MDBehaviourRules.h"
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttackComponent.h"
@@ -135,7 +136,12 @@ void UMDEnemyBehaviourComponent::PlayCueLocal(EMDBehaviourCue Cue)
 		}
 		if (Sound)
 		{
-			UGameplayStatics::PlaySoundAtLocation(this, Sound, Enemy->GetActorLocation(), Info.Volume);
+			// Wind-up cues (feint jerk, brace, pre-blink) are tells; the rest are pack barks. Both go through the voice gate.
+			const bool bTell = Cue == EMDBehaviourCue::FeintJerk || Cue == EMDBehaviourCue::Brace || Cue == EMDBehaviourCue::PreBlink;
+			if (UMDAIVoiceSubsystem* Voice = UMDAIVoiceSubsystem::Get(World))
+			{
+				Voice->Play(bTell ? EMDVoiceKind::Tell : EMDVoiceKind::Bark, static_cast<int32>(Enemy->GetUniqueID()), Sound, Enemy->GetActorLocation(), Info.Volume);
+			}
 		}
 	}
 	if (Cue == EMDBehaviourCue::RangedDraw)

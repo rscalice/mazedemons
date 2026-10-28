@@ -24,6 +24,15 @@ namespace MDAI
 	// Seconds without a stimulus before the brain forgets a target (2.5 lose-sight).
 	constexpr double LoseTargetTime = 3.0;
 
+	// Token requests (1.3 / 2.4): an enemy asks for a token from the threat ring, not only from attack reach. The threat ring
+	// (HoldThreat / Swarm) stands ThreatRange from the player; a request gate inside that ring deadlocks a pack: nobody is
+	// allowed to close in without a token, and nobody is close enough to ask for one (the "never attacked" bug).
+	constexpr float TokenReachBeyondThreat = 150.0f;
+
+	// How far from its target an enemy may ask for an attack token: 1.5 x its attack reach, the threat ring plus a margin,
+	// or (charge-capable) its charge range, whichever is the largest.
+	MAZEDEMONS_API float TokenRequestReach(float AttackRange, float ThreatRange, bool bCanCharge, float ChargeMaxDistance);
+
 	// Scores are plain struct math: eight slots cover every intent WP1 scores, so no heap allocation per decision.
 	using FScores = TArray<FMDScoredIntent, TInlineAllocator<16>>;
 }
@@ -113,6 +122,13 @@ struct MAZEDEMONS_API FMDAttackTokenPool
 	void Purge(double Now);
 
 	int32 Num() const { return Entries.Num(); }
+
+	// Every valid entry (md.AI.DumpTokens, tests): holder, target, seconds until it expires.
+	void ForEachValid(double Now, TFunctionRef<void(int32 Holder, int32 Target, double SecondsLeft)> Fn) const;
+
+	// The longest a valid token has left before it expires on its own (0 when the pool is empty). A token can never be held
+	// longer than its Timeout: TryGrant refreshes it, ReleaseAfter shortens it, nothing extends it past Now + Timeout.
+	double MaxSecondsLeft(double Now) const;
 
 private:
 	TArray<FEntry> Entries;

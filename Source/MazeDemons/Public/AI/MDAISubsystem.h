@@ -9,6 +9,7 @@
 #include "MDAISubsystem.generated.h"
 
 class APawn;
+class FOutputDevice;
 class UMDEnemyBrainComponent;
 
 // Server-only world services the enemy brains share (V1 WP1):
@@ -61,6 +62,12 @@ public:
 
 	// md.AI.Debug != 0
 	static bool IsDebugEnabled();
+	// md.AI.Debug: 0 off, 1 compact (nearest md.AI.DebugCount enemies), 2 verbose (all awake enemies).
+	static int32 GetDebugLevel();
+	// Draws the md.AI.Debug overlay once (the tick calls it every 0.1 s).
+	void DrawOverlay();
+	// md.AI.DumpTokens: the token pool and every brain's intent / token / target.
+	void DumpTokens(FOutputDevice& Ar) const;
 
 	// md.AI.BrainHz
 	static float GetBrainHz();
@@ -138,12 +145,15 @@ private:
 
 	// V1 WP3
 	void ReportSprintNoise();
+	// Every living player pawn carries a UMDCrowdObstacleComponent (md.AI.CrowdObstacle).
+	void EnsureCrowdObstacles();
 	void RefreshRallyCache(double InNow) const;
 	void RefreshFogCache(double InNow) const;
 
 	TArray<TWeakObjectPtr<APawn>> ExtraPlayers;
 	float SlowAccumulator = 0.0f;
 	float DebugAccumulator = 0.0f;
+	float OverlayAccumulator = 0.0f;
 	MDAIPerf::FFrameProfile Profile;
 	MDNav::FPathBudget PathBudget;
 

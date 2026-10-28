@@ -477,6 +477,37 @@ void FMDAttackTokenPool::Purge(double Now)
 	Entries.RemoveAll([Now](const FEntry& E) { return Now >= E.ExpireTime; });
 }
 
+void FMDAttackTokenPool::ForEachValid(double Now, TFunctionRef<void(int32, int32, double)> Fn) const
+{
+	for (const FEntry& E : Entries)
+	{
+		if (Now < E.ExpireTime)
+		{
+			Fn(E.Holder, E.Target, E.ExpireTime - Now);
+		}
+	}
+}
+
+double FMDAttackTokenPool::MaxSecondsLeft(double Now) const
+{
+	double Max = 0.0;
+	for (const FEntry& E : Entries)
+	{
+		Max = FMath::Max(Max, E.ExpireTime - Now);
+	}
+	return Max;
+}
+
+float MDAI::TokenRequestReach(float AttackRange, float ThreatRange, bool bCanCharge, float ChargeMaxDistance)
+{
+	float Reach = FMath::Max(AttackRange * 1.5f, ThreatRange + TokenReachBeyondThreat);
+	if (bCanCharge)
+	{
+		Reach = FMath::Max(Reach, ChargeMaxDistance);
+	}
+	return Reach;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Scheduling and attack timing
 // ---------------------------------------------------------------------------------------------------------------------

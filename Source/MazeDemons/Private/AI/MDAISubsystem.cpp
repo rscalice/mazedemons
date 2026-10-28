@@ -1,6 +1,7 @@
 #include "AI/MDAISubsystem.h"
 
 #include "AI/MDAIQueries.h"
+#include "AI/MDCrowdObstacleComponent.h"
 #include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDRallyPoint.h"
 #include "MDAbilitySystemComponent.h"
@@ -18,11 +19,16 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Math/RandomStream.h"
+#include "Misc/OutputDevice.h"
 
 namespace MDAISubsystemLocal
 {
 	TAutoConsoleVariable<int32> CVarDebug(TEXT("md.AI.Debug"), 0,
-		TEXT("1 = draw each enemy's intent, top 3 scores and token state above it (server)."), ECVF_Cheat);
+		TEXT("1 = compact overlay (two lines: intent, token, tier, role, target distance / seen or lost) above the 6 enemies nearest the viewer. 2 = verbose (pack line, top 3 scores) above every awake enemy. Server / listen host."), ECVF_Cheat);
+	TAutoConsoleVariable<int32> CVarDebugCount(TEXT("md.AI.DebugCount"), 6,
+		TEXT("How many of the nearest enemies md.AI.Debug 1 labels."), ECVF_Cheat);
+	TAutoConsoleVariable<int32> CVarCrowdObstacle(TEXT("md.AI.CrowdObstacle"), 1,
+		TEXT("1 (default) = every living player pawn is a Detour crowd obstacle (UMDCrowdObstacleComponent): enemies steer round players instead of running through them. 0 = off (new pawns only)."), ECVF_Cheat);
 	TAutoConsoleVariable<int32> CVarForceTier(TEXT("md.AI.ForceTier"), -1,
 		TEXT("-1 = off (every pack runs at the tier the pack director computed for it at spawn). 0..4 = every enemy brain runs at that intelligence tier."), ECVF_Cheat);
 	TAutoConsoleVariable<float> CVarBrainHz(TEXT("md.AI.BrainHz"), 8.0f,
@@ -38,6 +44,8 @@ namespace MDAISubsystemLocal
 	constexpr float SlowInterval = 0.5f;
 	// Seconds between perception debug redraws.
 	constexpr float DebugInterval = 0.2f;
+	// Seconds between overlay redraws (md.AI.Debug).
+	constexpr float OverlayInterval = 0.1f;
 	// A player is "in melee" when an enemy stands this close (cm).
 	constexpr double MeleeReach = 350.0;
 }
@@ -124,6 +132,123 @@ bool UMDAISubsystem::IsDebugEnabled()
 	return MDAISubsystemLocal::CVarDebug.GetValueOnGameThread() != 0;
 }
 
+int32 UMDAISubsystem::GetDebugLevel()
+{
+	return MDAISubsystemLocal::CVarDebug.GetValueOnGameThread();
+}
+
+void UMDAISubsystem::DrawOverlay()
+{
+	const int32 Level = GetDebugLevel();
+	UWorld* World = GetWorld();
+	if (Level <= 0 || !World)
+	{
+		return;
+	}
+	// Level 1: the nearest N enemies to the local viewer (the first local player's view point), compact, small text.
+	// Level 2: everything awake, verbose.
+	const bool bVerbose = Level >= 2;
+	FVector Viewer = FVector::ZeroVector;
+	bool bHasViewer = false;
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		const APlayerController* PC = It->Get();
+		if (PC && PC->IsLocalController())
+		{
+			FRotator Unused;
+			PC->GetPlayerViewPoint(Viewer, Unused);
+			bHasViewer = true;
+			break;
+		}
+	}
+	struct FEntry
+	{
+		const UMDEnemyBrainComponent* Brain = nullptr;
+		double Dist = 0.0;
+	};
+	TArray<FEntry> Entries;
+	for (const TWeakObjectPtr<UMDEnemyBrainComponent>& B : Brains)
+	{
+		const UMDEnemyBrainComponent* Brain = B.Get();
+		const AMDEnemyCharacter* E = Brain ? Brain->GetEnemy() : nullptr;
+		if (!E || Brain->IsDormant())
+		{
+			continue;
+		}
+		Entries.Add({ Brain, bHasViewer ? FVector::Dist(Viewer, E->GetActorLocation()) : 0.0 });
+	}
+	if (!bVerbose)
+	{
+		Entries.Sort([](const FEntry& A, const FEntry& B) { return A.Dist < B.Dist; });
+		const int32 Count = FMath::Max(MDAISubsystemLocal::CVarDebugCount.GetValueOnGameThread(), 1);
+		if (Entries.Num() > Count)
+		{
+			Entries.SetNum(Count);
+		}
+	}
+	const float Life = MDAISubsystemLocal::OverlayInterval + 0.05f;
+	for (const FEntry& Entry : Entries)
+	{
+		Entry.Brain->DrawDebug(bVerbose, Life, bVerbose ? 1.0f : 0.8f);
+	}
+}
+
+void UMDAISubsystem::DumpTokens(FOutputDevice& Ar) const
+{
+	const UMDPackDirectorSubsystem* Director = UMDPackDirectorSubsystem::Get(GetWorld());
+	if (!Director)
+	{
+		Ar.Logf(TEXT("md.AI.DumpTokens: no pack director"));
+		return;
+	}
+	const double InNow = Now();
+	int32 Count = 0;
+	Director->GetTokens().ForEachValid(InNow, [&](int32 Holder, int32 Target, double Left, bool bCommitted)
+	{
+		++Count;
+		FString HolderName = TEXT("?");
+		FString TargetName = TEXT("?");
+		for (const TPair<TWeakObjectPtr<const AActor>, int32>& Pair : ActorIds)
+		{
+			if (Pair.Value == Holder && Pair.Key.IsValid())
+			{
+				HolderName = Pair.Key->GetName();
+			}
+			if (Pair.Value == Target && Pair.Key.IsValid())
+			{
+				TargetName = Pair.Key->GetName();
+			}
+		}
+		Ar.Logf(TEXT("  token: %s (id %d) -> %s (id %d), %.2f s left%s"), *HolderName, Holder, *TargetName, Target, Left, bCommitted ? TEXT(", committed") : TEXT(""));
+	});
+	Ar.Logf(TEXT("md.AI.DumpTokens: %d token(s) held, timeout %.1f s, hold after attack %.1f s"), Count, MDAI::TokenTimeout, MDAI::TokenHoldAfterAttack);
+	for (const TWeakObjectPtr<UMDEnemyBrainComponent>& B : Brains)
+	{
+		const UMDEnemyBrainComponent* Brain = B.Get();
+		const AMDEnemyCharacter* E = Brain ? Brain->GetEnemy() : nullptr;
+		if (!E)
+		{
+			continue;
+		}
+		const AActor* T = Brain->GetTarget();
+		Ar.Logf(TEXT("  #%d %s %s tok:%s%s target %s %.0f cm %s"), Brain->GetEnemyId(), *E->GetName(), MDIntentToString(Brain->GetCurrentIntent()),
+			Brain->HoldsAttackToken() ? TEXT("YES") : TEXT("no"), Brain->IsDormant() ? TEXT(" dormant") : TEXT(""),
+			T ? *T->GetName() : TEXT("-"), T ? FVector::Dist2D(E->GetActorLocation(), Brain->GetTargetLocation()) : 0.0,
+			T ? (Brain->IsTargetSensed() ? TEXT("seen") : TEXT("lost")) : TEXT(""));
+	}
+}
+
+static FAutoConsoleCommandWithWorldArgsAndOutputDevice GMDDumpTokens(
+	TEXT("md.AI.DumpTokens"),
+	TEXT("Prints every attack token (holder, target, seconds left) and each brain's intent / token / target state (server)."),
+	FConsoleCommandWithWorldArgsAndOutputDeviceDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World, FOutputDevice& Ar)
+	{
+		if (UMDAISubsystem* Sub = UMDAISubsystem::Get(World))
+		{
+			Sub->DumpTokens(Ar);
+		}
+	}));
+
 float UMDAISubsystem::GetBrainHz()
 {
 	return FMath::Clamp(MDAISubsystemLocal::CVarBrainHz.GetValueOnGameThread(), 1.0f, 30.0f);
@@ -207,8 +332,19 @@ void UMDAISubsystem::Tick(float DeltaTime)
 		SlowAccumulator = 0.0f;
 		UpdateDormancy(Now());
 		ReportSprintNoise();
+		EnsureCrowdObstacles();
 	}
 	Profile.Add(FPlatformTime::Seconds() - Start); // the brain budget (2.9): scheduler + dormancy + noise, averaged over frames
+
+	if (IsDebugEnabled())
+	{
+		OverlayAccumulator += DeltaTime;
+		if (OverlayAccumulator >= MDAISubsystemLocal::OverlayInterval)
+		{
+			OverlayAccumulator = 0.0f;
+			DrawOverlay();
+		}
+	}
 
 	if (IsDebugPerceptionEnabled())
 	{
@@ -301,6 +437,20 @@ void UMDAISubsystem::CollectMeleePlayerLocations(TArray<FVector>& Out) const
 				break;
 			}
 		}
+	}
+}
+
+void UMDAISubsystem::EnsureCrowdObstacles()
+{
+	if (MDAISubsystemLocal::CVarCrowdObstacle.GetValueOnGameThread() == 0)
+	{
+		return;
+	}
+	TArray<AActor*> Players;
+	CollectPlayerPawns(Players);
+	for (AActor* Actor : Players)
+	{
+		UMDCrowdObstacleComponent::EnsureOn(Cast<APawn>(Actor));
 	}
 }
 

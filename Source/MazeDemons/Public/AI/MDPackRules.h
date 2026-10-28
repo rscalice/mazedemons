@@ -207,6 +207,13 @@ struct MAZEDEMONS_API FMDPackTokenPool
 
 	int32 Num() const { return Entries.Num(); }
 
+	// Every valid entry (md.AI.DumpTokens, tests): holder, target, seconds left, committed.
+	void ForEachValid(double Now, TFunctionRef<void(int32 Holder, int32 Target, double SecondsLeft, bool bCommitted)> Fn) const;
+
+	// The longest a valid token has left before it expires on its own (0 when the pool is empty). Nothing extends a token
+	// past Now + Timeout: TryGrant refreshes it, ReleaseAfter shortens it, Commit only protects it from eviction.
+	double MaxSecondsLeft(double Now) const;
+
 private:
 	TArray<FEntry> Entries;
 };
