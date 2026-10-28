@@ -10,6 +10,8 @@
 #include "MDGameSettings.h"
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
+#include "MDPlayerState.h"
+#include "MDArmorProbe.h"
 #include "Ranged/MDRangedWeaponData.h"
 #include "Ranged/MDAmmoRules.h"
 #include "MDStation.h"
@@ -217,9 +219,26 @@ void UMDInventoryComponent::ReapplyAllEquipment()
 	{
 		ApplyArmorReduction(Entry.Slot, Entry.ItemRowName);
 		ApplyWeaponBonus(Entry.Slot, Entry.ItemRowName);
+		MDArmorTrace(this, FString::Printf(TEXT("Reapply slot=%d row=%s"), Entry.Slot, *Entry.ItemRowName.ToString()));
 		K2_ApplyEquipment(Entry.Slot, Entry.ItemRowName);
+		SyncArmorToPlayerState(Entry.Slot);
 	}
 	OnEquipmentChanged.Broadcast();
+}
+
+static TAutoConsoleVariable<int32> CVarArmorSyncOnEquip(TEXT("md.Armor.SyncOnEquip"), 1,
+	TEXT("1 (default): every armor equip/unequip on the server republishes the pawn's armor meshes to the PlayerState. 0: only the BP's own (partial) syncs, as before."));
+
+void UMDInventoryComponent::SyncArmorToPlayerState(uint8 Slot) const
+{
+	if (CVarArmorSyncOnEquip.GetValueOnGameThread() == 0 || Slot < MDItemType::Helmet || Slot > MDItemType::Boots || !GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	if (AMDPlayerState* State = Cast<AMDPlayerState>(GetOwner()))
+	{
+		State->SyncArmorFromPawn();
+	}
 }
 
 UMDAbilitySystemComponent* UMDInventoryComponent::ResolveASC() const
@@ -1226,7 +1245,9 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 	OnEquipmentChanged.Broadcast();
 	ApplyArmorReduction(Slot, NewRow);
 	ApplyWeaponBonus(Slot, NewRow);
+	MDArmorTrace(this, FString::Printf(TEXT("K2_ApplyEquipment slot=%d row=%s"), Slot, *NewRow.ToString()));
 	K2_ApplyEquipment(Slot, NewRow);
+	SyncArmorToPlayerState(Slot);
 }
 
 void UMDInventoryComponent::UnequipSlot_Impl(uint8 Slot)
@@ -1251,6 +1272,7 @@ void UMDInventoryComponent::UnequipSlot_Impl(uint8 Slot)
 	ApplyArmorReduction(Slot, NAME_None);
 	ApplyWeaponBonus(Slot, NAME_None);
 	K2_ClearEquipment(Slot);
+	SyncArmorToPlayerState(Slot);
 }
 
 void UMDInventoryComponent::DropItem_Impl(int32 Index, int32 Quantity)

@@ -451,11 +451,17 @@ private:
 	// Client-side snapshot used by OnRep_Equipped to diff what changed.
 	TArray<FMDEquippedSlot> PrevEquipped;
 
+	// Authority: after the BP hook has put an armor piece on (or taken it off) the pawn, publishes the pawn's Torso/Hands/Legs/Feet to the
+	// PlayerState's replicated armor meshes. The BP only synced from some of its branches (Torso, weapons), so legs, boots and gloves never
+	// reached the other machines until some unrelated equip happened. No-op for non-armor slots and non-PlayerState owners.
+	void SyncArmorToPlayerState(uint8 Slot) const;
+
 	// Lets the automation tests (Private/Tests/MDInventoryTests.cpp) reach protected/private members.
 	friend struct FMDInventoryTestAccess;
 	friend struct FMDQuickSlotTestAccess;
 	friend struct FMDUpgradeTestAccess;
 	friend struct FMDAmmoTestAccess; // R3 tests
+	friend struct FMDArmorTestAccess; // armor replication tests
 	// Debug exec commands (ListItemRows) read GetSlotForItem.
 	friend class AMDPlayerController;
 

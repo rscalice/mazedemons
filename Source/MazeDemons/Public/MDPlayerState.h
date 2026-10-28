@@ -113,6 +113,8 @@ protected:
 	void ApplyArmorVisuals();
 
 	friend struct FMDAmmoTestAccess; // R3 tests
+	friend struct FMDArmorProbeAccess; // debug armor probe
+	friend struct FMDArmorTestAccess; // armor replication tests
 
 	// R3, authority, first spawn only: the starter kit from FMDEconomyTuning::StarterKit (pistol equipped + Light Rounds).
 	void GrantStarterKit();

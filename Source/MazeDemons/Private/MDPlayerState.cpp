@@ -1,6 +1,7 @@
 #include "MDPlayerState.h"
 
 #include "MDAbilitySystemComponent.h"
+#include "MDArmorProbe.h"
 #include "MDAttributeSet.h"
 #include "MDBalanceData.h"
 #include "MDGameSettings.h"
@@ -20,6 +21,12 @@
 #include "Engine/SkeletalMesh.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Net/UnrealNetwork.h"
+#include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
+#include "TimerManager.h"
+
+static TAutoConsoleVariable<int32> CVarStarterKitDefer(TEXT("md.StarterKit.DeferToNextTick"), 1,
+	TEXT("1 (default): the starter kit is granted one tick after the first pawn is set, after BP_Player has dressed the player. 0: grant inside OnPawnSet (the R3 order that skipped the starter armor)."));
 
 static USkeletalMeshComponent* FindPawnMeshComponent(const APawn* Pawn, const TCHAR* Name)
 {
@@ -173,11 +180,11 @@ void AMDPlayerState::RagdollPawn(APawn* Pawn)
 
 void AMDPlayerState::SyncArmorFromPawn()
 {
-	if (!HasAuthority())
-	{
-		return;
-	}
 	APawn* Pawn = GetPawn();
+	if (!HasAuthority() || !Pawn)
+	{
+		return; // no pawn yet: publishing now would blank the replicated meshes
+	}
 	auto Read = [Pawn](const TCHAR* Name) -> USkeletalMesh*
 	{
 		USkeletalMeshComponent* C = FindPawnMeshComponent(Pawn, Name);
@@ -294,6 +301,7 @@ void AMDPlayerState::GrantStarterKit()
 	{
 		return;
 	}
+	MDArmorTrace(this, FString::Printf(TEXT("GrantStarterKit equipped-before=%d"), Inventory->GetEquipped().Num()));
 	bool bEquippedGun = false;
 	for (const FMDStarterItem& Item : UMDGameSettings::GetEconomy().StarterKit)
 	{
@@ -321,6 +329,8 @@ void AMDPlayerState::GrantStarterKit()
 
 void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn)
 {
+	MDArmorTrace(this, FString::Printf(TEXT("HandlePawnSet pawn=%s old=%s auth=%d statsInit=%d equipped=%d"), *GetNameSafe(NewPawn), *GetNameSafe(OldPawn),
+		HasAuthority(), bStatsInitialized, UMDGameplayStatics::GetInventory(this) ? UMDGameplayStatics::GetInventory(this)->GetEquipped().Num() : -1));
 	if (!NewPawn || !AbilitySystem)
 	{
 		return;
@@ -366,7 +376,18 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 			{
 				PerkComponent->InitializeForRun(); // after the base stats, so the perk effect lands on top of them
 			}
-			GrantStarterKit(); // R3: pistol + 40 Light Rounds (FMDEconomyTuning::StarterKit)
+			// R3: pistol + 40 Light Rounds (FMDEconomyTuning::StarterKit). NOT now: OnPawnSet fires inside Possess, before the pawn's
+			// Possessed event runs BP_Player::InitializeCharacterArmor, which only dresses a player whose Equipped list is empty. A gun
+			// equipped here made that list non-empty, so a joining client's starter cloth set was skipped (naked, nothing to replicate).
+			// The next tick is after the whole Possess call stack. md.StarterKit.DeferToNextTick 0 restores the old order (for repro).
+			if (CVarStarterKitDefer.GetValueOnGameThread() != 0)
+			{
+				GetWorldTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]() { GrantStarterKit(); }));
+			}
+			else
+			{
+				GrantStarterKit();
+			}
 		}
 		else if (AbilitySystem->IsDead() && NewPawn != DeadPawn)
 		{
