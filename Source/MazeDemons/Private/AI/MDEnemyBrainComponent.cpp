@@ -2,8 +2,11 @@
 
 #include "AI/MDAISubsystem.h"
 #include "AI/MDEnemyArchetype.h"
+#include "AI/MDBehaviourRules.h"
 #include "AI/MDEnemyAttackComponent.h"
+#include "AI/MDEnemyBehaviourComponent.h"
 #include "AI/MDEnemyCharacter.h"
+#include "HAL/IConsoleManager.h"
 #include "AI/MDEnemyController.h"
 #include "AI/MDPackDirectorSubsystem.h"
 #include "AI/MDPackRules.h"
@@ -15,6 +18,53 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
+
+namespace MDBrainBehaviourLocal
+{
+	// md.AI.ForceIntent <Name>: every brain picks this intent (Swarm, Bait, Kite, Flank, Feint, Guard, Blink, Charge, ...)
+	// whatever the scorer says, for PIE testing. "" / none / off clears it. Stagger and death still interrupt.
+	TAutoConsoleVariable<FString> CVarForceIntent(TEXT("md.AI.ForceIntent"), TEXT(""),
+		TEXT("Forces every enemy brain to this intent for testing (Swarm Bait Kite Flank Feint Guard Blink Charge Attack Chase HoldThreat Retreat). Empty or none clears it."),
+		ECVF_Cheat);
+}
+
+EMDIntent UMDEnemyBrainComponent::GetForcedIntent()
+{
+	EMDIntent Out = EMDIntent::Idle;
+	return MDBehaviour::ParseForcedIntent(MDBrainBehaviourLocal::CVarForceIntent.GetValueOnGameThread(), Out) ? Out : EMDIntent::Idle;
+}
+
+UMDEnemyBehaviourComponent* UMDEnemyBrainComponent::GetBehaviour() const
+{
+	const AMDEnemyCharacter* E = Enemy.Get();
+	return E ? E->Behaviour : nullptr;
+}
+
+bool UMDEnemyBrainComponent::GetFlankPoint(FVector& OutPoint) const
+{
+	const UMDEnemyBehaviourComponent* B = GetBehaviour();
+	return B && B->GetFlankPoint(OutPoint);
+}
+
+bool UMDEnemyBrainComponent::GetGuardPoint(FVector& OutPoint) const
+{
+	if (!Assignment.bHasGuardPoint)
+	{
+		return false;
+	}
+	OutPoint = Assignment.GuardPoint;
+	return true;
+}
+
+bool UMDEnemyBrainComponent::GetPackCentre(FVector& OutPoint) const
+{
+	if (!Assignment.bHasPackCentre)
+	{
+		return false;
+	}
+	OutPoint = Assignment.PackCentre;
+	return true;
+}
 
 UMDEnemyBrainComponent::UMDEnemyBrainComponent()
 {
@@ -95,6 +145,13 @@ void UMDEnemyBrainComponent::OnPossessed(APawn* InPawn)
 	{
 		A->OnAttackEnded.AddUObject(this, &UMDEnemyBrainComponent::HandleAttackEnded);
 	}
+	if (UMDEnemyBehaviourComponent* B = NewEnemy->Behaviour)
+	{
+		B->OnActionEnded.RemoveAll(this);
+		B->OnActionEnded.AddUObject(this, &UMDEnemyBrainComponent::HandleBehaviourActionEnded);
+	}
+	FeintOpportunity.Reset();
+	Greed.Reset();
 	bBound = true;
 
 	if (UMDAISubsystem* Sub = GetAISubsystem())
@@ -144,6 +201,10 @@ void UMDEnemyBrainComponent::OnUnpossessed()
 			{
 				ASC->OnDeath.RemoveDynamic(this, &UMDEnemyBrainComponent::HandleDeath);
 				ASC->OnDamageApplied.RemoveAll(this);
+			}
+			if (E->Behaviour)
+			{
+				E->Behaviour->OnActionEnded.RemoveAll(this);
 			}
 		}
 		if (UMDEnemyAttackComponent* A = Attack.Get())
@@ -379,6 +440,10 @@ void UMDEnemyBrainComponent::HandleDamageApplied(AActor* Instigator, float Appli
 	if (Instigator && Applied > 0.0f)
 	{
 		LastDamageTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		if (!Greed.bBraced)
+		{
+			Greed.RegisterAbsorbedHit(LastDamageTime); // reset by a stagger (HandleReaction); N absorbed hits earn a braced counter
+		}
 		if (bDormant)
 		{
 			SetDormant(false, LastDamageTime); // hurt: wake at once
@@ -580,32 +645,80 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 		bIntentFinished = true; // it never started or ended without telling us
 	}
 
+	// V1 WP5 commitment: a feint, a blink, a charge or an arrow draw in progress is never re-scored.
+	if (UMDEnemyBehaviourComponent* Behaviour = E->Behaviour)
+	{
+		if (Behaviour->IsBusy() && (CurrentIntent == EMDIntent::Feint || CurrentIntent == EMDIntent::Blink
+			|| CurrentIntent == EMDIntent::Charge || CurrentIntent == EMDIntent::Kite) && !bIntentFinished)
+		{
+			return;
+		}
+	}
+
 	FMDBrainContext Context = BuildContext(Now);
 
 	// Ask for a token only when it is about to matter: in reach (with margin for the approach), ready, target in sight.
+	// Charge-capable archetypes ask from charge range too (the run-up needs the token).
 	UMDAISubsystem* Sub = GetAISubsystem();
+	const float TokenReach = GetAIParams().bCanCharge ? FMath::Max(Context.AttackRange * 1.5f, MDBehaviour::ChargeMaxDistance) : Context.AttackRange * 1.5f;
+	const bool bKiterNow = GetAIParams().bKiter || (E->Archetype && E->Archetype->RangedData);
+	const bool bInShotReach = bKiterNow && Context.DistanceToTarget <= GetAIParams().PreferredRange + MDBehaviour::KiteMaxRangeSlack;
 	if (Sub && Context.bHasTarget && Context.bTargetSensed && Context.bAttackReady && !Context.bHasToken
-		&& Context.AttackRange > 0.0f && Context.DistanceToTarget <= Context.AttackRange * 1.5f)
+		&& ((Context.AttackRange > 0.0f && Context.DistanceToTarget <= TokenReach) || bInShotReach)
+		&& MDBehaviour::CanHoldAttackToken(Assignment.Role))
 	{
 		Context.bHasToken = Sub->RequestAttackToken(E, Target.Get());
 	}
+	FillBehaviourContext(Context, Now);
 
 	++DecisionIndex;
 	Context.DecisionIndex = DecisionIndex;
 	LastScores = FMDUtilityScorer::Score(Context, GetAIParams(), Tier);
 	EMDIntent Chosen = FMDUtilityScorer::Select(LastScores, CurrentIntent, bIntentFinished, SwitchMargin);
 
-	if (Chosen == EMDIntent::Attack)
+	// md.AI.ForceIntent: PIE testing override (a stagger or a stun still holds the enemy).
+	if (const EMDIntent Forced = GetForcedIntent(); Forced != EMDIntent::Idle && !Context.bStunned && Context.bHasTarget)
+	{
+		Chosen = Forced;
+	}
+
+	if (Chosen == EMDIntent::Attack || Chosen == EMDIntent::Feint)
 	{
 		ChosenAttackIndex = E->Archetype ? E->Archetype->PickAttack(Context.DistanceToTarget) : INDEX_NONE;
+		if (Chosen == EMDIntent::Attack && Greed.bBraced)
+		{
+			const int32 Counter = PickCounterAttack(Context.DistanceToTarget);
+			ChosenAttackIndex = Counter != INDEX_NONE ? Counter : ChosenAttackIndex;
+		}
 		if (ChosenAttackIndex == INDEX_NONE)
 		{
 			Chosen = Context.bHasToken ? EMDIntent::Chase : EMDIntent::HoldThreat; // nothing reaches from here
+		}
+		else if (Chosen == EMDIntent::Feint)
+		{
+			FeintOpportunity.MarkFeinted(); // one feint per attack opportunity
+			FRandomStream Stream(static_cast<int32>(HashCombine(HashCombine(static_cast<uint32>(Context.RunSeed), static_cast<uint32>(EnemyId)), static_cast<uint32>(DecisionIndex * 31 + 7))));
+			FeintRoll = Stream.FRand();
 		}
 	}
 	else
 	{
 		ChosenAttackIndex = INDEX_NONE;
+	}
+
+	// Pack barks (the tell-cue path): a swarm howl when the pack starts to close in, "fall back" when it retreats.
+	if (Chosen != CurrentIntent && E->Behaviour)
+	{
+		const bool bSwarmStart = Chosen == EMDIntent::Swarm;
+		const bool bFallBack = Chosen == EMDIntent::Retreat;
+		if (bSwarmStart || bFallBack)
+		{
+			const EMDBehaviourCue Cue = bSwarmStart ? EMDBehaviourCue::SwarmHowl : EMDBehaviourCue::FallBack;
+			if (UMDPackDirectorSubsystem* Director = GetDirector(); !Director || Director->TryPackBark(E, static_cast<uint8>(Cue)))
+			{
+				E->Behaviour->PlayCue(Cue);
+			}
+		}
 	}
 
 	const bool bRestart = bIntentFinished || Chosen != CurrentIntent;
@@ -629,7 +742,7 @@ void UMDEnemyBrainComponent::SetIntent(EMDIntent Intent, bool bRestart)
 	if (AMDEnemyCharacter* E = Enemy.Get())
 	{
 		E->SetReplicatedIntent(Intent);
-		if (Intent == EMDIntent::Attack)
+		if (Intent == EMDIntent::Attack || Intent == EMDIntent::Feint || Intent == EMDIntent::Charge)
 		{
 			if (UMDAISubsystem* Sub = GetAISubsystem())
 			{
@@ -693,9 +806,136 @@ void UMDEnemyBrainComponent::ReleaseToken(bool bImmediate)
 // Interrupts and executor feedback
 // ---------------------------------------------------------------------------------------------------------------------
 
+void UMDEnemyBrainComponent::FillBehaviourContext(FMDBrainContext& C, double Now)
+{
+	AMDEnemyCharacter* E = Enemy.Get();
+	AActor* T = Target.Get();
+	const FMDArchetypeAIParams& P = GetAIParams();
+	C.bKiter = P.bKiter || (E && E->Archetype && E->Archetype->RangedData);
+	UMDEnemyBehaviourComponent* B = E ? E->Behaviour : nullptr;
+	if (!B)
+	{
+		return;
+	}
+	C.bInGrace = B->IsInGrace();
+	C.bInAmbushArrival = B->IsInAmbushArrival();
+	C.bSwarmActive = MDBehaviour::ShouldSwarm(Tier.Tier, Assignment.PackAlive, C.bHasSlot, C.DistanceToTarget, C.ThreatRange);
+
+	if (C.bHasTarget && T)
+	{
+		const FVector Self = E->GetActorLocation();
+		const FVector TargetLoc = T->GetActorLocation();
+
+		// Bait: never baits across rooms the player has not seen (both ends must be in revealed areas).
+		if (Assignment.Role == EMDRole::Bait)
+		{
+			C.bBaitAllowed = MDBehaviour::CanBaitAcross(MDAIQueries::MakeWorldEnvironment(E->GetWorld(), E, T), Self, TargetLoc);
+		}
+		// Flank: the cached point behind the target, until the flanker stands on it.
+		if (Assignment.Role == EMDRole::Flanker && C.bTargetSensed)
+		{
+			B->RefreshFlankPoint(T, Now);
+			FVector Point;
+			C.bFlankReady = B->GetFlankPoint(Point) && FVector::Dist2D(Self, Point) > 200.0;
+		}
+		// Blink and charge only close a gap, only while sensed and off cooldown.
+		if (P.bCanBlink && C.bTargetSensed && Tier.IsIntentUnlocked(EMDIntent::Blink)
+			&& C.DistanceToTarget >= MDBehaviour::BlinkMinRange && C.DistanceToTarget <= MDBehaviour::BlinkMaxRange && B->CanBlinkNow(Now))
+		{
+			B->RefreshBlinkArrival(T, Now);
+			FVector Arrival;
+			C.bBlinkReady = B->GetBlinkArrival(Arrival);
+		}
+		C.bChargeReady = P.bCanCharge && C.bTargetSensed && Tier.IsIntentUnlocked(EMDIntent::Charge)
+			&& MDBehaviour::IsChargeDistanceOk(C.DistanceToTarget) && B->CanChargeNow(Now);
+	}
+	C.bGuardActive = Assignment.bHasGuardPoint;
+
+	// Feint (T3+): one roll per attack opportunity; the opportunity ends when the token is lost or the real attack ends.
+	if (!C.bHasToken)
+	{
+		FeintOpportunity.Reset();
+	}
+	else if (C.bHasTarget && C.bTargetSensed && C.bAttackReady && !C.bInGrace && !C.bKiter && C.AttackRange > 0.0f && C.DistanceToTarget <= C.AttackRange)
+	{
+		FRandomStream Stream(static_cast<int32>(HashCombine(HashCombine(static_cast<uint32>(C.RunSeed), static_cast<uint32>(EnemyId)), static_cast<uint32>(DecisionIndex + 1))));
+		C.bFeintReady = FeintOpportunity.ShouldFeintNow(Tier.Tier, C.bHasToken, Stream.FRand());
+	}
+
+	// Punish greed (T3+): N absorbed hits earn a braced counter.
+	if (Greed.BraceExpired(Now))
+	{
+		Greed.Reset();
+	}
+	if (!Greed.bBraced && P.PunishGreedHits > 0 && Greed.ShouldBrace(Tier.Tier, P.PunishGreedHits))
+	{
+		B->BeginBrace();
+		Greed.StartBrace(Now);
+	}
+	C.bPunishCounter = Greed.bBraced;
+}
+
+int32 UMDEnemyBrainComponent::PickCounterAttack(float Distance) const
+{
+	const AMDEnemyCharacter* E = Enemy.Get();
+	if (!E || !E->Archetype)
+	{
+		return INDEX_NONE;
+	}
+	int32 Best = INDEX_NONE;
+	float BestPoise = -1.0f;
+	for (int32 i = 0; i < E->Archetype->Attacks.Num(); ++i)
+	{
+		const FMDEnemyAttack& A = E->Archetype->Attacks[i];
+		if (A.Range >= Distance && A.Step.PoiseDamage > BestPoise)
+		{
+			BestPoise = A.Step.PoiseDamage;
+			Best = i;
+		}
+	}
+	return Best;
+}
+
+void UMDEnemyBrainComponent::HandleBehaviourActionEnded(EMDIntent Intent, bool bCompleted)
+{
+	if (bDead)
+	{
+		return;
+	}
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	const AMDEnemyCharacter* E = Enemy.Get();
+	if (Intent == EMDIntent::Kite || Intent == EMDIntent::Charge)
+	{
+		ReleaseToken(false);
+		const float Cooldown = (Intent == EMDIntent::Kite && E && E->Archetype && E->Archetype->Attacks.Num() > 0) ? E->Archetype->Attacks[0].Cooldown : 1.5f;
+		NextAttackReadyTime = Now + Cooldown;
+		SyncThreat();
+	}
+	if (CurrentIntent == Intent)
+	{
+		bIntentFinished = true;
+		if (bCompleted)
+		{
+			RunDecision(Now); // a finished feint goes straight into the real attack
+		}
+	}
+}
+
 void UMDEnemyBrainComponent::HandleAttackEnded(bool bInterrupted)
 {
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (CurrentIntent == EMDIntent::Feint)
+	{
+		return; // the feint's own cancel: the token and the attack stay ready for the real swing 0.3 - 0.6 s later
+	}
+	if (CurrentIntent == EMDIntent::Attack)
+	{
+		FeintOpportunity.Reset(); // the opportunity is spent
+		if (Greed.bBraced)
+		{
+			Greed.Reset(); // the braced counter is thrown
+		}
+	}
 	ReleaseToken(false); // held for the attack's duration + 0.5 s (1.3)
 	const AMDEnemyCharacter* E = Enemy.Get();
 	if (E && E->Archetype && E->Archetype->Attacks.IsValidIndex(ChosenAttackIndex))
@@ -720,6 +960,12 @@ void UMDEnemyBrainComponent::HandleReaction(const FMDHitResultRep& Hit)
 		return; // a flinch never interrupts (1.3: stagger honesty is about staggers)
 	}
 	ReleaseToken(true);
+	Greed.Reset();
+	FeintOpportunity.Reset();
+	if (AMDEnemyCharacter* E = Enemy.Get(); E && E->Behaviour)
+	{
+		E->Behaviour->CancelAction(); // a feint, a blink wind-up, a charge or a draw ends silently
+	}
 	if (UMDEnemyAttackComponent* A = Attack.Get())
 	{
 		A->CancelAttack();
@@ -743,6 +989,10 @@ void UMDEnemyBrainComponent::HandleDeath()
 	}
 	bDead = true;
 	ReleaseToken(true);
+	if (AMDEnemyCharacter* E = Enemy.Get(); E && E->Behaviour)
+	{
+		E->Behaviour->CancelAction();
+	}
 	if (UMDEnemyAttackComponent* A = Attack.Get())
 	{
 		A->CancelAttack();
@@ -792,6 +1042,7 @@ void UMDEnemyBrainComponent::ReportToDirector()
 	{
 		Report.AllowedMask |= MDPack::RoleBit(Role);
 	}
+	Report.bCaster = Params.bIsCaster;
 	Report.PreferredRange = Params.PreferredRange;
 	Report.ThreatRange = Params.ThreatRange;
 	Report.AttackRange = GetAttackRange();

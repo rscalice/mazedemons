@@ -2,6 +2,7 @@
 
 #include "AI/MDAIQueries.h"
 #include "AI/MDAISubsystem.h"
+#include "AI/MDBehaviourRules.h"
 #include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyCharacter.h"
 #include "AI/MDEnemyArchetype.h"
@@ -453,6 +454,50 @@ bool UMDPackDirectorSubsystem::GetAssignment(const AActor* Enemy, FMDEnemyAssign
 	Out.Slot = Member->Slot;
 	Out.bHasRally = Pack->bHasRally && Pack->State == EMDPackState::Regroup;
 	Out.RallyPoint = Pack->RallyPoint;
+	Out.PackAlive = Pack->NumAlive();
+
+	// V1 WP5: the centroid of the other living members (the bait's leash) and the guard line point.
+	{
+		FVector Sum = FVector::ZeroVector;
+		int32 Count = 0;
+		for (const FMDPackMember& M : Pack->Members)
+		{
+			if (M.Enemy.IsValid() && M.Enemy.Get() != Enemy && M.Role != EMDRole::Bait)
+			{
+				Sum += M.Enemy->GetActorLocation();
+				++Count;
+			}
+		}
+		if (Count > 0)
+		{
+			Out.bHasPackCentre = true;
+			Out.PackCentre = Sum / static_cast<double>(Count);
+		}
+	}
+	if (Member->Role == EMDRole::Guard && Pack->FocusTarget.IsValid())
+	{
+		const FMDPackMember* Caster = Pack->Members.FindByPredicate([](const FMDPackMember& M) { return M.Report.bCaster && M.Enemy.IsValid(); });
+		TArray<int32> GuardIds;
+		for (const FMDPackMember& M : Pack->Members)
+		{
+			if (M.Role == EMDRole::Guard)
+			{
+				GuardIds.Add(M.EnemyId);
+			}
+		}
+		GuardIds.Sort();
+		const int32 GuardIndex = GuardIds.IndexOfByKey(Member->EnemyId);
+		if (Caster && GuardIndex != INDEX_NONE)
+		{
+			TArray<FVector> Line;
+			MDBehaviour::ComputeGuardLine(Caster->Enemy->GetActorLocation(), Pack->FocusTarget->GetActorLocation(), GuardIds.Num(), Line);
+			if (Line.IsValidIndex(GuardIndex))
+			{
+				Out.bHasGuardPoint = true;
+				Out.GuardPoint = Line[GuardIndex];
+			}
+		}
+	}
 	const AActor* Focus = Pack->FocusTarget.Get();
 	if (Focus && Member->Slot >= 0)
 	{
@@ -480,14 +525,18 @@ bool UMDPackDirectorSubsystem::RequestToken(AActor* Enemy, AActor* Target)
 	if (const FMDPack* Pack = FindPackOf(Enemy))
 	{
 		MaxTokens = FMDTierParams::ForTier(GetPackTier(*Pack)).MaxTokensPerPlayer; // the requester's own pack tier
-		if (Pack->State == EMDPackState::Regroup)
+		if (Pack->State == EMDPackState::Regroup || Pack->State == EMDPackState::AmbushArmed)
 		{
-			return false; // a retreating pack does not attack
+			return false; // a retreating pack does not attack, nor does an ambush that has not sprung
 		}
 		if (const FMDPackMember* Member = Pack->FindMember(Enemy))
 		{
 			Role = Member->Role;
 		}
+	}
+	if (!MDBehaviour::CanHoldAttackToken(Role))
+	{
+		return false; // V1 WP5: the Bait never holds a token; Guards hold defence slots on the guard line instead
 	}
 	const int32 EnemyId = AI->GetActorId(Enemy);
 	const float Dist = static_cast<float>(FVector::Dist2D(Enemy->GetActorLocation(), Target->GetActorLocation()));
@@ -680,6 +729,7 @@ void UMDPackDirectorSubsystem::UpdateRoles(FMDPack& Pack, EMDIntelligenceTier Ti
 		FMDRoleCandidate& C = Candidates.AddDefaulted_GetRef();
 		C.Id = M.EnemyId;
 		C.AllowedMask = M.Report.AllowedMask;
+		C.bIsCaster = M.Report.bCaster;
 	}
 	TArray<EMDRole> Roles;
 	MDPackRules::AssignRoles(Candidates, Tier, Roles);
@@ -771,8 +821,54 @@ void UMDPackDirectorSubsystem::UpdateFocus(FMDPack& Pack, EMDIntelligenceTier Ti
 	}
 }
 
+void UMDPackDirectorSubsystem::SetAmbushArmed(int32 PackId, bool bArmed)
+{
+	if (FMDPack* Pack = FindPackMutable(PackId))
+	{
+		Pack->bAmbushArmed = bArmed;
+		if (bArmed)
+		{
+			Pack->State = EMDPackState::AmbushArmed;
+		}
+		else if (Pack->State == EMDPackState::AmbushArmed)
+		{
+			Pack->State = EMDPackState::Engage;
+		}
+	}
+}
+
+bool UMDPackDirectorSubsystem::TryPackBark(const AActor* Enemy, uint8 Cue)
+{
+	FMDPack* Pack = FindPackOfMutable(Enemy);
+	if (!Pack)
+	{
+		return true;
+	}
+	const double* Last = Pack->LastBarkTime.Find(Cue);
+	if (!MDBehaviour::BarkAllowed(Now(), Last ? *Last : -1.0))
+	{
+		return false;
+	}
+	Pack->LastBarkTime.Add(Cue, Now());
+	return true;
+}
+
+int32 UMDPackDirectorSubsystem::FindGroupPack(FName GroupKey) const
+{
+	if (const int32* Found = GroupPacks.Find(GroupKey))
+	{
+		return FindPack(*Found) ? *Found : 0;
+	}
+	return 0;
+}
+
 void UMDPackDirectorSubsystem::UpdatePackState(FMDPack& Pack, EMDIntelligenceTier Tier, double InNow)
 {
+	if (Pack.bAmbushArmed)
+	{
+		Pack.State = EMDPackState::AmbushArmed; // waiting for the trigger: no retreat, no pressing
+		return;
+	}
 	const UMDAISubsystem* AI = UMDAISubsystem::Get(GetWorld());
 	const bool bAnyRally = HasAnyRallyPoint(InNow);
 	const int32 Alive = Pack.NumAlive();
@@ -852,6 +948,10 @@ void UMDPackDirectorSubsystem::UpdateSlots(FMDPack& Pack)
 		{
 			continue;
 		}
+		if (M.Role == EMDRole::Bait || M.Role == EMDRole::Guard)
+		{
+			continue; // V1 WP5: the bait and the guards stand where their own rules put them, not on the attack ring
+		}
 		Indices.Add(i);
 		FMDSlotMember& S = Request.AddDefaulted_GetRef();
 		S.Id = M.EnemyId;
@@ -869,7 +969,9 @@ void UMDPackDirectorSubsystem::UpdateSlots(FMDPack& Pack)
 	Pack.ThreatRadius = ThreatSum / static_cast<float>(Request.Num());
 
 	TArray<int32> Slots;
-	MDPackRules::AssignSlots(Request, Pack.RingYawDeg, Focus->GetActorRotation().Yaw, Slots);
+	// V1 WP5 Swarm (T1+, 3 or more): the attackers take evenly spaced slots, never bunched on one side.
+	const bool bSwarm = static_cast<int32>(GetPackTier(Pack)) >= static_cast<int32>(EMDIntelligenceTier::T1) && Request.Num() >= MDBehaviour::SwarmMinPack;
+	MDPackRules::AssignSlots(Request, Pack.RingYawDeg, Focus->GetActorRotation().Yaw, Slots, bSwarm);
 	for (int32 k = 0; k < Indices.Num(); ++k)
 	{
 		Pack.Members[Indices[k]].Slot = Slots[k];

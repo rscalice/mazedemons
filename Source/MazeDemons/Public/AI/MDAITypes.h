@@ -30,7 +30,9 @@ enum class EMDIntent : uint8
 	Blink,
 	Charge,
 	Stagger,
-	Dead
+	Dead,
+	// V1 WP5 (append-only: the values above are replicated as uint8).
+	Swarm
 };
 
 // Pack role (2.4). None = 0 (loose enemy, not yet assigned).
@@ -57,7 +59,9 @@ enum class EMDPackState : uint8
 	Engage = 0,
 	Pressing,
 	Regroup,
-	Routed
+	Routed,
+	// V1 WP5: the pack is hidden / dormant until a player crosses an AMDAmbushMarker trigger (the director never retreats it).
+	AmbushArmed
 };
 
 // Intelligence tier T0 (basic) .. T4 (smartest). The tier table row is FMDIntelligenceTier (DT_IntelligenceTiers, V1 WP4).
@@ -88,6 +92,30 @@ struct MAZEDEMONS_API FMDArchetypeAIParams
 	// Roles the pack director may give this archetype.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
 	TArray<EMDRole> AllowedRoles;
+
+	// ---- V1 WP5 behaviour switches (all off by default: the Ghoul needs none of them) ----
+
+	// Ranged archetype: keeps its distance, repositions to kite points (T1+) and fires UMDEnemyArchetype::RangedData. Also true
+	// for any archetype that has RangedData.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Behaviour")
+	bool bKiter = false;
+
+	// May blink (T3+) through UMDBlinkComponent: Werewolf, Revenant.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Behaviour")
+	bool bCanBlink = false;
+
+	// May line up and charge in a straight line (Brute).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Behaviour")
+	bool bCanCharge = false;
+
+	// Casters are screened by Guards (T2+): Cultist.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Behaviour")
+	bool bIsCaster = false;
+
+	// Punish greed (T3+): after this many absorbed hits in a row (no stagger) the enemy braces and counters with its heaviest
+	// attack. 0 = never.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Behaviour", meta = (ClampMin = "0"))
+	int32 PunishGreedHits = 0;
 };
 
 // Common tier parameters (v1-design 3.2). The numbers come from DT_IntelligenceTiers (FMDIntelligenceTier rows T0..T4) once
@@ -281,6 +309,52 @@ struct MAZEDEMONS_API FMDBrainContext
 	// Within reach of the rally point (Retreat is over, Regroup holds).
 	UPROPERTY(BlueprintReadWrite, Category = "AI")
 	bool bAtRally = false;
+
+	// ---- V1 WP5 behaviour inputs (all false by default, so the WP1-WP4 scoring is unchanged) ----
+
+	// No-attack grace after an ambush arrival (0.5 s) or a blink (0.3 s).
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bInGrace = false;
+
+	// Ambush arrival: the enemy just appeared and stands still for the grace.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bInAmbushArrival = false;
+
+	// Swarm: pack of 3+, the enemy has a ring slot and is still outside the threat ring.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bSwarmActive = false;
+
+	// Bait: the bait's area and the target's area are revealed (it never baits across unrevealed rooms).
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bBaitAllowed = false;
+
+	// Ranged archetype (kites and fires; never swings).
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bKiter = false;
+
+	// Flank: a flank point behind the target exists and the flanker is not there yet.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bFlankReady = false;
+
+	// Guard: the pack has a caster and the director gave this guard a point on the guard line.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bGuardActive = false;
+
+	// Feint: a token holder whose opportunity rolled "feint" and has not feinted yet.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bFeintReady = false;
+
+	// Blink: the archetype can, the cooldown is over and a valid arrival point exists.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bBlinkReady = false;
+
+	// Charge: the archetype can, holds a token, the target is in charge range and the line is clear.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bChargeReady = false;
+
+	// Punish greed: braced after enough absorbed hits; the next attack is the heavy counter.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
+	bool bPunishCounter = false;
 
 	// ---- Determinism ----
 	UPROPERTY(BlueprintReadWrite, Category = "AI")

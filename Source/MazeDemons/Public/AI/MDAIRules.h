@@ -25,7 +25,7 @@ namespace MDAI
 	constexpr double LoseTargetTime = 3.0;
 
 	// Scores are plain struct math: eight slots cover every intent WP1 scores, so no heap allocation per decision.
-	using FScores = TArray<FMDScoredIntent, TInlineAllocator<8>>;
+	using FScores = TArray<FMDScoredIntent, TInlineAllocator<16>>;
 }
 
 // Utility scoring (2.3 step 3). Score = base x gates (tier, token, cooldown) x curves (distance) x aggression + seeded noise.

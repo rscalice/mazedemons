@@ -24,6 +24,9 @@ struct FMDMemberReport
 
 	// In a stagger / stun reaction (recovering).
 	bool bRecovering = false;
+
+	// V1 WP5: a caster (archetype bIsCaster): the pack's Guards screen it.
+	bool bCaster = false;
 };
 
 struct FMDPackMember
@@ -71,6 +74,13 @@ struct FMDPack
 	bool bRetreatDone = false;
 
 	bool bRolesDirty = true;
+
+	// V1 WP5: an ambush group waiting for its trigger (state AmbushArmed, no tokens, no retreat).
+	bool bAmbushArmed = false;
+
+	// V1 WP5 pack barks (swarm howl / fall back): world time of the last one per cue (EMDBehaviourCue as int), so a pack barks
+	// once per MDBehaviour::BarkInterval, not once per member.
+	TMap<uint8, double> LastBarkTime;
 
 	// The ring's rotation in the world (degrees), fixed per pack so the ring does not spin as the target turns.
 	float RingYawDeg = 0.0f;
@@ -125,4 +135,16 @@ struct FMDEnemyAssignment
 
 	bool bHasRally = false;
 	FVector RallyPoint = FVector::ZeroVector;
+
+	// ---- V1 WP5 ----
+	// Members alive in the pack.
+	int32 PackAlive = 0;
+
+	// Centroid of the other living members (the bait's 8 m leash is measured from it).
+	bool bHasPackCentre = false;
+	FVector PackCentre = FVector::ZeroVector;
+
+	// A Guard's point on the guard line between the pack's caster and the focus target (its "defence token" is this slot).
+	bool bHasGuardPoint = false;
+	FVector GuardPoint = FVector::ZeroVector;
 };

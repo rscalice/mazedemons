@@ -11,6 +11,7 @@
 
 class UMDAbilitySystemComponent;
 class UMDBlinkComponent;
+class UMDEnemyBehaviourComponent;
 class UMDCombatFeedbackComponent;
 class UMDEnemyArchetype;
 class UMDEnemyAttackComponent;
@@ -82,6 +83,19 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMDEnemyAttackComponent> AttackComponent;
 
+	// V1 WP5: timers and the long actions of the advanced behaviours (feint, blink, charge, ranged draw), the behaviour cues.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMDEnemyBehaviourComponent> Behaviour;
+
+	// V1 WP5 ambush: hidden, collision-free and dormant until the marker's trigger fires. Replicated so a client never sees
+	// (or bumps into) an ambusher that has not arrived yet.
+	UPROPERTY(ReplicatedUsing = OnRep_AmbushHidden, BlueprintReadOnly, Category = "Enemy|AI")
+	bool bAmbushHidden = false;
+
+	// Server: hide / reveal the enemy for an ambush. Revealing restores walking.
+	void SetAmbushHidden(bool bNewHidden);
+	bool IsAmbushHidden() const { return bAmbushHidden; }
+
 	// "AttackTarget" warp for the attack montages (the same warp name the player's combo steps use).
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMotionWarpingComponent> MotionWarping;
@@ -115,7 +129,8 @@ public:
 	// Every machine, from the MDAN_Tell anim notify at the start of an attack wind-up: the archetype's TellSound at low volume
 	// plus a brief overlay flash on the enemy. Cosmetic; a dedicated server skips it. The montage is multicast, so the notify
 	// fires on each machine and the cue reaches everyone (and a late joiner simply sees the next tell).
-	void PlayTellCue();
+	// bWithSound = false: the flash only (the V1 WP5 behaviour cues bring their own sound).
+	void PlayTellCue(bool bWithSound = true);
 
 	// Every enemy that exists on this machine (server and clients), for the threat indicator.
 	static const TArray<TWeakObjectPtr<AMDEnemyCharacter>>& GetAllEnemies();
@@ -156,6 +171,9 @@ protected:
 	UFUNCTION()
 	void OnRep_Archetype();
 
+	UFUNCTION()
+	void OnRep_AmbushHidden();
+
 private:
 	// Bound to the ASC's OnDeath on every machine (the server fires it directly, clients through the replicated dead state).
 	UFUNCTION()
@@ -167,6 +185,8 @@ private:
 	void AwardKillRewards();
 
 	void EndTellFlash();
+
+	void ApplyAmbushHidden();
 
 	bool bDeathHandled = false;
 	bool bFacingTarget = false;

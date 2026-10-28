@@ -1,5 +1,6 @@
 #include "AI/MDAIRules.h"
 
+#include "AI/MDBehaviourRules.h"
 #include "MDGameplayTags.h"
 #include "Math/RandomStream.h"
 
@@ -15,6 +16,15 @@ FGameplayTag MDIntentToTag(EMDIntent Intent)
 	case EMDIntent::Regroup: return TAG_AI_Intent_Regroup.GetTag();
 	case EMDIntent::Stagger: return TAG_AI_Intent_Stagger.GetTag();
 	case EMDIntent::Dead: return TAG_AI_Intent_Dead.GetTag();
+	case EMDIntent::Swarm: return TAG_AI_Intent_Swarm.GetTag();
+	case EMDIntent::Bait: return TAG_AI_Intent_Bait.GetTag();
+	case EMDIntent::Kite: return TAG_AI_Intent_Kite.GetTag();
+	case EMDIntent::Flank: return TAG_AI_Intent_Flank.GetTag();
+	case EMDIntent::Feint: return TAG_AI_Intent_Feint.GetTag();
+	case EMDIntent::Guard: return TAG_AI_Intent_Guard.GetTag();
+	case EMDIntent::Ambush: return TAG_AI_Intent_Ambush.GetTag();
+	case EMDIntent::Blink: return TAG_AI_Intent_Blink.GetTag();
+	case EMDIntent::Charge: return TAG_AI_Intent_Charge.GetTag();
 	default: return FGameplayTag();
 	}
 }
@@ -45,6 +55,7 @@ const TCHAR* MDIntentToString(EMDIntent Intent)
 	case EMDIntent::Charge: return TEXT("Charge");
 	case EMDIntent::Stagger: return TEXT("Stagger");
 	case EMDIntent::Dead: return TEXT("Dead");
+	case EMDIntent::Swarm: return TEXT("Swarm");
 	default: return TEXT("?");
 	}
 }
@@ -122,6 +133,7 @@ bool FMDTierParams::IsIntentUnlocked(EMDIntent Intent) const
 	case EMDIntent::Dead:
 		return true;
 	case EMDIntent::Kite:
+	case EMDIntent::Swarm:
 		return T >= 1;
 	case EMDIntent::Bait:
 	case EMDIntent::Flank:
@@ -148,7 +160,22 @@ namespace MDScorerLocal
 {
 	// Scoring slots, in a fixed order so the noise draw per intent is stable.
 	// New intents are appended so the noise draw of the existing ones stays the same.
-	constexpr EMDIntent Scored[] = { EMDIntent::Idle, EMDIntent::Chase, EMDIntent::HoldThreat, EMDIntent::Attack, EMDIntent::Retreat, EMDIntent::Regroup };
+	constexpr EMDIntent Scored[] = { EMDIntent::Idle, EMDIntent::Chase, EMDIntent::HoldThreat, EMDIntent::Attack, EMDIntent::Retreat, EMDIntent::Regroup,
+		// V1 WP5 (appended: the noise draw of the intents above is unchanged)
+		EMDIntent::Swarm, EMDIntent::Bait, EMDIntent::Kite, EMDIntent::Flank, EMDIntent::Feint, EMDIntent::Guard, EMDIntent::Ambush,
+		EMDIntent::Blink, EMDIntent::Charge };
+
+	// The attack gate shared by Attack and Feint: a token, ready, target in sight and in reach, and not in a no-attack grace.
+	bool AttackOpen(const FMDBrainContext& C)
+	{
+		return C.bHasTarget && C.bHasToken && C.bAttackReady && C.bTargetSensed && !C.bInGrace && !C.bKiter
+			&& MDBehaviour::CanHoldAttackToken(C.Role) && C.DistanceToTarget <= C.AttackRange;
+	}
+
+	bool Fighting(const FMDBrainContext& C)
+	{
+		return C.bHasTarget && C.bTargetSensed && C.PackState != EMDPackState::Regroup && !C.bInAmbushArrival;
+	}
 	constexpr int32 NumScored = UE_ARRAY_COUNT(Scored);
 
 	float Base(EMDIntent Intent, const FMDBrainContext& C, const FMDTierParams& Tier)
@@ -185,15 +212,44 @@ namespace MDScorerLocal
 			return C.DistanceToTarget <= C.ThreatRange + 100.0f ? 0.6f : 0.0f;
 
 		case EMDIntent::Attack:
-			if (!C.bHasTarget || !C.bHasToken || !C.bAttackReady || !C.bTargetSensed)
+			if (!AttackOpen(C))
 			{
-				return 0.0f; // the token gate is hard: no token, no swing (1.3)
+				return 0.0f; // the token gate is hard: no token, no swing (1.3); Bait / Guard / kiters never swing
 			}
-			if (C.DistanceToTarget > C.AttackRange)
-			{
-				return 0.0f;
-			}
-			return 0.45f + 0.5f * Tier.Aggression; // T0 0.75, T4 1.05
+			return 0.45f + 0.5f * Tier.Aggression + (C.bPunishCounter ? 0.2f : 0.0f); // T0 0.75, T4 1.05; the braced counter wins
+
+		// ---- V1 WP5 ----
+		// Swarm: converge on the threat-ring point of the ring slot together, then HoldThreat / Chase take over.
+		case EMDIntent::Swarm:
+			return (Fighting(C) && C.bSwarmActive && !C.bKiter && MDBehaviour::CanHoldAttackToken(C.Role)) ? 0.85f : 0.0f;
+
+		// Bait: faces the player, half-steps back when approached; never holds a token, never across unrevealed rooms.
+		case EMDIntent::Bait:
+			return (Fighting(C) && C.Role == EMDRole::Bait && C.bBaitAllowed) ? 0.95f : 0.0f;
+
+		// Kite: ranged archetypes keep their distance and shoot.
+		case EMDIntent::Kite:
+			return (Fighting(C) && C.bKiter) ? 0.9f : 0.0f;
+
+		case EMDIntent::Flank:
+			return (Fighting(C) && C.Role == EMDRole::Flanker && C.bFlankReady) ? 0.9f : 0.0f;
+
+		// Feint: a token holder's wind-up that is cancelled; edges out the plain attack when it rolled "feint".
+		case EMDIntent::Feint:
+			return (AttackOpen(C) && C.bFeintReady && !C.bPunishCounter) ? 0.5f + 0.5f * Tier.Aggression + 0.2f : 0.0f;
+
+		case EMDIntent::Guard:
+			return (Fighting(C) && C.Role == EMDRole::Guard && C.bGuardActive) ? 0.9f : 0.0f;
+
+		// The ambush arrival: stand still for the grace, whatever else is scored.
+		case EMDIntent::Ambush:
+			return (C.bInAmbushArrival && !C.bDead) ? 1.25f : 0.0f;
+
+		case EMDIntent::Blink:
+			return (Fighting(C) && C.bBlinkReady && !C.bInGrace) ? 0.95f : 0.0f;
+
+		case EMDIntent::Charge:
+			return (Fighting(C) && C.bChargeReady && C.bHasToken && !C.bInGrace) ? 1.0f : 0.0f;
 
 		// The pack is retreating (pack state Regroup, T2+ via the tier gate): run to the rally point, then wait there. Both
 		// outrank everything that is not already committed (an attack in progress is never re-scored).
@@ -237,7 +293,9 @@ MDAI::FScores FMDUtilityScorer::Score(const FMDBrainContext& Context, const FMDA
 		const EMDIntent Intent = MDScorerLocal::Scored[Slot];
 		FMDScoredIntent& S = Out.AddDefaulted_GetRef();
 		S.Intent = Intent;
-		if (!Tier.IsIntentUnlocked(Intent))
+		// Kite is unlocked at T1, but a ranged archetype at T0 still has to stand and shoot (it just never repositions).
+		const bool bUnlocked = Tier.IsIntentUnlocked(Intent) || (Intent == EMDIntent::Kite && Context.bKiter);
+		if (!bUnlocked)
 		{
 			S.Score = 0.0f;
 			continue;

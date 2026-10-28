@@ -40,6 +40,16 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Stagger, "AI.Intent.Stagger");
 UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Dead, "AI.Intent.Dead");
 UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Retreat, "AI.Intent.Retreat");
 UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Regroup, "AI.Intent.Regroup");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Swarm, "AI.Intent.Swarm");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Bait, "AI.Intent.Bait");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Kite, "AI.Intent.Kite");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Flank, "AI.Intent.Flank");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Feint, "AI.Intent.Feint");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Guard, "AI.Intent.Guard");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Ambush, "AI.Intent.Ambush");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Blink, "AI.Intent.Blink");
+UE_DEFINE_GAMEPLAY_TAG(TAG_AI_Intent_Charge, "AI.Intent.Charge");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Spawn_Ambush, "Spawn.Ambush");
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Objective, "Map.Marker.Objective");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Map_Marker_Gate, "Map.Marker.Gate");

@@ -190,7 +190,7 @@ bool FMDAIBrainScorerDeterministicForSeedTest::RunTest(const FString& Parameters
 	const FMDBrainContext Far = MakeContext(900.0f, false);
 	const MDAI::FScores A = FMDUtilityScorer::Score(Far, Params, T0);
 	const MDAI::FScores B = FMDUtilityScorer::Score(Far, Params, T0);
-	if (!TestEqual(TEXT("scores one slot per scored intent (Idle, Chase, HoldThreat, Attack, Retreat, Regroup)"), A.Num(), 6) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
+	if (!TestEqual(TEXT("scores one slot per scored intent (Idle, Chase, HoldThreat, Attack, Retreat, Regroup + the 9 WP5 behaviours)"), A.Num(), 15) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
 	{
 		return false;
 	}
@@ -565,7 +565,8 @@ bool FMDAIBrainSchedulerAndRulesTest::RunTest(const FString& Parameters)
 	// Intent tags and task instance data.
 	TestTrue(TEXT("chase tag"), MDIntentToTag(EMDIntent::Chase) == TAG_AI_Intent_Chase.GetTag());
 	TestTrue(TEXT("attack tag"), MDIntentToTag(EMDIntent::Attack) == TAG_AI_Intent_Attack.GetTag());
-	TestFalse(TEXT("no tag for a WP5 intent"), MDIntentToTag(EMDIntent::Feint).IsValid());
+	TestTrue(TEXT("WP5 intents have a tag too"), MDIntentToTag(EMDIntent::Feint) == TAG_AI_Intent_Feint.GetTag());
+	TestFalse(TEXT("each WP5 intent has its own tag"), MDIntentToTag(EMDIntent::Swarm) == MDIntentToTag(EMDIntent::Feint));
 	TestEqual(TEXT("dead tag name"), MDIntentToTag(EMDIntent::Dead).ToString(), FString(TEXT("AI.Intent.Dead")));
 	TestEqual(TEXT("intent name"), FString(MDIntentToString(EMDIntent::HoldThreat)), FString(TEXT("HoldThreat")));
 	const FMDST_EnemyChase Chase;

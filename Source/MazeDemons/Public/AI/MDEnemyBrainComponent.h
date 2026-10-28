@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "AI/MDAIRules.h"
+#include "AI/MDBehaviourRules.h"
 #include "AI/MDAITypes.h"
 #include "AI/MDPack.h"
 #include "MDCombatTypes.h"
@@ -128,6 +129,20 @@ public:
 	// Within reach of the rally point.
 	bool IsAtRally() const;
 
+	// ---- V1 WP5 behaviours ----
+	// Points the thin StateTree tasks walk to. False when the point does not exist (no flank point cached, not a guard, ...).
+	bool GetFlankPoint(FVector& OutPoint) const;
+	bool GetGuardPoint(FVector& OutPoint) const;
+	bool GetPackCentre(FVector& OutPoint) const;
+	class UMDEnemyBehaviourComponent* GetBehaviour() const;
+
+	// Roll (0..1) the current feint uses to pick its 0.3 - 0.6 s delay.
+	float GetFeintRoll() const { return FeintRoll; }
+	bool IsPunishCounterActive() const { return Greed.bBraced; }
+
+	// md.AI.ForceIntent: the intent forced for PIE testing (Idle = none). Server only; tests set it directly.
+	static EMDIntent GetForcedIntent();
+
 	int32 GetEnemyId() const { return EnemyId; }
 	AMDEnemyCharacter* GetEnemy() const { return Enemy.Get(); }
 	UMDAISubsystem* GetAISubsystem() const;
@@ -169,6 +184,9 @@ private:
 
 	void HandleAttackEnded(bool bInterrupted);
 	void HandleDamageApplied(AActor* Instigator, float Applied);
+	void HandleBehaviourActionEnded(EMDIntent Intent, bool bCompleted);
+	void FillBehaviourContext(FMDBrainContext& Context, double Now);
+	int32 PickCounterAttack(float Distance) const;
 
 	void SetIntent(EMDIntent Intent, bool bRestart);
 
@@ -228,4 +246,10 @@ private:
 	float AppliedNetFrequency = 0.0f;
 	void ShareToPack(AActor* Source, const FVector& Location, double SightTime);
 	void SetSensing(bool bActive);
+
+	// V1 WP5
+	MDBehaviour::FMDFeintOpportunity FeintOpportunity;
+	MDBehaviour::FMDGreedTracker Greed;
+	float FeintRoll = 0.5f;
+	EMDIntent LastBarkedIntent = EMDIntent::Idle;
 };

@@ -349,7 +349,8 @@ int32 UMDAISubsystem::UpdateDormancy(double InNow)
 		}
 		const double LastDamage = Brain->GetLastDamageTime();
 		const double SinceDamage = LastDamage < 0.0 ? -1.0 : InNow - LastDamage;
-		Brain->SetDormant(MDDormancy::ShouldSleep(Nearest, SinceDamage), InNow);
+		// V1 WP5: an ambusher waiting for its trigger stays dormant whatever the distance.
+		Brain->SetDormant(Enemy->IsAmbushHidden() || MDDormancy::ShouldSleep(Nearest, SinceDamage), InNow);
 		Brain->ApplyNetFrequency(MDDormancy::NetUpdateFrequencyFor(Nearest, Brain->GetDefaultNetFrequency()));
 		Dormant += Brain->IsDormant() ? 1 : 0;
 	}

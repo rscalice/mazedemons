@@ -3,6 +3,8 @@
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttributeSet.h"
 #include "AI/MDEnemyAttackComponent.h"
+#include "AI/MDBehaviourRules.h"
+#include "AI/MDEnemyBehaviourComponent.h"
 #include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyController.h"
 #include "AI/MDTargetableComponent.h"
@@ -65,6 +67,11 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 	Feedback = CreateDefaultSubobject<UMDCombatFeedbackComponent>(TEXT("Feedback"));
 	Targetable = CreateDefaultSubobject<UMDTargetableComponent>(TEXT("Targetable"));
 	AttackComponent = CreateDefaultSubobject<UMDEnemyAttackComponent>(TEXT("EnemyAttack"));
+	Behaviour = CreateDefaultSubobject<UMDEnemyBehaviourComponent>(TEXT("EnemyBehaviour"));
+	if (Blink)
+	{
+		Blink->Cooldown = static_cast<float>(MDBehaviour::BlinkCooldown); // max 1 blink per enemy per 6 s (v1-design 1.2)
+	}
 	MotionWarping = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarping"));
 }
 
@@ -116,14 +123,14 @@ const TArray<TWeakObjectPtr<AMDEnemyCharacter>>& AMDEnemyCharacter::GetAllEnemie
 	return MDEnemyCharacterLocal::AllEnemies;
 }
 
-void AMDEnemyCharacter::PlayTellCue()
+void AMDEnemyCharacter::PlayTellCue(bool bWithSound)
 {
 	UWorld* World = GetWorld();
 	if (!World || World->GetNetMode() == NM_DedicatedServer || bDeathHandled)
 	{
 		return;
 	}
-	if (Archetype && !Archetype->TellSound.IsNull())
+	if (bWithSound && Archetype && !Archetype->TellSound.IsNull())
 	{
 		if (USoundBase* Sound = Archetype->TellSound.LoadSynchronous())
 		{
@@ -219,6 +226,44 @@ void AMDEnemyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(AMDEnemyCharacter, ReplicatedIntent);
 	DOREPLIFETIME(AMDEnemyCharacter, bThreatening);
 	DOREPLIFETIME(AMDEnemyCharacter, ThreatTarget);
+	DOREPLIFETIME(AMDEnemyCharacter, bAmbushHidden);
+}
+
+void AMDEnemyCharacter::SetAmbushHidden(bool bNewHidden)
+{
+	if (!HasAuthority() || bAmbushHidden == bNewHidden)
+	{
+		return;
+	}
+	bAmbushHidden = bNewHidden;
+	ApplyAmbushHidden();
+}
+
+void AMDEnemyCharacter::OnRep_AmbushHidden()
+{
+	ApplyAmbushHidden();
+}
+
+void AMDEnemyCharacter::ApplyAmbushHidden()
+{
+	SetActorHiddenInGame(bAmbushHidden);
+	SetActorEnableCollision(!bAmbushHidden);
+	if (Targetable)
+	{
+		Targetable->bTargetable = !bAmbushHidden && !bDeathHandled;
+	}
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		// No collision means no floor: freeze while hidden so the capsule does not fall through the level.
+		if (bAmbushHidden)
+		{
+			Move->DisableMovement();
+		}
+		else
+		{
+			Move->SetMovementMode(MOVE_Walking);
+		}
+	}
 }
 
 UAbilitySystemComponent* AMDEnemyCharacter::GetAbilitySystemComponent() const

@@ -73,6 +73,17 @@ public:
 	// reaction time). ShareDelay < 0 (T0) shares nothing. Returns how many pack mates were told.
 	int32 ShareSighting(AActor* Seer, AActor* Player, const FVector& Location, double SightTime, float ShareDelay);
 
+	// ---- V1 WP5 ----
+	// An ambush group waits for its trigger: the pack state is AmbushArmed, nobody gets a token, nobody retreats.
+	void SetAmbushArmed(int32 PackId, bool bArmed);
+
+	// One bark per pack per MDBehaviour::BarkInterval (swarm howl, fall back): true (and the time is recorded) when this
+	// enemy's pack may bark Cue now. Loose enemies (no pack) always may.
+	bool TryPackBark(const AActor* Enemy, uint8 Cue);
+
+	// The pack the level-placed spawn group GroupKey formed (0 when none yet).
+	int32 FindGroupPack(FName GroupKey) const;
+
 	// ---- Assignment (to the brains) ----
 	bool GetAssignment(const AActor* Enemy, FMDEnemyAssignment& Out) const;
 
