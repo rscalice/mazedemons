@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
@@ -9,6 +9,7 @@
 
 class UAnimMontage;
 class UMDPoiseProfile;
+class USoundBase;
 
 // One attack of an enemy (v1-design 2.3 "Attack execution", 3.3 attack sets). The montage carries the C1 notifies
 // (MD Weapon Trace window, Motion Warping "AttackTarget"); the hit itself goes through UMDCombatStatics::ApplyMeleeHit with
@@ -115,6 +116,22 @@ public:
 	// The attack set (3.3). The brain picks the tightest attack whose Range covers the target; empty = the enemy never attacks.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat")
 	TArray<FMDEnemyAttack> Attacks;
+
+	// ---- Tells and off-screen threat (V1 WP4, v1-design 1.3) ----
+
+	// Short growl played on every machine at the start of each attack wind-up (the MDAN_Tell notify). Null = silent tell.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tells")
+	TSoftObjectPtr<USoundBase> TellSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tells", meta = (ClampMin = "0", ClampMax = "2"))
+	float TellVolume = 0.35f;
+
+	// Sting played at the enemy's position when it starts its swing at the local player while off-screen for them.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tells")
+	TSoftObjectPtr<USoundBase> ThreatSting;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tells", meta = (ClampMin = "0", ClampMax = "2"))
+	float ThreatStingVolume = 0.8f;
 
 	// R1 hook: the ranged weapon this enemy fires (Bone Archer bow, Cultist bolt). The same asset type and the same AMDProjectile as the
 	// player's guns; UMDRangedStatics::FireFromData spawns the shot. V1 WP5 only wires the brain. Null = melee only.

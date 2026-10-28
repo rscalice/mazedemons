@@ -50,7 +50,12 @@ public:
 	int32 GetRunSeed() const { return RunSeed; }
 	void SetRunSeed(int32 InSeed) { RunSeed = InSeed; }
 
-	// The tier every brain runs at this WP: md.AI.ForceTier when >= 0, else T0 (tier computation is WP4).
+	// md.AI.ForceTier: true (and the tier) when it is set to 0..4. A pack's own tier (UMDPackDirectorSubsystem::ComputeTier,
+	// V1 WP4) applies when it is off.
+	static bool TryGetForcedTier(EMDIntelligenceTier& OutTier);
+
+	// The tier for an enemy that is in no pack: md.AI.ForceTier when set, else T0. Enemies in a pack ask the director
+	// (UMDPackDirectorSubsystem::GetTierOf).
 	static EMDIntelligenceTier ResolveTier();
 	static FMDTierParams ResolveTierParams() { return FMDTierParams::ForTier(ResolveTier()); }
 
@@ -117,6 +122,10 @@ public:
 	int32 StepScheduler(float DeltaTime);
 
 private:
+	// DT_IntelligenceTiers (V1 WP4), loaded on initialize and handed to FMDTierParams; null when the asset is missing.
+	UPROPERTY(Transient)
+	TObjectPtr<UDataTable> TierTable;
+
 	TArray<TWeakObjectPtr<UMDEnemyBrainComponent>> Brains;
 	int32 Cursor = 0;
 	float Accumulator = 0.0f;

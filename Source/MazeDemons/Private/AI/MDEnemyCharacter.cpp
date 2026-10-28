@@ -1,4 +1,4 @@
-#include "AI/MDEnemyCharacter.h"
+﻿#include "AI/MDEnemyCharacter.h"
 
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttributeSet.h"
@@ -12,13 +12,31 @@
 #include "MDGameplayStatics.h"
 #include "MDPlayerState.h"
 #include "MDPoiseComponent.h"
+#include "MDUISettings.h"
 #include "AIController.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
+#include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "MotionWarpingComponent.h"
 #include "Net/UnrealNetwork.h"
+#include "Sound/SoundBase.h"
+#include "TimerManager.h"
+
+namespace MDEnemyCharacterLocal
+{
+	// Every live enemy on this machine, for the threat indicator (cheaper than iterating all actors ten times a second).
+	TArray<TWeakObjectPtr<AMDEnemyCharacter>> AllEnemies;
+
+	// The overlay the combat feedback component uses for hit flashes; it has a scalar parameter "HitFlash".
+	const TCHAR* const FlashOverlayPath = TEXT("/Game/Materials/Combat/M_HitFlashOverlay.M_HitFlashOverlay");
+	const FName FlashParameter(TEXT("HitFlash"));
+	constexpr float TellFlashIntensity = 0.7f;
+	constexpr float TellFlashSeconds = 0.22f;
+}
 
 AMDEnemyCharacter::AMDEnemyCharacter()
 {
@@ -69,7 +87,91 @@ void AMDEnemyCharacter::SetReplicatedIntent(EMDIntent Intent)
 	if (HasAuthority())
 	{
 		ReplicatedIntent = static_cast<uint8>(Intent);
+		if (Intent == EMDIntent::Dead)
+		{
+			SetThreat(nullptr);
+		}
 	}
+}
+
+void AMDEnemyCharacter::SetThreat(AActor* Target)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const bool bNewThreatening = Target != nullptr;
+	if (bThreatening != bNewThreatening)
+	{
+		bThreatening = bNewThreatening;
+	}
+	if (ThreatTarget != Target)
+	{
+		ThreatTarget = Target;
+	}
+}
+
+const TArray<TWeakObjectPtr<AMDEnemyCharacter>>& AMDEnemyCharacter::GetAllEnemies()
+{
+	return MDEnemyCharacterLocal::AllEnemies;
+}
+
+void AMDEnemyCharacter::PlayTellCue()
+{
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer || bDeathHandled)
+	{
+		return;
+	}
+	if (Archetype && !Archetype->TellSound.IsNull())
+	{
+		if (USoundBase* Sound = Archetype->TellSound.LoadSynchronous())
+		{
+			UGameplayStatics::PlaySoundAtLocation(this, Sound, GetActorLocation(), Archetype->TellVolume);
+		}
+	}
+
+	USkeletalMeshComponent* Body = GetMesh();
+	if (!Body)
+	{
+		return;
+	}
+	if (!TellFlashMID)
+	{
+		if (UMaterialInterface* Overlay = LoadObject<UMaterialInterface>(nullptr, MDEnemyCharacterLocal::FlashOverlayPath, nullptr, LOAD_NoWarn | LOAD_Quiet))
+		{
+			TellFlashMID = UMaterialInstanceDynamic::Create(Overlay, this);
+		}
+	}
+	if (!TellFlashMID)
+	{
+		return;
+	}
+	const float Intensity = MDEnemyCharacterLocal::TellFlashIntensity * (GetDefault<UMDLocalSettings>()->VFXLevel == EMDVFXLevel::Reduced ? 0.5f : 1.0f);
+	TellFlashMID->SetScalarParameterValue(MDEnemyCharacterLocal::FlashParameter, Intensity);
+	if (Body->GetOverlayMaterial() != TellFlashMID)
+	{
+		TellFlashPreviousOverlay = Body->GetOverlayMaterial();
+		Body->SetOverlayMaterial(TellFlashMID);
+	}
+	World->GetTimerManager().SetTimer(TellFlashTimer, this, &AMDEnemyCharacter::EndTellFlash, MDEnemyCharacterLocal::TellFlashSeconds, false);
+}
+
+void AMDEnemyCharacter::EndTellFlash()
+{
+	if (TellFlashMID)
+	{
+		// Zero first: if a hit flash saved this overlay as "previous" meanwhile and restores it later, it then shows nothing.
+		TellFlashMID->SetScalarParameterValue(MDEnemyCharacterLocal::FlashParameter, 0.0f);
+	}
+	if (USkeletalMeshComponent* Body = GetMesh())
+	{
+		if (Body->GetOverlayMaterial() == TellFlashMID)
+		{
+			Body->SetOverlayMaterial(TellFlashPreviousOverlay);
+		}
+	}
+	TellFlashPreviousOverlay = nullptr;
 }
 
 EMDIntent AMDEnemyCharacter::GetIntent() const
@@ -115,6 +217,8 @@ void AMDEnemyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME_CONDITION(AMDEnemyCharacter, Archetype, COND_InitialOnly);
 	DOREPLIFETIME(AMDEnemyCharacter, ReplicatedIntent);
+	DOREPLIFETIME(AMDEnemyCharacter, bThreatening);
+	DOREPLIFETIME(AMDEnemyCharacter, ThreatTarget);
 }
 
 UAbilitySystemComponent* AMDEnemyCharacter::GetAbilitySystemComponent() const
@@ -155,9 +259,20 @@ void AMDEnemyCharacter::PostInitializeComponents()
 	}
 }
 
+void AMDEnemyCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	MDEnemyCharacterLocal::AllEnemies.RemoveSingleSwap(this);
+	if (const UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(TellFlashTimer);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
 void AMDEnemyCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	MDEnemyCharacterLocal::AllEnemies.AddUnique(this);
 	if (Archetype)
 	{
 		ApplyArchetype(Archetype);

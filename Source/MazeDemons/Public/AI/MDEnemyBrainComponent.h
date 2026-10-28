@@ -171,6 +171,14 @@ private:
 	void HandleDamageApplied(AActor* Instigator, float Applied);
 
 	void SetIntent(EMDIntent Intent, bool bRestart);
+
+	// The tier params for this enemy: its pack's tier (V1 WP4), or md.AI.ForceTier.
+	FMDTierParams ResolveTierParams() const;
+
+	// V1 WP4 off-screen threat: mirrors "holds an attack token on a player and is ready to swing" to the pawn's replicated
+	// bThreatening / ThreatTarget (only writes on a change). Called wherever the token, the intent or the cooldown changes.
+	void SyncThreat();
+
 	void UpdateKnownActors(double Now);
 	void UpdateTarget(double Now);
 	bool IsValidTargetActor(const AActor* Actor) const;

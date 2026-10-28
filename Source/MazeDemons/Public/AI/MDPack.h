@@ -83,6 +83,17 @@ struct FMDPack
 	FVector RallyPoint = FVector::ZeroVector;
 	bool bHasRally = false;
 
+	// V1 WP4: the intelligence tier, computed once when the pack gets its first member and fixed for the pack's life
+	// (UMDPackDirectorSubsystem::ComputeTier). ITValue is the 3.1 value including the seeded jitter. md.AI.ForceTier overrides
+	// the tier at read time (GetPackTier) without touching these.
+	bool bTierSet = false;
+	EMDIntelligenceTier Tier = EMDIntelligenceTier::T0;
+	float ITValue = 0.0f;
+	// Players counted when the tier was computed (late joiners only affect packs spawned after them).
+	int32 PlayersAtSpawn = 0;
+	// The tier the roles were last assigned for (a changed force-tier re-runs the role assignment).
+	EMDIntelligenceTier AppliedTier = EMDIntelligenceTier::T0;
+
 	int32 NumAlive() const { return Members.Num(); }
 
 	FMDPackMember* FindMember(const AActor* Enemy)
@@ -101,6 +112,9 @@ struct FMDEnemyAssignment
 	int32 PackId = 0;
 	EMDRole Role = EMDRole::None;
 	EMDPackState PackState = EMDPackState::Engage;
+	// The pack's effective tier (md.AI.ForceTier applied) and its ITValue (debug overlay).
+	EMDIntelligenceTier Tier = EMDIntelligenceTier::T0;
+	float ITValue = 0.0f;
 	TWeakObjectPtr<AActor> FocusTarget;
 
 	int32 Slot = -1;

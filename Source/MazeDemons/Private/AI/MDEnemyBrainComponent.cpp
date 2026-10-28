@@ -1,4 +1,4 @@
-#include "AI/MDEnemyBrainComponent.h"
+﻿#include "AI/MDEnemyBrainComponent.h"
 
 #include "AI/MDAISubsystem.h"
 #include "AI/MDEnemyArchetype.h"
@@ -60,7 +60,7 @@ void UMDEnemyBrainComponent::OnPossessed(APawn* InPawn)
 	Enemy = NewEnemy;
 	Attack = NewEnemy->AttackComponent;
 	Poise = NewEnemy->Poise;
-	Tier = UMDAISubsystem::ResolveTierParams();
+	Tier = UMDAISubsystem::ResolveTierParams(); // until the enemy joins its pack below, which gives it the pack's tier
 
 	bDormant = false;
 	LastDamageTime = -1.0;
@@ -111,6 +111,17 @@ void UMDEnemyBrainComponent::OnPossessed(APawn* InPawn)
 		const int32 PackId = Director->GetOrCreateGroupPack(NewEnemy->SpawnGroupId);
 		Director->RegisterEnemy(NewEnemy, PackId);
 	}
+	Tier = ResolveTierParams(); // the pack's tier, computed when its first member spawned (V1 WP4)
+}
+
+FMDTierParams UMDEnemyBrainComponent::ResolveTierParams() const
+{
+	// md.AI.ForceTier can change at any time; otherwise the tier is the pack's, fixed at its spawn (V1 WP4).
+	if (const UMDPackDirectorSubsystem* Director = GetDirector())
+	{
+		return FMDTierParams::ForTier(Director->GetTierOf(Enemy.Get()));
+	}
+	return UMDAISubsystem::ResolveTierParams();
 }
 
 UMDPackDirectorSubsystem* UMDEnemyBrainComponent::GetDirector() const
@@ -274,7 +285,7 @@ void UMDEnemyBrainComponent::ReportHeard(AActor* Source, const FVector& Location
 void UMDEnemyBrainComponent::ShareToPack(AActor* Source, const FVector& Location, double SightTime)
 {
 	// T0 never shares (ShareDelay < 0). The director fans the sighting out to the pack mates' brains.
-	const FMDTierParams Current = UMDAISubsystem::ResolveTierParams(); // md.AI.ForceTier can change between decisions
+	const FMDTierParams Current = ResolveTierParams();
 	if (Current.ShareDelay < 0.0f)
 	{
 		return;
@@ -291,7 +302,7 @@ void UMDEnemyBrainComponent::ReceiveSharedSighting(AActor* Source, const FVector
 	{
 		return;
 	}
-	const double QueueTime = MDPerception::SharedQueueTime(SightTime, ShareDelay, UMDAISubsystem::ResolveTierParams().ReactionTime);
+	const double QueueTime = MDPerception::SharedQueueTime(SightTime, ShareDelay, ResolveTierParams().ReactionTime);
 	if (QueueTime < 0.0)
 	{
 		return;
@@ -345,6 +356,7 @@ void UMDEnemyBrainComponent::SetDormant(bool bNewDormant, double Now)
 		{
 			SetIntent(EMDIntent::Idle, true);
 		}
+		SyncThreat();
 	}
 	SetSensing(!bDormant);
 }
@@ -542,7 +554,7 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 	}
 
 	// A forced tier (md.AI.ForceTier) can change at any time; the tier gates what the scorer may pick.
-	Tier = UMDAISubsystem::ResolveTierParams();
+	Tier = ResolveTierParams();
 
 	ResolveAssignment(Assignment);
 	UpdateKnownActors(Now);
@@ -598,6 +610,7 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 
 	const bool bRestart = bIntentFinished || Chosen != CurrentIntent;
 	SetIntent(Chosen, bRestart);
+	SyncThreat(); // SetIntent does nothing when the intent is unchanged, but the token may have been granted or lost
 
 	if (UMDAISubsystem::IsDebugEnabled())
 	{
@@ -624,7 +637,31 @@ void UMDEnemyBrainComponent::SetIntent(EMDIntent Intent, bool bRestart)
 			}
 		}
 	}
+	SyncThreat();
 	OnIntentSelected.Broadcast(Intent, bRestart);
+}
+
+void UMDEnemyBrainComponent::SyncThreat()
+{
+	AMDEnemyCharacter* E = Enemy.Get();
+	if (!E)
+	{
+		return;
+	}
+	// Threatening = holds a token on its target and is about to swing or swinging: the token is only asked for in reach, so
+	// holding one means "this enemy is about to attack that player". After the swing the cooldown clears it, although the
+	// token itself is held 0.5 s longer.
+	AActor* Wanted = nullptr;
+	if (!bDead && !bDormant && CurrentIntent != EMDIntent::Stagger && CurrentIntent != EMDIntent::Dead && HoldsAttackToken())
+	{
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		const bool bSwinging = Attack.IsValid() && Attack->IsAttacking();
+		if (bSwinging || Now >= NextAttackReadyTime)
+		{
+			Wanted = Target.Get();
+		}
+	}
+	E->SetThreat(Wanted);
 }
 
 void UMDEnemyBrainComponent::NotifyIntentFinished()
@@ -665,6 +702,7 @@ void UMDEnemyBrainComponent::HandleAttackEnded(bool bInterrupted)
 	{
 		NextAttackReadyTime = Now + E->Archetype->Attacks[ChosenAttackIndex].Cooldown;
 	}
+	SyncThreat();
 	if (CurrentIntent == EMDIntent::Attack && !bDead)
 	{
 		bIntentFinished = true;
@@ -823,6 +861,10 @@ void UMDEnemyBrainComponent::DrawDebug() const
 		CurrentIntent == EMDIntent::Attack && ChosenAttackIndex != INDEX_NONE && E->Archetype && E->Archetype->Attacks.IsValidIndex(ChosenAttackIndex)
 			? *FString::Printf(TEXT("(%s)"), *E->Archetype->Attacks[ChosenAttackIndex].Name.ToString()) : TEXT(""),
 		HoldsAttackToken() ? TEXT("YES") : TEXT("no"), static_cast<int32>(Tier.Tier));
+	if (Assignment.PackId != 0)
+	{
+		Text += FString::Printf(TEXT("  (pack IT %.2f)"), Assignment.ITValue); // V1 WP4: the ITValue behind the tier
+	}
 	{
 		// Pack line (V1 WP2): pack id, role, ring slot, pack state, and the pack's focus target.
 		const AActor* Focus = Assignment.FocusTarget.Get();

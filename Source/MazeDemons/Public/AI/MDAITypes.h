@@ -1,7 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/DataTable.h"
 #include "MDAITypes.generated.h"
+
+class UDataTable;
 
 // V1 enemy framework types (v1-design 2.3 / 2.4 / 3.1). Pure data: no behaviour lives here.
 
@@ -57,7 +60,7 @@ enum class EMDPackState : uint8
 	Routed
 };
 
-// Intelligence tier T0 (basic) .. T4 (smartest). The tier table struct (FMDIntelligenceTier) arrives with V1 WP4.
+// Intelligence tier T0 (basic) .. T4 (smartest). The tier table row is FMDIntelligenceTier (DT_IntelligenceTiers, V1 WP4).
 UENUM(BlueprintType)
 enum class EMDIntelligenceTier : uint8
 {
@@ -87,8 +90,9 @@ struct MAZEDEMONS_API FMDArchetypeAIParams
 	TArray<EMDRole> AllowedRoles;
 };
 
-// Common tier parameters (v1-design 3.2). WP1 carries the table in code (FMDTierParams::ForTier); WP4 moves it to
-// DT_IntelligenceTiers and adds the per-archetype overrides. Distances in cm, angles in degrees, times in seconds.
+// Common tier parameters (v1-design 3.2). The numbers come from DT_IntelligenceTiers (FMDIntelligenceTier rows T0..T4) once
+// UMDAISubsystem loaded it; until then, and for any missing row, the code defaults (DefaultForTier) apply.
+// Distances in cm, angles in degrees, times in seconds.
 USTRUCT(BlueprintType)
 struct MAZEDEMONS_API FMDTierParams
 {
@@ -130,8 +134,17 @@ struct MAZEDEMONS_API FMDTierParams
 	// Tells never get shorter than this (1.3).
 	static constexpr float TellTimeFloor = 0.35f;
 
-	// The 3.2 table row for a tier.
+	// The 3.2 row for a tier: the DT_IntelligenceTiers row when a table is set, else DefaultForTier.
 	static FMDTierParams ForTier(EMDIntelligenceTier InTier);
+
+	// The 3.2 numbers in code (the fallback, and what the tests use).
+	static FMDTierParams DefaultForTier(EMDIntelligenceTier InTier);
+
+	// Sets the table ForTier reads (UMDAISubsystem does it on initialize). Null = the code defaults. Held weakly.
+	static void SetTierTable(const UDataTable* Table);
+
+	// Row name of a tier in DT_IntelligenceTiers: "T0" .. "T4".
+	static FName RowNameForTier(EMDIntelligenceTier InTier);
 
 	// The authored tell scaled by the tier, floored.
 	float ResolveTellTime(float BaseTellTime) const { return FMath::Max(BaseTellTime * TellTimeMultiplier, TellTimeFloor); }
@@ -139,6 +152,57 @@ struct MAZEDEMONS_API FMDTierParams
 	// Behaviours unlocked at this tier (3.2). HoldThreat is allowed at every tier: it is the fairness fallback of an enemy
 	// without a token, not a tactic. Stagger / Dead are interrupts and always allowed.
 	bool IsIntentUnlocked(EMDIntent Intent) const;
+};
+
+// One row of DT_IntelligenceTiers (V1 WP4, v1-design 3.2). Row names T0 .. T4. Same numbers as FMDTierParams; the table is
+// where designers tune them. Distances in cm, angles in degrees, times in seconds.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDIntelligenceTier : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	// Enemies never react to a player action faster than this.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float ReactionTime = 0.9f;
+
+	// Multiplier on an attack's authored TellTime (1.0 at T0 .. 0.6 at T4); the result never drops below 0.35 s.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float TellTimeMultiplier = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	int32 MaxTokensPerPlayer = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float SightRadius = 1500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0", ClampMax = "360"))
+	float SightFOV = 110.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float Aggression = 0.6f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier", meta = (ClampMin = "0"))
+	float NoiseAmplitude = 0.05f;
+
+	// < 0 = no sharing (T0).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tier")
+	float ShareDelay = -1.0f;
+
+	// The row as tier parameters (Tier set to InTier).
+	FMDTierParams ToParams(EMDIntelligenceTier InTier) const
+	{
+		FMDTierParams P;
+		P.Tier = InTier;
+		P.ReactionTime = ReactionTime;
+		P.TellTimeMultiplier = TellTimeMultiplier;
+		P.MaxTokensPerPlayer = MaxTokensPerPlayer;
+		P.SightRadius = SightRadius;
+		P.SightFOV = SightFOV;
+		P.Aggression = Aggression;
+		P.NoiseAmplitude = NoiseAmplitude;
+		P.ShareDelay = ShareDelay;
+		return P;
+	}
 };
 
 // One intent with its utility score (FMDUtilityScorer output).

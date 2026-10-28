@@ -24,7 +24,7 @@ namespace MDAISubsystemLocal
 	TAutoConsoleVariable<int32> CVarDebug(TEXT("md.AI.Debug"), 0,
 		TEXT("1 = draw each enemy's intent, top 3 scores and token state above it (server)."), ECVF_Cheat);
 	TAutoConsoleVariable<int32> CVarForceTier(TEXT("md.AI.ForceTier"), -1,
-		TEXT("-1 = off (T0 until V1 WP4 computes tiers). 0..4 = every enemy brain runs at that intelligence tier."), ECVF_Cheat);
+		TEXT("-1 = off (every pack runs at the tier the pack director computed for it at spawn). 0..4 = every enemy brain runs at that intelligence tier."), ECVF_Cheat);
 	TAutoConsoleVariable<float> CVarBrainHz(TEXT("md.AI.BrainHz"), 8.0f,
 		TEXT("Decisions per second per enemy brain (5-10)."), ECVF_Cheat);
 	TAutoConsoleVariable<int32> CVarSeed(TEXT("md.AI.Seed"), 0,
@@ -70,6 +70,18 @@ void UMDAISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		}
 	}
 	UE_LOG(LogTemp, Log, TEXT("MDAISubsystem: run seed %d (md.AI.Seed to fix it)"), RunSeed);
+
+	// DT_IntelligenceTiers (FMDIntelligenceTier rows T0..T4) is the tier source; a missing asset keeps the code defaults.
+	TierTable = LoadObject<UDataTable>(nullptr, TEXT("/Game/AI/DT_IntelligenceTiers.DT_IntelligenceTiers"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (TierTable && TierTable->GetRowStruct() == FMDIntelligenceTier::StaticStruct())
+	{
+		FMDTierParams::SetTierTable(TierTable);
+	}
+	else
+	{
+		TierTable = nullptr;
+		FMDTierParams::SetTierTable(nullptr);
+	}
 }
 
 bool UMDAISubsystem::IsTickable() const
@@ -89,14 +101,22 @@ double UMDAISubsystem::Now() const
 	return World ? World->GetTimeSeconds() : 0.0;
 }
 
-EMDIntelligenceTier UMDAISubsystem::ResolveTier()
+bool UMDAISubsystem::TryGetForcedTier(EMDIntelligenceTier& OutTier)
 {
 	const int32 Forced = MDAISubsystemLocal::CVarForceTier.GetValueOnGameThread();
 	if (Forced >= 0)
 	{
-		return static_cast<EMDIntelligenceTier>(FMath::Clamp(Forced, 0, static_cast<int32>(EMDIntelligenceTier::T4)));
+		OutTier = static_cast<EMDIntelligenceTier>(FMath::Clamp(Forced, 0, static_cast<int32>(EMDIntelligenceTier::T4)));
+		return true;
 	}
-	return EMDIntelligenceTier::T0;
+	return false;
+}
+
+EMDIntelligenceTier UMDAISubsystem::ResolveTier()
+{
+	EMDIntelligenceTier Forced = EMDIntelligenceTier::T0;
+	TryGetForcedTier(Forced);
+	return Forced;
 }
 
 bool UMDAISubsystem::IsDebugEnabled()

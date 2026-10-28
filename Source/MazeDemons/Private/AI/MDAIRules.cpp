@@ -49,7 +49,34 @@ const TCHAR* MDIntentToString(EMDIntent Intent)
 	}
 }
 
+namespace MDTierTableLocal
+{
+	TWeakObjectPtr<const UDataTable> Table;
+}
+
+void FMDTierParams::SetTierTable(const UDataTable* InTable)
+{
+	MDTierTableLocal::Table = InTable;
+}
+
+FName FMDTierParams::RowNameForTier(EMDIntelligenceTier InTier)
+{
+	return FName(*FString::Printf(TEXT("T%d"), static_cast<int32>(InTier)));
+}
+
 FMDTierParams FMDTierParams::ForTier(EMDIntelligenceTier InTier)
+{
+	if (const UDataTable* Table = MDTierTableLocal::Table.Get())
+	{
+		if (const FMDIntelligenceTier* Row = Table->FindRow<FMDIntelligenceTier>(RowNameForTier(InTier), TEXT("FMDTierParams::ForTier"), false))
+		{
+			return Row->ToParams(InTier);
+		}
+	}
+	return DefaultForTier(InTier);
+}
+
+FMDTierParams FMDTierParams::DefaultForTier(EMDIntelligenceTier InTier)
 {
 	// v1-design 3.2 (common parameters). Sight radius / FOV, reaction, tell, tokens, aggression, noise, share delay.
 	FMDTierParams P;

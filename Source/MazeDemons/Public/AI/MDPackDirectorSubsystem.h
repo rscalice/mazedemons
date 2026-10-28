@@ -6,6 +6,7 @@
 #include "AI/MDPack.h"
 #include "AI/MDPackRules.h"
 #include "AI/MDPerceptionRules.h"
+#include "AI/MDTierRules.h"
 #include "MDPackDirectorSubsystem.generated.h"
 
 // The squad layer (v1-design 2.4), server only. It owns:
@@ -44,6 +45,22 @@ public:
 	const FMDPack* FindPack(int32 PackId) const;
 	const FMDPack* FindPackOf(const AActor* Enemy) const;
 	int32 GetPackIdOf(const AActor* Enemy) const;
+
+	// ---- Intelligence tier (V1 WP4, v1-design 3.1) ----
+	// Each pack gets its tier ONCE, when its first member joins (the enemy has just spawned): MDTier::Compute over the zone the
+	// enemy stands in, the party's perk points and gear upgrades, the player count, the run seed and the pack id, clamped to the
+	// archetype's MinTier / MaxTier. It never changes afterwards, so a player who joins late only affects packs spawned later.
+	// Merged packs keep the older pack's tier.
+	void ComputeTier(FMDPack& Pack, const AActor* Sample);
+
+	// The inputs ComputeTier feeds to MDTier::Compute for an enemy spawning now (public for the tests).
+	MDTier::FInputs GatherTierInputs(const AActor* Sample, int32 PackId) const;
+
+	// The tier a pack runs at: md.AI.ForceTier when set, else the tier computed for it (T0 before it has one).
+	EMDIntelligenceTier GetPackTier(const FMDPack& Pack) const;
+
+	// GetPackTier of the enemy's pack; md.AI.ForceTier or T0 for an enemy in no pack.
+	EMDIntelligenceTier GetTierOf(const AActor* Enemy) const;
 
 	// ---- Reports (from the brains) ----
 	void ReportMember(AActor* Enemy, const FMDMemberReport& Report);
@@ -94,7 +111,7 @@ private:
 	void AddToPack(FMDPack& Pack, AActor* Enemy);
 	void RemovePackIfEmpty(int32 PackId);
 
-	void MergePacks(EMDIntelligenceTier Tier);
+	void MergePacks();
 	void UpdateRoles(FMDPack& Pack, EMDIntelligenceTier Tier);
 	void UpdateFocus(FMDPack& Pack, EMDIntelligenceTier Tier, double Now);
 	void UpdatePackState(FMDPack& Pack, EMDIntelligenceTier Tier, double Now);
@@ -115,7 +132,6 @@ private:
 	TMap<FName, int32> GroupPacks;
 
 	FMDPackTokenPool Tokens;
-	EMDIntelligenceTier LastTier = EMDIntelligenceTier::T0;
 	float StepAccumulator = 0.0f;
 	MDAIPerf::FFrameProfile Profile;
 

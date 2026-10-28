@@ -369,6 +369,14 @@ def build_montage(name, src_path, d):
     warp_cls = unreal.load_class(None, "/Script/MotionWarping.AnimNotifyState_MotionWarping")
     wv = lib.add_animation_notify_state_event(m, "Warp", 0.0, warp_end, warp_cls)
     info = make_modifier(wv)
+    # V1 WP4: the attack tell (growl + flash on every machine) at the wind-up start. Idempotent: remove the old one first.
+    # (gtell.py applies the same notify on its own.)
+    for nm in ("MD Tell", "MDAN_Tell"):
+        try: lib.remove_animation_notify_events_by_name(m, nm)
+        except Exception: pass
+    if "Tell" not in [str(x) for x in lib.get_animation_notify_track_names(m)]:
+        lib.add_animation_notify_track(m, "Tell", unreal.LinearColor(1.0, 0.85, 0.2, 1.0))
+    lib.add_animation_notify_event(m, "Tell", 0.02, unreal.load_class(None, "/Script/MazeDemons.MDAN_Tell"))
     m.modify(); save(path)
     P("  %s <- %s: trace %.2f..%.2f sockets %s warp 0..%.2f (%s), authored follow-through after the warp %.0f cm" % (
         name, src.get_name(), start, end, sockets, warp_end, info, follow_through))
@@ -411,6 +419,11 @@ def s_archetype():
         attacks.append(a)
     da.set_editor_property('attacks', attacks)
     ai = da.get_editor_property('ai_params'); ai.set_editor_property('threat_range', 450.0); da.set_editor_property('ai_params', ai)
+    # V1 WP4 tells: a short growl at low volume (Fab MonsterRoarsAndGrowls, referenced only) and the off-screen sting.
+    for prop, cue in (("tell_sound", "11_Menacing_Growl_Cue"), ("threat_sting", "10_Attack_Roar_Cue")):
+        snd = unreal.load_asset("/Game/Fab/MonsterRoarsAndGrowls/cues/" + cue)
+        if snd: da.set_editor_property(prop, snd)
+    da.set_editor_property("tell_volume", 0.3); da.set_editor_property("threat_sting_volume", 0.7)
     da.modify(); save("/Game/Data/Enemies/DA_Archetype_Ghoul")
     da = unreal.load_asset("/Game/Data/Enemies/DA_Archetype_Ghoul")
     P("  attacks now: %s" % [(str(x.name), x.montage.get_name() if x.montage else None, x.range, [str(s) for s in x.trace_sockets]) for x in da.get_editor_property('attacks')])
