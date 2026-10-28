@@ -11,6 +11,8 @@
 class AActor;
 class UAnimMontage;
 class UCurveFloat;
+class UMaterialInterface;
+class UNiagaraSystem;
 class UObject;
 class USkeletalMesh;
 class UStaticMesh;
@@ -20,9 +22,17 @@ struct MAZEDEMONS_API FMDRangedProjectileParams
 {
 	GENERATED_BODY()
 
-	// AMDProjectile subclass (R1). Empty until R1 lands.
+	// AMDProjectile subclass. Empty = AMDProjectile itself (players and archers share the class).
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projectile")
 	TSoftClassPtr<AActor> ProjectileClass;
+
+	// Sweep radius (cm). 8-12 keeps fast bolts forgiving at 120 ms of lag.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projectile", meta = (ClampMin = "1"))
+	float Radius = 10.0f;
+
+	// The bolt disappears after flying this far (cm).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projectile", meta = (ClampMin = "100"))
+	float MaxRange = 4000.0f;
 
 	// cm/s.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projectile", meta = (ClampMin = "0"))
@@ -218,6 +228,64 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues")
 	FGameplayTag ImpactCue;
+
+	// ---- R1 fire pipeline ----
+	// Damage falloff over distance (cm): full up to FalloffStart, FalloffMinMult from FalloffEnd on, linear between.
+	// FMDRangedMath::FalloffMultiplier. (FalloffCurve above is unused; the three numbers are easier to tune and test.)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fire", meta = (ClampMin = "0"))
+	float FalloffStart = 1200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fire", meta = (ClampMin = "0"))
+	float FalloffEnd = 2000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fire", meta = (ClampMin = "0", ClampMax = "1"))
+	float FalloffMinMult = 0.6f;
+
+	// Highest bloom (degrees) added on top of the base spread.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Accuracy", meta = (ClampMin = "0"))
+	float MaxBloom = 3.0f;
+
+	// Strongest hit reaction a hit of this weapon causes, poise break included. Pistol / repeater: Flinch. Bolter: Stagger.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fire")
+	EMDHitReaction ReactionCap = EMDHitReaction::Flinch;
+
+	// Durability lost per landed hit (R1: 0.5).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fire", meta = (ClampMin = "0"))
+	float WearPerHit = 0.5f;
+
+	// Where bullets leave the gun, in the weapon mesh's own space (the Fab meshes have no Muzzle socket and are never edited).
+	// Used when the mesh has no MuzzleSocket. gunsetup.py fills it from the mesh bounds.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mesh")
+	FVector MuzzleLocal = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mesh")
+	bool bHasMuzzleLocal = false;
+
+	// Weapon kick on every shot (the pistol / rifle sets have no fire clips): the gun jerks back and tips up, then settles.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Accuracy", meta = (ClampMin = "0"))
+	float KickBackCm = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Accuracy", meta = (ClampMin = "0"))
+	float KickPitchDeg = 7.0f;
+
+	// ---- R1 cosmetics (referenced Fab assets, never edited) ----
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues")
+	TSoftObjectPtr<UNiagaraSystem> MuzzleFlashFX;
+
+	// Spawned where a projectile ends (world or victim), on top of the victim's own impact set.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues")
+	TSoftObjectPtr<UNiagaraSystem> ImpactFX;
+
+	// Material of the stretched cylinder that is the tracer bolt (FreeStylizedLaserBeamVFX MI_Cylinder_xx).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues")
+	TSoftObjectPtr<UMaterialInterface> TracerMaterial;
+
+	// Bolt length and thickness (cm).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues", meta = (ClampMin = "1"))
+	float TracerLength = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues", meta = (ClampMin = "0.1"))
+	float TracerThickness = 3.0f;
 
 	// Loads the mesh (static or skeletal). Null when none is set or it cannot load.
 	UObject* LoadWeaponMesh() const;

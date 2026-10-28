@@ -5,10 +5,12 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Ranged/MDRangedMath.h"
 #include "Ranged/MDRangedTypes.h"
 #include "MDRangedComponent.generated.h"
 
 class APawn;
+class APlayerController;
 class UMeshComponent;
 class USkeletalMeshComponent;
 class UMDInventoryComponent;
@@ -53,7 +55,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
 	bool IsAimed() const { return bAimed; }
 
-	// Authority. R1 sets it from the aim input.
+	// Authority. R4 sets it from the aim input.
 	void SetAimed(bool bNewAimed);
 
 	// Data asset of the gun equipped in the Ranged slot, or null when none (or the row has no RangedData).
@@ -121,6 +123,77 @@ public:
 	UFUNCTION()
 	void HandleEquipmentChanged();
 
+	// ================= R1 fire pipeline =================
+	// True on the machine of the player this component belongs to (listen host for player 0, the owning client otherwise).
+	bool IsOwnerLocal() const;
+
+	// ---- Input (owner machine; AMDPlayerController forwards LMB / right trigger) ----
+	void SetFireHeld(bool bHeld);
+	bool IsFireHeld() const { return bFireHeld; }
+
+	// Activates the LocalPredicted UMDRangedFireAbility when the ASC has it, else fires directly (tests, early frames).
+	bool TryActivateFire();
+
+	// Owner machine: one shot attempt. Gates (ranged mode, local cadence, predicted mag), aim from the camera, spread roll, request
+	// ids, cosmetics (muzzle flash, recoil, weapon kick, twin bolt, predicted mag) and then Server_Fire (or ProcessShot on the host).
+	// Returns true when a request was made.
+	bool FireShotLocal();
+
+	// Magazine as the owner sees it: replicated rounds minus shots still in flight to the server. The server's own value on the host.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	int32 GetViewMagRounds() const;
+
+	// Spread half-angle now (degrees): hip / aimed base, moving multiplier, bloom. bServer = the server's own bloom estimate.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetCurrentSpread(bool bServer = false) const;
+
+	// Bloom (degrees) after lazy decay.
+	float GetBloomNow(bool bServer) const;
+
+	// Muzzle in world space (mesh socket, else the data's MuzzleLocal on the weapon mesh). False without a weapon mesh.
+	bool GetMuzzleWorld(FVector& OutMuzzle) const;
+
+	// ---- Server ----
+	UFUNCTION(Server, Reliable)
+	void Server_Fire(const FMDShotRequest& Request);
+
+	// Server: validates and, when accepted, consumes a round and spawns the projectile (fast-forwarded by min(RTT / 2, 100 ms)).
+	// Every request is acknowledged. A rejected shot spawns nothing and resyncs the owner's magazine (Client_CorrectMag).
+	// RTTOverrideSeconds < 0 = the owner's real ping.
+	EMDShotReject ProcessShot(const FMDShotRequest& Request, float RTTOverrideSeconds = -1.0f);
+
+	// Owner machine: the server refused shot ShotId; Rounds is the real magazine.
+	UFUNCTION(Client, Reliable)
+	void Client_CorrectMag(uint8 Slot, int32 Rounds, uint16 ShotId);
+
+	// Everyone but the shooter: muzzle flash at the shot origin (cosmetic, unreliable).
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_ShotFX(FVector_NetQuantize Origin, FVector_NetQuantizeNormal Dir);
+
+	// Server: a gun projectile of this player landed a hit. Guns wear WearPerHit (0.5) per landed hit; whole points go to the inventory.
+	void NotifyShotLanded();
+
+	// Server clock estimate (listen host: the real one).
+	double GetServerNow() const;
+
+	// Last request id the server acknowledged (owner-only replicated).
+	uint16 GetShotAck() const { return ShotAck; }
+
+	int32 GetPendingShotCount() const { return PendingShotIds.Num(); }
+	EMDShotReject GetLastReject() const { return LastReject; }
+	int32 GetAcceptedShotCount() const { return AcceptedShots; }
+	float GetPendingRecoilPitch() const { return RecoilPitch; }
+	float GetKickAlpha() const { return KickAlpha; }
+	int32 GetMagCorrectionCount() const { return MagCorrections; }
+	int32 GetLastCorrectedRounds() const { return LastCorrectedRounds; }
+
+	// Tests: a pawn to act for when the PlayerState has none (no controller possesses it in a unit-test world).
+	void SetPawnForTests(APawn* InPawn) { TestPawn = InPawn; }
+	// Tests: a weapon data asset used instead of the inventory's equipped gun.
+	void SetWeaponDataForTests(UMDRangedWeaponData* InData) { TestData = InData; }
+
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
 protected:
 	UFUNCTION()
 	void OnRep_RangedMode();
@@ -135,7 +208,58 @@ protected:
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Ranged")
 	TArray<FMDSlotMag> Mags;
 
+	// The newest shot request the server handled (accepted or not). The owner drops its predicted shots up to it.
+	UPROPERTY(ReplicatedUsing = OnRep_ShotAck)
+	uint16 ShotAck = 0;
+
+	UFUNCTION()
+	void OnRep_ShotAck();
+
 private:
+	// ---- R1 helpers ----
+	bool ComputeAimLocal(FVector& OutMuzzle, FVector& OutAimDir, float& OutAimDistance) const;
+	bool ComputeAimServer(const FVector& ClaimedOrigin, FVector& OutAimDir, float& OutAimDistance) const;
+	APawn* GetPawn() const;
+	APlayerController* GetOwnerController() const;
+	void TrimPendingShots();
+	void PlayShotCosmetics(const FVector& Origin, const FVector& Dir);
+	void AddRecoil(const UMDRangedWeaponData& Data, int32 Seed);
+	void ApplyWeaponKick();
+	void UpdateReticle();
+	void FinishShotServer(const FMDShotRequest& Request, EMDShotReject Reason);
+
+	// Local (owner machine) state.
+	bool bFireHeld = false;
+	bool bSemiPending = false;
+	double SemiBufferUntil = 0.0;
+	double NextLocalShotTime = 0.0;
+	uint16 NextShotId = 0;
+	TArray<uint16> PendingShotIds;
+	float LocalBloom = 0.0f;
+	double LocalBloomTime = 0.0;
+	float RecoilPitch = 0.0f; // unrecovered camera kick (degrees), subtracted again over RecoilRecovery seconds
+	float RecoilYaw = 0.0f;
+	float KickAlpha = 0.0f;   // weapon kick 0..1
+	FTransform WeaponBaseRelative = FTransform::Identity;
+	bool bKickApplied = false;
+
+	// Server state.
+	float ServerBloom = 0.0f;
+	double ServerBloomTime = 0.0;
+	double LastAcceptedClientTime = -1000.0;
+	int32 AcceptedShots = 0;
+	EMDShotReject LastReject = EMDShotReject::None;
+	float WearAccumulator = 0.0f;
+	int32 MagCorrections = 0;
+	int32 LastCorrectedRounds = -1;
+	TWeakObjectPtr<APawn> TestPawn;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMDRangedWeaponData> TestData;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMDRangedReticleWidget> Reticle;
+
 	UMDInventoryComponent* GetInventory() const;
 
 	// Applies the loose tag on the ASC and shows / hides the melee weapon actors (local visuals, every machine).

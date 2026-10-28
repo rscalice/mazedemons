@@ -155,6 +155,18 @@ void UMDCombatFeedbackComponent::Client_ConfirmHit_Implementation(const FMDHitCo
 		ShowDamageNumber(Confirm.Damage, Confirm.bCrit, Confirm.Location, Confirm.DamageType);
 		OnHitNumber(Confirm.Damage, Confirm.bCrit, Confirm.Location);
 	}
+	if (Confirm.bRanged)
+	{
+		// Gun hit: hit marker, light shake and rumble; hit-stop only on kills (the server sends 0 frames otherwise).
+		OnRangedHitConfirmed.Broadcast(Confirm.bKill, Confirm.bHeadshot, Confirm.DamageType);
+		if (Confirm.HitStopFrames > 0 && PC)
+		{
+			ApplyHitStop(PC->GetPawn(), Confirm.Victim, UMDCombatRules::HitStopSeconds(Confirm.HitStopFrames, 1.0f));
+		}
+		StartShake(LightShake, Confirm.ShakeScale);
+		PlayRumble(HitRumble);
+		return;
+	}
 	if (Confirm.bNumberOnly)
 	{
 		return;

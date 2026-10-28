@@ -431,6 +431,9 @@ protected:
 private:
 	// R0: Q / D-pad Up swaps melee and ranged mode. The server validates and flips UMDRangedComponent.
 	void RangedSwapPressed();
+	// R1: LMB / right trigger -> UMDRangedComponent::SetFireHeld (ignored while a menu is open).
+	void RangedFirePressed();
+	void RangedFireReleased();
 
 	UFUNCTION(Server, Reliable)
 	void Server_RequestRangedSwap();

@@ -1531,6 +1531,35 @@ void UMDInventoryComponent::ApplyWeaponWear()
 	OnInventoryChanged.Broadcast();
 }
 
+void UMDInventoryComponent::ApplyWearToSlot(uint8 Slot, int32 Points)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Points <= 0)
+	{
+		return;
+	}
+	const int32 Max = GetEquippedMaxDurability(Slot);
+	if (Max <= 0)
+	{
+		return;
+	}
+	int32 Cur = 0;
+	int32 MaxNow = 0;
+	GetSlotDurability(Slot, Cur, MaxNow);
+	if (Cur <= 0)
+	{
+		return;
+	}
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	const float Before = UMDStatCalculator::ConditionMultiplier(Cur, Max, Tuning);
+	const int32 After = FMath::Max(Cur - Points, 0);
+	SetConditionDurability(Slot, After);
+	if (UMDStatCalculator::ConditionMultiplier(After, Max, Tuning) != Before)
+	{
+		PushWeaponModifiers();
+	}
+	OnInventoryChanged.Broadcast();
+}
+
 void UMDInventoryComponent::NotifyHitLanded(AActor* Instigator, const AActor* Victim)
 {
 	if (!Instigator || Instigator == Victim)

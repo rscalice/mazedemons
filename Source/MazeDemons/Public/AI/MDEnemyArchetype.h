@@ -116,6 +116,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat")
 	TArray<FMDEnemyAttack> Attacks;
 
+	// R1 hook: the ranged weapon this enemy fires (Bone Archer bow, Cultist bolt). The same asset type and the same AMDProjectile as the
+	// player's guns; UMDRangedStatics::FireFromData spawns the shot. V1 WP5 only wires the brain. Null = melee only.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Combat")
+	TObjectPtr<class UMDRangedWeaponData> RangedData;
+
 	// ---- Rules ----
 
 	// Longest Range in Attacks (0 with none): the distance an Attack intent may start from.

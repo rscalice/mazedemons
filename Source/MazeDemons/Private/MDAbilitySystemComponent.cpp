@@ -338,12 +338,12 @@ bool UMDAbilitySystemComponent::ApplyDamage(const FMDHitContext& Context, FMDDam
 {
 	OutResult = FMDDamageResult();
 	const float Damage = Context.BaseDamage * FMath::Max(Context.Step.DamageMult, 0.0f);
-	ApplyDamageCore(Damage, Context.Instigator, Context.Causer, true, &OutResult);
+	ApplyDamageCore(Damage, Context.Instigator, Context.Causer, true, &OutResult, Context.HitKind == EMDHitKind::Melee);
 	OutResult.DamageType = MDDamageNumbers::ResolveType(Context.DamageType.IsValid() ? Context.DamageType : Context.Step.DamageType);
 	return OutResult.bApplied;
 }
 
-void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult)
+void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult, bool bWearAttackerWeapon)
 {
 	if (OutResult)
 	{
@@ -473,7 +473,10 @@ void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInst
 				}
 			}
 			// Weapon wear for the attacker (the victim's own inventory listens to OnDamageApplied for armor wear).
-			UMDInventoryComponent::NotifyHitLanded(DamageInstigator, Target);
+			if (bWearAttackerWeapon)
+			{
+				UMDInventoryComponent::NotifyHitLanded(DamageInstigator, Target);
+			}
 
 			if (bCrit && AttackerASC)
 			{

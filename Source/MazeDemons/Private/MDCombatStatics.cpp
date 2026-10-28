@@ -151,6 +151,76 @@ bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHi
 	return true;
 }
 
+bool UMDCombatStatics::ApplyRangedHit(AActor* Attacker, AActor* Victim, const FHitResult& Hit, const FMDRangedHitParams& Params)
+{
+	if (!Victim || Attacker == Victim || !Victim->HasAuthority() || Params.Damage <= 0.0f)
+	{
+		return false;
+	}
+	UMDAbilitySystemComponent* VictimASC = UMDGameplayStatics::GetMDAbilitySystemComponent(Victim);
+	if (!VictimASC)
+	{
+		return false;
+	}
+
+	FMDHitContext Context;
+	Context.Instigator = Attacker;
+	Context.Causer = Attacker;
+	Context.BaseDamage = Params.Damage; // the step multiplier stays 1: falloff, headshot, perks and condition are already in
+	Context.Kind = EMDAttackKind::Light;
+	Context.PoiseDamage = Params.PoiseDamage;
+	Context.Reaction = EMDHitReaction::Flinch;
+	Context.MaxReaction = Params.ReactionCap;
+	Context.Knockback = 0.0f;
+	Context.ImpactPoint = Hit.ImpactPoint.IsNearlyZero() ? Victim->GetActorLocation() : FVector(Hit.ImpactPoint);
+	Context.ImpactNormal = Hit.ImpactNormal;
+	Context.AttackerLocation = !Params.ShotOrigin.IsNearlyZero() ? Params.ShotOrigin : (Attacker ? Attacker->GetActorLocation() : Victim->GetActorLocation());
+	Context.ImpactTag = Params.ImpactTag;
+	Context.DamageType = MDDamageNumbers::ResolveType(Params.DamageType);
+	Context.PhysMaterial = Hit.PhysMaterial.Get();
+	Context.HitKind = Params.Kind;
+
+	FMDDamageResult Damage;
+	if (!VictimASC->ApplyDamage(Context, Damage))
+	{
+		return false; // team rules, i-frames, dead or fully absorbed: the bolt flies on
+	}
+
+	if (UMDPoiseComponent* Poise = UMDPoiseComponent::FindFor(Victim))
+	{
+		Poise->ApplyHit(Context, Damage);
+	}
+
+	// The shooter: damage number (typed colour, crit red), hit marker, kill hit-stop.
+	if (UMDCombatFeedbackComponent* Feedback = Attacker ? MDCombatNumberLocal::FindFeedback(Attacker) : nullptr)
+	{
+		const bool bKill = VictimASC->IsDead();
+		FMDHitConfirm Confirm;
+		Confirm.Victim = Victim;
+		Confirm.Damage = Damage.Applied;
+		Confirm.bCrit = Damage.bCrit;
+		Confirm.DamageType = Damage.DamageType;
+		Confirm.Location = Context.ImpactPoint;
+		Confirm.HitStopFrames = bKill ? Params.KillHitStopFrames : 0;
+		Confirm.ShakeScale = Params.ShakeScale;
+		Confirm.Kind = EMDAttackKind::Light;
+		Confirm.bRanged = true;
+		Confirm.bKill = bKill;
+		Confirm.bHeadshot = Params.bHeadshot;
+		Feedback->Client_ConfirmHit(Confirm);
+	}
+
+	// Guns wear per landed hit (0.5), not per shot.
+	if (Attacker && Params.Kind == EMDHitKind::Projectile)
+	{
+		if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(Attacker))
+		{
+			Ranged->NotifyShotLanded();
+		}
+	}
+	return true;
+}
+
 bool UMDCombatStatics::ApplyTypedDamage(AActor* Instigator, AActor* Victim, float Damage, FGameplayTag DamageType, FVector Location)
 {
 	if (!Victim || !Victim->HasAuthority() || Damage <= 0.0f || !MDDamageNumbers::IsEligibleVictim(Victim))

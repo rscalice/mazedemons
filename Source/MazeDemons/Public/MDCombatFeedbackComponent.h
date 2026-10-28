@@ -54,7 +54,20 @@ struct MAZEDEMONS_API FMDHitConfirm
 	// Only show the damage number (no hit-stop, shake or rumble): damage that is not a weapon swing, e.g. a status effect tick.
 	UPROPERTY(BlueprintReadWrite, Category = "Hit")
 	bool bNumberOnly = false;
+
+	// R1 gun / projectile hit: number + hit marker + light shake, hit-stop only when HitStopFrames > 0 (kills).
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	bool bRanged = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	bool bKill = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	bool bHeadshot = false;
 };
+
+// R1: the local shooter's hit marker (a projectile hit landed). Fired on the shooter's machine only.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FMDRangedHitConfirmed, bool, bKill, bool, bHeadshot, FGameplayTag, DamageType);
 
 // Per-flash bookkeeping (local).
 USTRUCT()
@@ -171,6 +184,10 @@ public:
 	// Play impact VFX / sound / decal natively from the impact set (OnImpact is still called afterwards for Blueprint extras).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Impact")
 	bool bNativeImpact = true;
+
+	// R1: a ranged hit was confirmed by the server (hit marker). The native reticle (UMDRangedReticleWidget) listens to it.
+	UPROPERTY(BlueprintAssignable, Category = "Maze Demons|Combat")
+	FMDRangedHitConfirmed OnRangedHitConfirmed;
 
 	// ---- Server -> attacker ----
 	// Unreliable; the attacker's hit-stop, shake, rumble and damage number.

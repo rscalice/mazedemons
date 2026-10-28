@@ -254,6 +254,11 @@ public:
 	// without durability). Called from the victim's ApplyDamage.
 	static void NotifyHitLanded(AActor* Instigator, const AActor* Victim);
 
+	// R1, authority: the item equipped in Slot loses Points durability (whole points; no-op without durability). Guns call it from
+	// UMDRangedComponent::NotifyShotLanded (0.5 per landed hit, accumulated there). Re-pushes the weapon modifiers when the
+	// condition multiplier changed.
+	void ApplyWearToSlot(uint8 Slot, int32 Points);
+
 	// Pure rule: maps the Blueprint enum byte to a rarity; anything outside 0..4 is Common.
 	static EMDRarity RarityFromByte(int32 Value);
 

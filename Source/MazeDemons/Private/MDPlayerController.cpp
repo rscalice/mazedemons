@@ -204,6 +204,12 @@ void AMDPlayerController::SetupInputComponent()
 		// R0 mode swap (no asset needed): Q / D-pad Up.
 		InputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
 		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
+		// R1 fire: LMB / right trigger. Not consumed, so melee's own LMB binding keeps working outside ranged mode.
+		for (const FKey& FireKey : { EKeys::LeftMouseButton, EKeys::Gamepad_RightTrigger })
+		{
+			InputComponent->BindKey(FireKey, IE_Pressed, this, &AMDPlayerController::RangedFirePressed).bConsumeInput = false;
+			InputComponent->BindKey(FireKey, IE_Released, this, &AMDPlayerController::RangedFireReleased).bConsumeInput = false;
+		}
 	}
 }
 
@@ -352,6 +358,26 @@ void AMDPlayerController::RangedSwapPressed()
 		return;
 	}
 	Server_RequestRangedSwap();
+}
+
+void AMDPlayerController::RangedFirePressed()
+{
+	if (IsAnyMenuOpen())
+	{
+		return;
+	}
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->SetFireHeld(true);
+	}
+}
+
+void AMDPlayerController::RangedFireReleased()
+{
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->SetFireHeld(false);
+	}
 }
 
 void AMDPlayerController::Server_RequestRangedSwap_Implementation()

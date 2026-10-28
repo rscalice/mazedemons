@@ -215,6 +215,16 @@ struct MAZEDEMONS_API FMDAttackStep
 	int32 MaxHitsPerTarget = 1;
 };
 
+// What delivered a hit. Melee hits wear the attacker's melee weapon; projectile and beam hits do not (a gun wears its own durability,
+// see UMDRangedComponent::NotifyShotLanded). R1 adds Projectile, R5 Beam.
+UENUM(BlueprintType)
+enum class EMDHitKind : uint8
+{
+	Melee = 0,
+	Projectile,
+	Beam
+};
+
 // Server only. One landed hit, built by UMDCombatStatics::ApplyMeleeHit and passed to ApplyDamage and the poise component.
 USTRUCT(BlueprintType)
 struct MAZEDEMONS_API FMDHitContext
@@ -264,6 +274,14 @@ struct MAZEDEMONS_API FMDHitContext
 
 	UPROPERTY(BlueprintReadWrite, Category = "Hit")
 	TObjectPtr<UPhysicalMaterial> PhysMaterial = nullptr;
+
+	// R1: what delivered the hit (Melee = the default, unchanged behaviour).
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	EMDHitKind HitKind = EMDHitKind::Melee;
+
+	// R1: strongest reaction this hit may cause, poise break included (a pistol flinches, only a bolter staggers). Knockdown = no cap.
+	UPROPERTY(BlueprintReadWrite, Category = "Hit")
+	EMDHitReaction MaxReaction = EMDHitReaction::Knockdown;
 };
 
 // Replicated "last hit" record on the victim. Every machine plays the reaction from it (OnRep).

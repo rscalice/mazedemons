@@ -136,6 +136,7 @@ FMDPoiseHitResult UMDPoiseComponent::ApplyHit(const FMDHitContext& Context, cons
 	In.bStunned = bStunned;
 	In.bFlinchOnly = Config.bFlinchOnly;
 	In.StepReaction = Context.Reaction;
+	In.MaxReaction = Context.MaxReaction;
 	In.Poise = Poise;
 	In.MaxPoise = Config.MaxPoise;
 	In.PoiseDamage = UMDCombatRules::CritPoiseBonus(Context.PoiseDamage, Damage.bCrit);

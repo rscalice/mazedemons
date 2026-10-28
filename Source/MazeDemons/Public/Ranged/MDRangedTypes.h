@@ -36,6 +36,36 @@ enum class EMDFireMode : uint8
 	Beam
 };
 
+// R1: what the shooter's client tells the server for one shot (Server_Fire). The server never trusts it blindly:
+// UMDRangedStatics::ValidateShot checks magazine, cadence, origin and direction. Dir already includes the spread (rolled from
+// SpreadSeed on the client); the seed travels so other machines can reproduce the cosmetic tracer.
+USTRUCT()
+struct MAZEDEMONS_API FMDShotRequest
+{
+	GENERATED_BODY()
+
+	// Wraps at 65535. The server acknowledges every request (accepted or rejected) with the same id.
+	UPROPERTY()
+	uint16 ShotId = 0;
+
+	// Shooter's estimate of the server clock when the trigger was pulled (AGameStateBase::GetServerWorldTimeSeconds).
+	UPROPERTY()
+	float ClientTime = 0.0f;
+
+	UPROPERTY()
+	FVector_NetQuantize Origin = FVector::ZeroVector;
+
+	UPROPERTY()
+	FVector_NetQuantizeNormal Dir = FVector::ForwardVector;
+
+	UPROPERTY()
+	int32 SpreadSeed = 0;
+
+	// Soft lock-on target (V1 WP7); validated by the server when used, never required.
+	UPROPERTY()
+	TObjectPtr<AActor> AimTargetHint = nullptr;
+};
+
 // Pure rules of ranged mode, grips and stances. No world access, so the automation tests cover every branch.
 struct MAZEDEMONS_API FMDRangedRules
 {
