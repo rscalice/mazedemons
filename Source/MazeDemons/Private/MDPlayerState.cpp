@@ -287,6 +287,38 @@ void AMDPlayerState::BeginPlay()
 	}
 }
 
+void AMDPlayerState::GrantStarterKit()
+{
+	UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(this);
+	if (!HasAuthority() || !Inventory)
+	{
+		return;
+	}
+	bool bEquippedGun = false;
+	for (const FMDStarterItem& Item : UMDGameSettings::GetEconomy().StarterKit)
+	{
+		if (Item.ItemRow.IsNone() || Item.Quantity <= 0 || !Inventory->AddItem(Item.ItemRow, Item.Quantity))
+		{
+			continue;
+		}
+		if (Item.bEquip)
+		{
+			const TArray<FMDItemStack>& Bag = Inventory->GetItems();
+			const int32 Index = Bag.IndexOfByPredicate([&Item](const FMDItemStack& Stack) { return Stack.ItemRowName == Item.ItemRow; });
+			if (Index != INDEX_NONE)
+			{
+				Inventory->RequestEquip(Index);
+				bEquippedGun = true;
+			}
+		}
+	}
+	// Equipping a gun with no melee weapon puts the player in ranged mode; the run starts in melee, the gun is one Q away.
+	if (bEquippedGun && RangedComponent)
+	{
+		RangedComponent->SetRangedMode(false);
+	}
+}
+
 void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn)
 {
 	if (!NewPawn || !AbilitySystem)
@@ -334,6 +366,7 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 			{
 				PerkComponent->InitializeForRun(); // after the base stats, so the perk effect lands on top of them
 			}
+			GrantStarterKit(); // R3: pistol + 40 Light Rounds (FMDEconomyTuning::StarterKit)
 		}
 		else if (AbilitySystem->IsDead() && NewPawn != DeadPawn)
 		{

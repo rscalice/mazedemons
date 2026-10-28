@@ -168,7 +168,27 @@ enum class EMDStationReject : uint8
 	MaxLevel,
 	FullDurability,
 	NotEnoughGold,
-	NotEnoughShards
+	NotEnoughShards,
+	// R3 ammo purchase (append-only).
+	AmmoFull,   // the reserve already holds a full stack
+	NotForSale, // the row has no ammo price
+	BagFull     // no room in the bag for the rounds
+};
+
+// R3: one entry of the starter kit granted to a player on their first spawn. bEquip puts it straight into its equip slot.
+USTRUCT(BlueprintType)
+struct MAZEDEMONS_API FMDStarterItem
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Starter")
+	FName ItemRow = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Starter", meta = (ClampMin = "1"))
+	int32 Quantity = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Starter")
+	bool bEquip = false;
 };
 
 // Gold, upgrade and durability tuning. Defaults are the BALANCE.md values so tests and a missing DA_BalanceReference need no asset.
@@ -233,6 +253,38 @@ struct MAZEDEMONS_API FMDEconomyTuning
 	// DT_Items row of the upgrade currency.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrade")
 	FName ShardRow = FName(TEXT("UpgradeShard"));
+
+	// ---- R3 ammo economy (ranged-design.md section 4) ----
+	// Stations sell ammo in bundles of this many rounds.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammo", meta = (ClampMin = "1"))
+	int32 AmmoBundleSize = 10;
+
+	// Gold per bundle, by ammo row: 10 Light = 2, 10 Heavy = 5. A row missing here is not for sale. A purchase is capped at one
+	// full reserve stack (the row's max stack); a top-up smaller than a bundle is charged pro rata, rounded up.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammo")
+	TMap<FName, int32> AmmoBundleGold = { { FName(TEXT("AmmoLight")), 2 }, { FName(TEXT("AmmoHeavy")), 5 } };
+
+	// Drop chance gained per PityShotsPerStep shots fired without an ammo drop; resets when a drop happens.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammo", meta = (ClampMin = "0", ClampMax = "1"))
+	float AmmoPityBonus = 0.10f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammo", meta = (ClampMin = "1"))
+	int32 AmmoPityShotsPerStep = 20;
+
+	// Granted once, on the player's first spawn (server). The pistol is equipped but the player still starts in melee mode.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Starter")
+	TArray<FMDStarterItem> StarterKit = MakeDefaultStarterKit();
+
+	static TArray<FMDStarterItem> MakeDefaultStarterKit()
+	{
+		FMDStarterItem Pistol;
+		Pistol.ItemRow = FName(TEXT("HollowPistol"));
+		Pistol.bEquip = true;
+		FMDStarterItem Rounds;
+		Rounds.ItemRow = FName(TEXT("AmmoLight"));
+		Rounds.Quantity = 40;
+		return { Pistol, Rounds };
+	}
 };
 
 // One stack in a player's inventory. ItemRowName is a row in /Game/Blueprints/Items/DT_Items.

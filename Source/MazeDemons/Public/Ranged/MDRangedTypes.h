@@ -9,6 +9,9 @@
 // Loose tag on the player's ASC (server) while the pawn is in ranged mode. The replicated truth is UMDRangedComponent::bRangedMode.
 MAZEDEMONS_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_RangedMode);
 
+// R3: loose tag on the ASC (every machine, from the replicated reload flag) while a reload runs.
+MAZEDEMONS_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Reloading);
+
 // How the weapon is held. Drives the support-hand IK alpha (see FMDRangedRules::SupportHandIKAlpha).
 UENUM(BlueprintType)
 enum class EMDGripType : uint8

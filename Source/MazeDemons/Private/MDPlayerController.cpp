@@ -17,6 +17,7 @@
 #include "MDInteractAbility.h"
 #include "MDGameSettings.h"
 #include "MDStation.h"
+#include "MDStationAmmoPanel.h"
 #include "MDAttributeSet.h"
 #include "MDStaminaComponent.h"
 #include "Ranged/MDRangedComponent.h"
@@ -204,6 +205,8 @@ void AMDPlayerController::SetupInputComponent()
 		// R0 mode swap (no asset needed): Q / D-pad Up.
 		InputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
 		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
+		// R3 reload: D-pad Down on a gamepad (R is shared with the Run tab: in ranged mode R reloads, see TryReloadFromKey).
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Down, IE_Pressed, this, &AMDPlayerController::RangedReloadPressed);
 		// R1 fire: LMB / right trigger. Not consumed, so melee's own LMB binding keeps working outside ranged mode.
 		for (const FKey& FireKey : { EKeys::LeftMouseButton, EKeys::Gamepad_RightTrigger })
 		{
@@ -225,6 +228,10 @@ void AMDPlayerController::OnOpenPerks(const FInputActionValue& Value)
 
 void AMDPlayerController::OnOpenRun(const FInputActionValue& Value)
 {
+	if (TryReloadFromKey())
+	{
+		return;
+	}
 	OpenGameMenuTab(EMDMenuTab::Run);
 }
 
@@ -235,7 +242,35 @@ void AMDPlayerController::OpenPerksFallback()
 
 void AMDPlayerController::OpenRunFallback()
 {
+	if (TryReloadFromKey())
+	{
+		return;
+	}
 	OpenGameMenuTab(EMDMenuTab::Run);
+}
+
+bool AMDPlayerController::TryReloadFromKey()
+{
+	// R3: in ranged mode (with no menu open) R is the reload key; the Run tab stays on the game menu (Tab).
+	UMDRangedComponent* Ranged = UMDRangedComponent::Find(this);
+	if (!Ranged || !Ranged->IsRangedMode() || IsAnyMenuOpen())
+	{
+		return false;
+	}
+	Ranged->TryActivateReload();
+	return true;
+}
+
+void AMDPlayerController::RangedReloadPressed()
+{
+	if (IsAnyMenuOpen())
+	{
+		return;
+	}
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->TryActivateReload();
+	}
 }
 
 void AMDPlayerController::ToggleGameMenu()
@@ -789,12 +824,27 @@ void AMDPlayerController::OpenStationLocal(AMDStation* Station)
 	OpenStation = Station;
 	bStationOpen = true;
 	GetWorldTimerManager().SetTimer(StationWatchTimer, this, &AMDPlayerController::WatchStation, 0.25f, true);
+	// R3: stations with the Ammo service get the ammo section beside the panel.
+	if (IsLocalController() && Station->Supports(EMDStationService::Ammo) && !StationAmmoPanel)
+	{
+		StationAmmoPanel = CreateWidget<UMDStationAmmoPanel>(this);
+		if (StationAmmoPanel)
+		{
+			StationAmmoPanel->SetStation(Station);
+			StationAmmoPanel->AddToViewport(60);
+		}
+	}
 	OnStationOpened.Broadcast(Station);
 }
 
 void AMDPlayerController::CloseStation()
 {
 	GetWorldTimerManager().ClearTimer(StationWatchTimer);
+	if (StationAmmoPanel)
+	{
+		StationAmmoPanel->RemoveFromParent();
+		StationAmmoPanel = nullptr;
+	}
 	OpenStation.Reset();
 	if (bStationOpen)
 	{

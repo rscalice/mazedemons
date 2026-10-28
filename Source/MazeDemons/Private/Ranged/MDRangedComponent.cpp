@@ -30,14 +30,18 @@
 #include "NiagaraSystem.h"
 #include "Ranged/MDProjectile.h"
 #include "Ranged/MDRangedFX.h"
+#include "Ranged/MDAmmoCounterWidget.h"
+#include "Ranged/MDReloadAbility.h"
 #include "Ranged/MDRangedFireAbility.h"
 #include "Ranged/MDRangedReticleWidget.h"
 #include "Ranged/MDRangedStatics.h"
 
 namespace MDRangedComponentLocal
 {
-	TAutoConsoleVariable<int32> CVarAutoRefill(TEXT("md.Ranged.AutoRefill"), 1,
-		TEXT("R1 placeholder until R3 (reload + reserves): 1 = the magazine refills instantly and free when it runs empty; 0 = firing just stops at empty."));
+	TAutoConsoleVariable<int32> CVarAutoReload(TEXT("md.Ranged.AutoReload"), 1,
+		TEXT("R3: 1 = reload automatically when the magazine runs empty (and when the trigger is pulled on an empty one); 0 = manual reload only."));
+
+	TAutoConsoleVariable<float> CVarReloadScale(TEXT("md.Ranged.ReloadScale"), 1.0f, TEXT("Tuning: multiplier on every gun's reload time."));
 
 	TAutoConsoleVariable<float> CVarDamageScale(TEXT("md.Ranged.DamageScale"), 1.0f, TEXT("Tuning: multiplier on every gun's damage per shot."));
 
@@ -62,6 +66,9 @@ void UMDRangedComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(UMDRangedComponent, bAimed);
 	DOREPLIFETIME_CONDITION(UMDRangedComponent, Mags, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UMDRangedComponent, ShotAck, COND_OwnerOnly);
+	DOREPLIFETIME(UMDRangedComponent, bReloading);
+	DOREPLIFETIME(UMDRangedComponent, ReloadStartServerTime);
+	DOREPLIFETIME(UMDRangedComponent, ReloadDuration);
 }
 
 UMDRangedComponent* UMDRangedComponent::Find(const AActor* Actor)
@@ -120,6 +127,10 @@ void UMDRangedComponent::BeginPlay()
 			{
 				ASC->GrantAbility(UMDRangedFireAbility::StaticClass());
 			}
+			if (!ASC->FindAbilitySpecFromClass(UMDReloadAbility::StaticClass()))
+			{
+				ASC->GrantAbility(UMDReloadAbility::StaticClass());
+			}
 		}
 	}
 	ApplyModeLocally();
@@ -131,6 +142,15 @@ void UMDRangedComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		Reticle->RemoveFromParent();
 		Reticle = nullptr;
+	}
+	if (AmmoCounter)
+	{
+		AmmoCounter->RemoveFromParent();
+		AmmoCounter = nullptr;
+	}
+	if (const UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReloadTimer);
 	}
 	if (UMDInventoryComponent* Inv = BoundInventory.Get())
 	{
@@ -203,6 +223,7 @@ void UMDRangedComponent::SetRangedMode(bool bNewMode)
 	if (!bRangedMode)
 	{
 		bAimed = false;
+		CancelReload(); // holstering the gun aborts a reload; nothing was moved yet
 	}
 	ApplyModeLocally();
 	OnRangedModeChanged.Broadcast(bRangedMode);
@@ -234,6 +255,7 @@ void UMDRangedComponent::ApplyModeLocally()
 	SetMeleeWeaponsHidden(bRangedMode);
 	RefreshWeaponMesh();
 	UpdateReticle();
+	UpdateAmmoCounter();
 	if (!bRangedMode)
 	{
 		bFireHeld = false;
@@ -286,7 +308,12 @@ void UMDRangedComponent::HandleEquipmentChanged()
 	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
 	const FName GunRow = Data && Inv ? Inv->GetEquippedRangedRow() : NAME_None;
 	const bool bGunJustEquipped = !GunRow.IsNone() && GunRow != LastGunRow;
+	const FName PreviousGunRow = LastGunRow;
 	LastGunRow = GunRow;
+	if (GunRow != PreviousGunRow)
+	{
+		CancelReload(); // a different gun in the hand: the old reload means nothing
+	}
 
 	if (FMDRangedRules::ShouldLeaveRangedMode(bRangedMode, Data != nullptr))
 	{
@@ -297,12 +324,22 @@ void UMDRangedComponent::HandleEquipmentChanged()
 		SetRangedMode(true);
 	}
 
-	// A new gun starts with a full magazine for now (R1 owns real ammo flow).
-	if (Data && Inv)
+	// R3: the magazine belongs to the gun. Swapping away remembers the rounds; swapping back restores them. A gun this player has
+	// never held starts with a full magazine, once.
+	if (GunRow != PreviousGunRow)
 	{
-		if (GetMagRounds(MDItemType::RangedSlot) == 0 && bGunJustEquipped)
+		if (!PreviousGunRow.IsNone())
 		{
-			SetMagRounds(MDItemType::RangedSlot, Data->MagSize);
+			StashedMags.Add(PreviousGunRow, GetMagRounds(MDItemType::RangedSlot));
+		}
+		if (Data && !GunRow.IsNone())
+		{
+			const int32* Stashed = StashedMags.Find(GunRow);
+			SetMagRounds(MDItemType::RangedSlot, Stashed ? FMath::Min(*Stashed, Data->MagSize) : Data->MagSize);
+		}
+		else
+		{
+			SetMagRounds(MDItemType::RangedSlot, 0);
 		}
 	}
 }
@@ -648,7 +685,20 @@ bool UMDRangedComponent::TryActivateFire()
 {
 	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
 	const UWorld* World = GetWorld();
-	if (!Data || !World || !bRangedMode || World->GetTimeSeconds() < NextLocalShotTime || GetViewMagRounds() <= 0)
+	if (!Data || !World || !bRangedMode || bReloading)
+	{
+		return false;
+	}
+	if (GetViewMagRounds() <= 0)
+	{
+		// R3: an empty magazine cannot fire; pulling the trigger asks for the reload (when auto-reload is on).
+		if (IsAutoReloadEnabled() && !Data->AmmoRow.IsNone())
+		{
+			TryActivateReload();
+		}
+		return false;
+	}
+	if (World->GetTimeSeconds() < NextLocalShotTime)
 	{
 		return false;
 	}
@@ -672,7 +722,7 @@ bool UMDRangedComponent::FireShotLocal()
 		return false;
 	}
 	const double Now = World->GetTimeSeconds();
-	if (Now < NextLocalShotTime || GetViewMagRounds() <= 0 || UMDGameplayStatics::IsPawnDead(Pawn) || UMDPoiseComponent::IsActorStunned(Pawn))
+	if (Now < NextLocalShotTime || GetViewMagRounds() <= 0 || bReloading || UMDGameplayStatics::IsPawnDead(Pawn) || UMDPoiseComponent::IsActorStunned(Pawn))
 	{
 		return false;
 	}
@@ -744,6 +794,7 @@ EMDShotReject UMDRangedComponent::ProcessShot(const FMDShotRequest& Request, flo
 	In.bGunEquipped = Data != nullptr && Data->HitModel == EMDRangedHitModel::Projectile;
 	In.bDead = !Pawn || UMDGameplayStatics::IsPawnDead(Pawn);
 	In.bStaggered = Pawn && UMDPoiseComponent::IsActorStunned(Pawn);
+	In.bBusy = bReloading;
 	In.MagRounds = GetMagRounds(Slot);
 	In.RoundsPerSecond = Data ? Data->RoundsPerSecond : 0.0f;
 	In.SecondsSinceLastShot = LastAcceptedClientTime < -999.0 ? 1000.0f : static_cast<float>(Request.ClientTime - LastAcceptedClientTime);
@@ -789,9 +840,10 @@ EMDShotReject UMDRangedComponent::ProcessShot(const FMDShotRequest& Request, flo
 
 	const int32 NewRounds = In.MagRounds - 1;
 	SetMagRounds(Slot, NewRounds);
-	if (NewRounds <= 0 && MDRangedComponentLocal::CVarAutoRefill.GetValueOnGameThread() != 0)
+	++ShotsSinceAmmoDrop; // pity counter for the ammo drops
+	if (NewRounds <= 0 && IsAutoReloadEnabled())
 	{
-		SetMagRounds(Slot, Data->MagSize); // placeholder until R3 (reload + reserves): free instant refill
+		BeginReloadServer();
 	}
 
 	float Damage = Data->DamagePerShot * MDRangedComponentLocal::CVarDamageScale.GetValueOnGameThread();
@@ -977,6 +1029,16 @@ void UMDRangedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	}
 	const double Now = World->GetTimeSeconds();
 
+	// ---- reload: the server cancels it when the shooter is staggered or dead (nothing was moved yet, so nothing is lost) ----
+	if (bReloading && GetOwner() && GetOwner()->HasAuthority())
+	{
+		const APawn* ReloadPawn = GetPawn();
+		if (ReloadPawn && (UMDGameplayStatics::IsPawnDead(ReloadPawn) || UMDPoiseComponent::IsActorStunned(ReloadPawn)))
+		{
+			CancelReload();
+		}
+	}
+
 	// ---- trigger ----
 	if (bFireHeld && IsOwnerLocal() && bRangedMode && Data)
 	{
@@ -1043,8 +1105,221 @@ void UMDRangedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		bKickApplied = false;
 	}
 
-	if (!bFireHeld && !bSemiPending && RecoilPitch == 0.0f && RecoilYaw == 0.0f && !bKickApplied)
+	if (!bFireHeld && !bSemiPending && RecoilPitch == 0.0f && RecoilYaw == 0.0f && !bKickApplied && !bReloading)
 	{
 		SetComponentTickEnabled(false);
+	}
+}
+
+// =====================================================================================================================
+// R3 reload, reserves, pity
+// =====================================================================================================================
+
+int32 UMDRangedComponent::GetReserveAmmo() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	const UMDInventoryComponent* Inv = GetInventory();
+	return Data && Inv && !Data->AmmoRow.IsNone() ? Inv->GetAmmoCount(Data->AmmoRow) : 0;
+}
+
+int32 UMDRangedComponent::GetMagSize() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	return Data ? Data->MagSize : 0;
+}
+
+bool UMDRangedComponent::IsAutoReloadEnabled() const
+{
+	return MDRangedComponentLocal::CVarAutoReload.GetValueOnGameThread() != 0;
+}
+
+float UMDRangedComponent::GetReloadProgress() const
+{
+	if (!bReloading || ReloadDuration <= 0.0f)
+	{
+		return 0.0f;
+	}
+	return FMath::Clamp(static_cast<float>(GetServerNow() - ReloadStartServerTime) / ReloadDuration, 0.0f, 1.0f);
+}
+
+int32 UMDRangedComponent::GetStashedMag(FName GunRow) const
+{
+	const int32* Rounds = StashedMags.Find(GunRow);
+	return Rounds ? *Rounds : 0;
+}
+
+EMDReloadReject UMDRangedComponent::GetReloadReject() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	const APawn* Pawn = GetPawn();
+	const bool bGun = Data != nullptr && Data->HitModel == EMDRangedHitModel::Projectile;
+	return FMDAmmoRules::CanReload(bRangedMode, bGun, Data && !Data->AmmoRow.IsNone(), bReloading,
+		!Pawn || UMDGameplayStatics::IsPawnDead(Pawn), Pawn && UMDPoiseComponent::IsActorStunned(Pawn),
+		GetMagRounds(MDItemType::RangedSlot), Data ? Data->MagSize : 0, GetReserveAmmo());
+}
+
+bool UMDRangedComponent::TryActivateReload()
+{
+	if (!IsOwnerLocal() || GetReloadReject() != EMDReloadReject::None)
+	{
+		return false;
+	}
+	if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		if (ASC->FindAbilitySpecFromClass(UMDReloadAbility::StaticClass()))
+		{
+			return ASC->TryActivateAbilityByClass(UMDReloadAbility::StaticClass());
+		}
+	}
+	RequestReload();
+	return true;
+}
+
+void UMDRangedComponent::RequestReload()
+{
+	if (!GetOwner())
+	{
+		return;
+	}
+	if (GetOwner()->HasAuthority())
+	{
+		BeginReloadServer();
+		return;
+	}
+	const UWorld* World = GetWorld();
+	const double Now = World ? World->GetTimeSeconds() : 0.0;
+	if (Now < NextReloadRequestTime)
+	{
+		return; // the trigger can ask every tick on an empty magazine; one request per quarter second is plenty
+	}
+	NextReloadRequestTime = Now + 0.25;
+	Server_Reload();
+}
+
+void UMDRangedComponent::Server_Reload_Implementation()
+{
+	BeginReloadServer();
+}
+
+EMDReloadReject UMDRangedComponent::BeginReloadServer()
+{
+	UWorld* World = GetWorld();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !World)
+	{
+		return EMDReloadReject::NoGun;
+	}
+	const EMDReloadReject Verdict = GetReloadReject();
+	if (Verdict != EMDReloadReject::None)
+	{
+		return Verdict;
+	}
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	bReloading = true;
+	ReloadStartServerTime = static_cast<float>(GetServerNow());
+	ReloadDuration = FMath::Max(0.05f, Data->ReloadSeconds * MDRangedComponentLocal::CVarReloadScale.GetValueOnGameThread());
+	World->GetTimerManager().SetTimer(ReloadTimer, FTimerDelegate::CreateWeakLambda(this, [this]() { CompleteReload(); }), ReloadDuration, false);
+	ApplyReloadTagLocally();
+	UpdateAmmoCounter();
+	SetComponentTickEnabled(true); // the tick watches for a stagger or death while the reload runs
+	GetOwner()->ForceNetUpdate();
+	return EMDReloadReject::None;
+}
+
+int32 UMDRangedComponent::CompleteReload()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !bReloading)
+	{
+		return 0;
+	}
+	const APawn* Pawn = GetPawn();
+	if (Pawn && (UMDGameplayStatics::IsPawnDead(Pawn) || UMDPoiseComponent::IsActorStunned(Pawn)))
+	{
+		CancelReload();
+		return 0;
+	}
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	UMDInventoryComponent* Inv = const_cast<UMDInventoryComponent*>(GetInventory());
+	int32 Moved = 0;
+	if (Data && Inv && !Data->AmmoRow.IsNone())
+	{
+		const int32 Mag = GetMagRounds(MDItemType::RangedSlot);
+		const int32 Want = FMDAmmoRules::ReloadAmount(Mag, Data->MagSize, Inv->GetAmmoCount(Data->AmmoRow));
+		Moved = Inv->ConsumeAmmo(Data->AmmoRow, Want);
+		SetMagRounds(MDItemType::RangedSlot, Mag + Moved);
+	}
+	ClearReloadState();
+	GetOwner()->ForceNetUpdate();
+	return Moved;
+}
+
+void UMDRangedComponent::CancelReload()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !bReloading)
+	{
+		return;
+	}
+	ClearReloadState();
+	GetOwner()->ForceNetUpdate();
+}
+
+void UMDRangedComponent::ClearReloadState()
+{
+	bReloading = false;
+	ReloadDuration = 0.0f;
+	if (const UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ReloadTimer);
+	}
+	ApplyReloadTagLocally();
+	UpdateAmmoCounter();
+}
+
+void UMDRangedComponent::OnRep_Reloading()
+{
+	ApplyReloadTagLocally();
+	UpdateAmmoCounter();
+}
+
+void UMDRangedComponent::ApplyReloadTagLocally()
+{
+	if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		const bool bHasTag = ASC->HasMatchingGameplayTag(TAG_State_Reloading);
+		if (bReloading && !bHasTag)
+		{
+			ASC->AddLooseGameplayTag(TAG_State_Reloading);
+		}
+		else if (!bReloading && bHasTag)
+		{
+			ASC->RemoveLooseGameplayTag(TAG_State_Reloading);
+		}
+	}
+}
+
+void UMDRangedComponent::UpdateAmmoCounter()
+{
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	const bool bWant = bRangedMode && IsOwnerLocal() && Data != nullptr && !Data->AmmoRow.IsNone();
+	if (bWant && !AmmoCounter)
+	{
+		if (APlayerController* PC = GetOwnerController())
+		{
+			AmmoCounter = CreateWidget<UMDAmmoCounterWidget>(PC);
+			if (AmmoCounter)
+			{
+				AmmoCounter->SetRanged(this);
+				AmmoCounter->AddToViewport(40);
+			}
+		}
+	}
+	else if (!bWant && AmmoCounter)
+	{
+		AmmoCounter->RemoveFromParent();
+		AmmoCounter = nullptr;
 	}
 }

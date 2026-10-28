@@ -350,6 +350,10 @@ void UMDComboComponent::BeginDodge(EMDDodgeDirection Direction, float SlideDurat
 	PlayDodgeCosmetics(Direction, SlideDuration);
 	if (IsAuthority())
 	{
+		if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(GetOwner()))
+		{
+			Ranged->CancelReload(); // R3: a dodge aborts a reload; the rounds never left the bag
+		}
 		Multicast_Dodge(Direction, SlideDuration);
 	}
 }

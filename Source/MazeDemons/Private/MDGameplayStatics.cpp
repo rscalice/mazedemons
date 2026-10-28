@@ -19,6 +19,7 @@
 #include "MDStaminaComponent.h"
 #include "MDStatCalculator.h"
 #include "MDUISettings.h"
+#include "Ranged/MDAmmoDrops.h"
 #include "Engine/DataTable.h"
 #include "Components/ActorComponent.h"
 
@@ -526,6 +527,7 @@ EMDColor UMDGameplayStatics::DurabilityColor(float Fraction)
 
 void UMDGameplayStatics::AwardKillGold(const AActor* Victim, const AController* Killer, int32 Gold)
 {
+	FMDAmmoDrops::RollKillDrop(Victim, Killer); // R3: the ammo drop rides the kill path (no gold needed for it)
 	const UWorld* World = Victim ? Victim->GetWorld() : nullptr;
 	const AGameStateBase* GameState = World ? World->GetGameState() : nullptr;
 	if (!GameState || Gold <= 0 || !Victim->HasAuthority())

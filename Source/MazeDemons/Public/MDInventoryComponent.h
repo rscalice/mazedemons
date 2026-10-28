@@ -238,6 +238,28 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Station")
 	EMDStationReject GetUpgradeReject(const AActor* Station, uint8 Slot, int32& OutGold, int32& OutShards) const;
 
+	// ---- R3 ammo. The reserve is the bag: every stack of the ammo row counts. ----
+	// Total rounds of Row in the bag (0 for a none / unknown row).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ammo")
+	int32 GetAmmoCount(FName Row) const;
+
+	// One full reserve stack: the row's max stack (120 Light, 60 Heavy). Stations never sell past it.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ammo")
+	int32 GetAmmoCap(FName Row) const;
+
+	// Authority: removes up to N rounds of Row across stacks and returns how many were removed (partial when the bag holds fewer).
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Maze Demons|Ammo")
+	int32 ConsumeAmmo(FName Row, int32 N);
+
+	// Station "Ammo" service: buys one bundle (10 rounds) of Row, or the top-up to a full stack when less than a bundle fits.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Station")
+	void RequestBuyAmmo(AActor* Station, FName Row);
+
+	// The same checks the server runs, for the UI. OutQty = rounds the purchase would add, OutGold = its price (filled whenever
+	// they could be computed).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Station")
+	EMDStationReject GetBuyAmmoReject(const AActor* Station, FName Row, int32& OutQty, int32& OutGold) const;
+
 	// Pure: player-facing text for a rejection. Needed / Have feed the funds messages ("Not enough gold (need 34)",
 	// "Not enough Shards (2/3)"); ignored for other reasons.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Station")
@@ -362,6 +384,9 @@ protected:
 	void Server_Upgrade(AActor* Station, uint8 Slot);
 
 	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_BuyAmmo(AActor* Station, FName Row);
+
+	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_AssignQuickSlot(int32 QuickIndex, int32 InventoryIndex);
 
 	UFUNCTION(Server, Reliable, WithValidation)
@@ -426,6 +451,7 @@ private:
 	friend struct FMDInventoryTestAccess;
 	friend struct FMDQuickSlotTestAccess;
 	friend struct FMDUpgradeTestAccess;
+	friend struct FMDAmmoTestAccess; // R3 tests
 	// Debug exec commands (ListItemRows) read GetSlotForItem.
 	friend class AMDPlayerController;
 
@@ -453,6 +479,7 @@ private:
 	EMDStationReject CheckStationAccess(const AActor* Station, uint8 ServiceFlag) const;
 	bool Repair_Impl(AActor* Station, uint8 Slot);
 	bool Upgrade_Impl(AActor* Station, uint8 Slot);
+	bool BuyAmmo_Impl(AActor* Station, FName Row);
 	// Authority: tells the owning client (generic HUD toast). No-op without a controller.
 	void SendToast(const FText& Message, EMDColor Tone) const;
 

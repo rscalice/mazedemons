@@ -11,6 +11,7 @@
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
 #include "Ranged/MDRangedWeaponData.h"
+#include "Ranged/MDAmmoRules.h"
 #include "MDStation.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/Actor.h"
@@ -1625,6 +1626,12 @@ FText UMDInventoryComponent::GetStationRejectText(EMDStationReject Reason, int32
 		return FText::Format(LOCTEXT("RejectNotEnoughGold", "Not enough gold (need {0})"), FText::AsNumber(Needed));
 	case EMDStationReject::NotEnoughShards:
 		return FText::Format(LOCTEXT("RejectNotEnoughShards", "Not enough Shards ({0}/{1})"), FText::AsNumber(Have), FText::AsNumber(Needed));
+	case EMDStationReject::AmmoFull:
+		return LOCTEXT("RejectAmmoFull", "Ammo reserve is full");
+	case EMDStationReject::NotForSale:
+		return LOCTEXT("RejectNotForSale", "Not sold here");
+	case EMDStationReject::BagFull:
+		return LOCTEXT("RejectBagFull", "Bag is full");
 	default:
 		return FText::GetEmpty();
 	}
@@ -1862,6 +1869,113 @@ bool UMDInventoryComponent::Upgrade_Impl(AActor* Station, uint8 Slot)
 	RefreshEquippedStats();
 	OnInventoryChanged.Broadcast();
 	SendToast(FText::Format(LOCTEXT("UpgradeDone", "{0} upgraded to +{1}"), UMDGameplayStatics::GetItemDisplayName(Row), FText::AsNumber(NewLevel)), EMDColor::Upgrade);
+	return true;
+}
+
+// ---- R3 ammo ----
+
+int32 UMDInventoryComponent::GetAmmoCount(FName Row) const
+{
+	if (Row.IsNone())
+	{
+		return 0;
+	}
+	int32 Total = 0;
+	for (const FMDItemStack& Stack : Items)
+	{
+		if (Stack.ItemRowName == Row)
+		{
+			Total += Stack.Quantity;
+		}
+	}
+	return Total;
+}
+
+int32 UMDInventoryComponent::GetAmmoCap(FName Row) const
+{
+	return Row.IsNone() ? 0 : GetMaxStackForItem(Row);
+}
+
+int32 UMDInventoryComponent::ConsumeAmmo(FName Row, int32 N)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Row.IsNone() || N <= 0)
+	{
+		return 0;
+	}
+	const int32 Take = FMath::Min(N, GetAmmoCount(Row));
+	return Take > 0 && RemoveItemByRow(Row, Take) ? Take : 0;
+}
+
+EMDStationReject UMDInventoryComponent::GetBuyAmmoReject(const AActor* Station, FName Row, int32& OutQty, int32& OutGold) const
+{
+	OutQty = 0;
+	OutGold = 0;
+	const EMDStationReject Access = CheckStationAccess(Station, static_cast<uint8>(EMDStationService::Ammo));
+	if (Access != EMDStationReject::None)
+	{
+		return Access;
+	}
+	const FMDEconomyTuning& Tuning = UMDGameSettings::GetEconomy();
+	const int32* Price = Row.IsNone() ? nullptr : Tuning.AmmoBundleGold.Find(Row);
+	if (!Price)
+	{
+		return EMDStationReject::NotForSale;
+	}
+	OutQty = FMDAmmoRules::PurchaseQuantity(GetAmmoCount(Row), GetAmmoCap(Row), Tuning.AmmoBundleSize);
+	if (OutQty <= 0)
+	{
+		return EMDStationReject::AmmoFull;
+	}
+	OutGold = FMDAmmoRules::PurchaseCost(OutQty, Tuning.AmmoBundleSize, *Price);
+	if (!HasRoomForItem(Row, OutQty))
+	{
+		return EMDStationReject::BagFull;
+	}
+	return GoldAmount < OutGold ? EMDStationReject::NotEnoughGold : EMDStationReject::None;
+}
+
+void UMDInventoryComponent::RequestBuyAmmo(AActor* Station, FName Row)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		BuyAmmo_Impl(Station, Row);
+	}
+	else
+	{
+		Server_BuyAmmo(Station, Row);
+	}
+}
+
+bool UMDInventoryComponent::Server_BuyAmmo_Validate(AActor* Station, FName Row)
+{
+	return !Row.IsNone();
+}
+
+void UMDInventoryComponent::Server_BuyAmmo_Implementation(AActor* Station, FName Row)
+{
+	BuyAmmo_Impl(Station, Row);
+}
+
+bool UMDInventoryComponent::BuyAmmo_Impl(AActor* Station, FName Row)
+{
+	int32 Qty = 0;
+	int32 Gold = 0;
+	const EMDStationReject Reject = GetBuyAmmoReject(Station, Row, Qty, Gold);
+	if (Reject != EMDStationReject::None)
+	{
+		SendToast(GetStationRejectText(Reject, Gold, GoldAmount), EMDColor::Warning);
+		return false;
+	}
+	if (!SpendGold(Gold))
+	{
+		return false;
+	}
+	if (!AddItem(Row, Qty))
+	{
+		AddGold(Gold); // never keep the gold of a purchase that did not land
+		return false;
+	}
+	SendToast(FText::Format(LOCTEXT("AmmoBought", "+{0} {1} (-{2} gold)"), FText::AsNumber(Qty), UMDGameplayStatics::GetItemDisplayName(Row), FText::AsNumber(Gold)), EMDColor::Success);
 	return true;
 }
 

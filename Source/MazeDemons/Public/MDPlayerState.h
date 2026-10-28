@@ -112,6 +112,11 @@ protected:
 
 	void ApplyArmorVisuals();
 
+	friend struct FMDAmmoTestAccess; // R3 tests
+
+	// R3, authority, first spawn only: the starter kit from FMDEconomyTuning::StarterKit (pistol equipped + Light Rounds).
+	void GrantStarterKit();
+
 	UFUNCTION()
 	void HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn);
 

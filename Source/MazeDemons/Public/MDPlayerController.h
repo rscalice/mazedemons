@@ -431,6 +431,10 @@ protected:
 private:
 	// R0: Q / D-pad Up swaps melee and ranged mode. The server validates and flips UMDRangedComponent.
 	void RangedSwapPressed();
+	// R3: gamepad D-pad Down.
+	void RangedReloadPressed();
+	// R3: true when R was consumed as a reload (ranged mode, no menu open).
+	bool TryReloadFromKey();
 	// R1: LMB / right trigger -> UMDRangedComponent::SetFireHeld (ignored while a menu is open).
 	void RangedFirePressed();
 	void RangedFireReleased();
@@ -453,6 +457,10 @@ private:
 	void OpenStationLocal(AMDStation* Station);
 	void WatchStation();
 	TWeakObjectPtr<AMDStation> OpenStation;
+
+	// R3: the ammo section shown beside the station panel while a station with the Ammo service is open (local only).
+	UPROPERTY(Transient)
+	TObjectPtr<class UMDStationAmmoPanel> StationAmmoPanel;
 	bool bStationOpen = false;
 	FTimerHandle StationWatchTimer;
 

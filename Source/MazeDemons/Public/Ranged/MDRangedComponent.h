@@ -5,6 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Ranged/MDAmmoRules.h"
 #include "Ranged/MDRangedMath.h"
 #include "Ranged/MDRangedTypes.h"
 #include "MDRangedComponent.generated.h"
@@ -187,6 +188,58 @@ public:
 	int32 GetMagCorrectionCount() const { return MagCorrections; }
 	int32 GetLastCorrectedRounds() const { return LastCorrectedRounds; }
 
+	// ================= R3 reload, reserves, pity =================
+	// Reload state replicates to everyone (tag + visuals); the progress numbers are readable on the owner's HUD.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	bool IsReloading() const { return bReloading; }
+
+	// 0..1 while reloading (server clock), else 0.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetReloadProgress() const;
+
+	// Rounds of the equipped gun's ammo in the bag (0 without a gun, an ammo row or an inventory).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	int32 GetReserveAmmo() const;
+
+	// Magazine size of the equipped gun (0 without a gun).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	int32 GetMagSize() const;
+
+	// Auto-reload when the last round leaves the magazine, and when the trigger is pulled on an empty one. Default on.
+	// md.Ranged.AutoReload 0 turns it off for everybody (dev / options hook).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	bool IsAutoReloadEnabled() const;
+
+	// Owner machine: R / D-pad Down. Activates the LocalPredicted UMDReloadAbility when the ASC has it, else asks the server directly.
+	bool TryActivateReload();
+
+	// Any machine: authority starts the reload, a client sends Server_Reload.
+	void RequestReload();
+
+	// Authority: validates (FMDAmmoRules::CanReload) and starts the reload timer (the data's ReloadSeconds). Returns the verdict.
+	EMDReloadReject BeginReloadServer();
+
+	// The verdict BeginReloadServer would give right now (authority state; the owner's replicated view elsewhere).
+	EMDReloadReject GetReloadReject() const;
+
+	// Authority: the reload notify. Moves min(MagSize - Mag, Reserve) from the bag into the magazine and ends the reload.
+	// Returns the rounds moved. Called by the timer; tests call it directly (their world does not tick).
+	int32 CompleteReload();
+
+	// Authority: aborts a reload in progress. Nothing was moved yet, so no ammo is lost. Called on dodge, stagger, death, a mode
+	// or gun change.
+	void CancelReload();
+
+	UFUNCTION(Server, Reliable)
+	void Server_Reload();
+
+	// Pity: shots fired since this player's last ammo drop (server).
+	int32 GetShotsSinceAmmoDrop() const { return ShotsSinceAmmoDrop; }
+	void ResetShotsSinceAmmoDrop() { ShotsSinceAmmoDrop = 0; }
+
+	// Rounds remembered for a gun that is not equipped (server). 0 when the gun was never seen.
+	int32 GetStashedMag(FName GunRow) const;
+
 	// Tests: a pawn to act for when the PlayerState has none (no controller possesses it in a unit-test world).
 	void SetPawnForTests(APawn* InPawn) { TestPawn = InPawn; }
 	// Tests: a weapon data asset used instead of the inventory's equipped gun.
@@ -215,7 +268,33 @@ protected:
 	UFUNCTION()
 	void OnRep_ShotAck();
 
+	// R3: a reload is running (server decides). Everyone gets the State.Reloading tag from it.
+	UPROPERTY(ReplicatedUsing = OnRep_Reloading, BlueprintReadOnly, Category = "Maze Demons|Ranged")
+	bool bReloading = false;
+
+	// Server clock at the start of the reload and its length, for the owner's progress bar.
+	UPROPERTY(Replicated)
+	float ReloadStartServerTime = 0.0f;
+
+	UPROPERTY(Replicated)
+	float ReloadDuration = 0.0f;
+
+	UFUNCTION()
+	void OnRep_Reloading();
+
 private:
+	void ApplyReloadTagLocally();
+	void ClearReloadState();
+	void UpdateAmmoCounter();
+
+	FTimerHandle ReloadTimer;
+	double NextReloadRequestTime = 0.0;
+	int32 ShotsSinceAmmoDrop = 0;
+	TMap<FName, int32> StashedMags;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMDAmmoCounterWidget> AmmoCounter;
+
 	// ---- R1 helpers ----
 	bool ComputeAimLocal(FVector& OutMuzzle, FVector& OutAimDir, float& OutAimDistance) const;
 	bool ComputeAimServer(const FVector& ClaimedOrigin, FVector& OutAimDir, float& OutAimDistance) const;
