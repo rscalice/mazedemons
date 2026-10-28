@@ -1,16 +1,20 @@
 #include "Ranged/MDAmmoCounterWidget.h"
 
 #include "Blueprint/WidgetTree.h"
-#include "Components/CanvasPanel.h"
-#include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
+#include "Components/SizeBox.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "MDGameplayStatics.h"
+#include "MDInventoryComponent.h"
 #include "MDUIWidgets.h"
 #include "Ranged/MDAmmoRules.h"
 #include "Ranged/MDRangedComponent.h"
+#include "Ranged/MDRangedWeaponData.h"
 
 bool UMDAmmoCounterWidget::Initialize()
 {
@@ -21,53 +25,95 @@ bool UMDAmmoCounterWidget::Initialize()
 	}
 	if (!WidgetTree->RootWidget)
 	{
-		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("Root"));
-		WidgetTree->RootWidget = Root;
-
 		UMDPanel* Panel = WidgetTree->ConstructWidget<UMDPanel>(UMDPanel::StaticClass(), TEXT("Panel"));
-		Panel->SetPadding(FMargin(14.0f, 8.0f));
-		if (UCanvasPanelSlot* PanelSlot = Root->AddChildToCanvas(Panel))
-		{
-			PanelSlot->SetAnchors(FAnchors(1.0f, 1.0f, 1.0f, 1.0f));
-			PanelSlot->SetAlignment(FVector2D(1.0f, 1.0f));
-			PanelSlot->SetPosition(FVector2D(-40.0f, -150.0f));
-			PanelSlot->SetAutoSize(true);
-		}
-
-		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("Column"));
-		Panel->SetContent(Column);
+		Panel->SetPadding(FMargin(10.0f, 6.0f));
+		WidgetTree->RootWidget = Panel;
 
 		UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("Row"));
-		Column->AddChildToVerticalBox(Row);
+		Panel->SetContent(Row);
+
+		USizeBox* IconBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("IconBox"));
+		IconBox->SetWidthOverride(40.0f);
+		IconBox->SetHeightOverride(40.0f);
+		if (UHorizontalBoxSlot* IconSlot = Row->AddChildToHorizontalBox(IconBox))
+		{
+			IconSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		WeaponIcon = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("WeaponIcon"));
+		WeaponIcon->SetVisibility(ESlateVisibility::Collapsed);
+		IconBox->AddChild(WeaponIcon);
+
+		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("Column"));
+		if (UHorizontalBoxSlot* ColumnSlot = Row->AddChildToHorizontalBox(Column))
+		{
+			ColumnSlot->SetPadding(FMargin(10.0f, 0.0f, 0.0f, 0.0f));
+			ColumnSlot->SetVerticalAlignment(VAlign_Center);
+		}
+
+		NumberRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("NumberRow"));
+		Column->AddChildToVerticalBox(NumberRow);
 
 		MagText = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), TEXT("MagText"));
 		MagText->SetTextStyle(EMDText::Numeric);
-		Row->AddChildToHorizontalBox(MagText);
+		NumberRow->AddChildToHorizontalBox(MagText);
 
-		UMDText* Slash = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), TEXT("Slash"));
-		Slash->SetTextStyle(EMDText::Body);
-		Slash->SetColorToken(EMDColor::TextSecondary);
-		Slash->SetText(FText::FromString(TEXT(" / ")));
-		Row->AddChildToHorizontalBox(Slash);
+		SlashText = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), TEXT("Slash"));
+		SlashText->SetTextStyle(EMDText::Body);
+		SlashText->SetColorToken(EMDColor::TextSecondary);
+		SlashText->SetText(FText::FromString(TEXT(" / ")));
+		NumberRow->AddChildToHorizontalBox(SlashText);
 
 		ReserveText = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), TEXT("ReserveText"));
 		ReserveText->SetTextStyle(EMDText::Body);
 		ReserveText->SetColorToken(EMDColor::TextSecondary);
-		Row->AddChildToHorizontalBox(ReserveText);
+		NumberRow->AddChildToHorizontalBox(ReserveText);
 
+		USizeBox* ReloadSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("ReloadSize"));
+		ReloadSize->SetHeightOverride(6.0f);
+		ReloadSize->SetMinDesiredWidth(96.0f);
+		if (UVerticalBoxSlot* ReloadSlot = Column->AddChildToVerticalBox(ReloadSize))
+		{
+			ReloadSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+		}
 		ReloadBar = WidgetTree->ConstructWidget<UMDResourceBar>(UMDResourceBar::StaticClass(), TEXT("ReloadBar"));
 		ReloadBar->SetFillToken(EMDColor::Accent);
-		ReloadBar->SetVisibility(ESlateVisibility::Collapsed);
-		Column->AddChildToVerticalBox(ReloadBar);
+		ReloadSize->AddChild(ReloadBar);
+		ReloadSize->SetVisibility(ESlateVisibility::Collapsed);
 
 		PromptText = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), TEXT("PromptText"));
 		PromptText->SetTextStyle(EMDText::Caption);
 		PromptText->SetColorToken(EMDColor::Danger);
 		PromptText->SetVisibility(ESlateVisibility::Collapsed);
 		Column->AddChildToVerticalBox(PromptText);
+
+		// The heat / charge meter: a thin vertical bar on the right, only for beam weapons.
+		HeatBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("HeatBox"));
+		HeatBox->SetWidthOverride(8.0f);
+		HeatBox->SetHeightOverride(40.0f);
+		if (UHorizontalBoxSlot* HeatSlot = Row->AddChildToHorizontalBox(HeatBox))
+		{
+			HeatSlot->SetPadding(FMargin(10.0f, 0.0f, 0.0f, 0.0f));
+			HeatSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		HeatBar = WidgetTree->ConstructWidget<UMDResourceBar>(UMDResourceBar::StaticClass(), TEXT("HeatBar"));
+		HeatBar->SetBarFillType(EProgressBarFillType::BottomToTop);
+		HeatBar->SetFillToken(EMDColor::Warning);
+		HeatBox->AddChild(HeatBar);
+		HeatBox->SetVisibility(ESlateVisibility::Collapsed);
 	}
-	SetVisibility(ESlateVisibility::HitTestInvisible);
+	// Starts hidden; the fade brings it in when the player swaps to a gun.
+	SetRenderOpacity(0.0f);
+	SetVisibility(ESlateVisibility::Hidden); // Hidden, not Collapsed: a collapsed widget stops ticking and could never fade back in
 	return bResult;
+}
+
+UMDRangedComponent* UMDAmmoCounterWidget::GetRanged() const
+{
+	if (UMDRangedComponent* Override = RangedOverride.Get())
+	{
+		return Override;
+	}
+	return UMDRangedComponent::Find(GetOwningPlayer());
 }
 
 FText UMDAmmoCounterWidget::GetMagText() const
@@ -82,36 +128,105 @@ FText UMDAmmoCounterWidget::GetReserveText() const
 
 void UMDAmmoCounterWidget::Refresh()
 {
-	const UMDRangedComponent* RangedComp = Ranged.Get();
-	if (!RangedComp || !MagText || !ReserveText || !PromptText || !ReloadBar)
+	if (!MagText || !ReserveText || !PromptText || !ReloadBar || !HeatBar || !HeatBox || !NumberRow)
 	{
 		return;
 	}
+	const UMDRangedComponent* RangedComp = GetRanged();
+	const bool bHasGun = RangedComp && RangedComp->HasGunEquipped();
+	TargetOpacity = FMDRangedUIRules::CounterTargetOpacity(RangedComp && RangedComp->IsRangedMode(), bHasGun);
+	if (!bHasGun)
+	{
+		IconRow = NAME_None;
+		Prompt = EMDAmmoPrompt::None;
+		HeatState = EMDHeatMeterState::Hidden;
+		HeatFraction = 0.0f;
+		return;
+	}
+
+	// ---- weapon icon (cached by row: the table lookup loads a texture) ----
+	const UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(GetOwningPlayer());
+	const FName GunRow = Inventory ? Inventory->GetEquippedRangedRow() : NAME_None;
+	if (GunRow != IconRow)
+	{
+		IconRow = GunRow;
+		UTexture2D* Icon = Inventory ? Inventory->GetItemIcon(GunRow) : nullptr;
+		if (WeaponIcon)
+		{
+			if (Icon)
+			{
+				WeaponIcon->SetBrushFromTexture(Icon, false);
+				WeaponIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			}
+			else
+			{
+				WeaponIcon->SetVisibility(ESlateVisibility::Collapsed);
+			}
+		}
+	}
+
+	const UMDRangedWeaponData* Data = RangedComp->GetEquippedWeaponData();
+	const bool bBeam = RangedComp->IsBeamWeapon();
+	const bool bUsesAmmo = Data && !Data->AmmoRow.IsNone() && !bBeam;
+	bAmmoSection = bUsesAmmo;
+
+	// ---- magazine / reserve ----
 	const int32 Mag = RangedComp->GetViewMagRounds();
 	const int32 MagSize = RangedComp->GetMagSize();
 	const int32 Reserve = RangedComp->GetReserveAmmo();
 	const bool bReloading = RangedComp->IsReloading();
-
+	NumberRow->SetVisibility(bUsesAmmo ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	MagText->SetText(FText::AsNumber(Mag));
 	ReserveText->SetText(FText::AsNumber(Reserve));
-
-	bMagRed = FMDAmmoRules::IsMagLow(Mag, MagSize);
+	bMagRed = bUsesAmmo && FMDAmmoRules::IsMagLow(Mag, MagSize);
 	MagText->SetColorToken(bMagRed ? EMDColor::Danger : EMDColor::TextPrimary);
 
-	// RELOAD pulses at an empty magazine that can actually be refilled; NO AMMO when the bag has nothing either.
-	bReloadPrompt = Mag <= 0 && !bReloading;
-	if (bReloading)
+	// ---- reload bar + prompt (RELOAD pulses at an empty magazine that can be refilled; NO AMMO when the bag is empty too) ----
+	UWidget* ReloadSize = ReloadBar->GetParent();
+	const bool bShowReloadBar = bUsesAmmo && bReloading;
+	if (bShowReloadBar)
 	{
 		ReloadBar->SetPercent(RangedComp->GetReloadProgress());
-		ReloadBar->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	if (ReloadSize)
+	{
+		ReloadSize->SetVisibility(bShowReloadBar ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+
+	Prompt = bUsesAmmo ? FMDRangedUIRules::AmmoPrompt(Mag, Reserve, bReloading) : EMDAmmoPrompt::None;
+
+	// ---- heat / charge meter (stub values until R5) ----
+	const bool bCharge = RangedComp->IsChargeStyleBeam();
+	const float Value = bCharge ? RangedComp->GetCharge() : RangedComp->GetHeat();
+	const float Max = bCharge ? RangedComp->GetMaxCharge() : RangedComp->GetMaxHeat();
+	HeatState = FMDRangedUIRules::HeatMeterState(bBeam, bCharge, Value, Max, RangedComp->IsOverheated());
+	HeatFraction = FMDRangedUIRules::MeterFraction(Value, Max);
+	if (HeatState == EMDHeatMeterState::Hidden)
+	{
+		HeatBox->SetVisibility(ESlateVisibility::Collapsed);
 	}
 	else
 	{
-		ReloadBar->SetVisibility(ESlateVisibility::Collapsed);
+		HeatBox->SetVisibility(ESlateVisibility::HitTestInvisible);
+		HeatBar->SetPercent(HeatState == EMDHeatMeterState::Overheated ? 1.0f : HeatFraction);
+		HeatBar->SetFillToken(FMDRangedUIRules::HeatMeterToken(HeatState));
 	}
-	if (bReloadPrompt)
+	if (HeatState == EMDHeatMeterState::Overheated)
 	{
-		PromptText->SetText(Reserve > 0 ? FText::FromString(TEXT("RELOAD")) : FText::FromString(TEXT("NO AMMO")));
+		PromptText->SetText(NSLOCTEXT("MDRangedHUD", "Overheat", "OVERHEAT"));
+	}
+
+	const bool bShowPrompt = Prompt != EMDAmmoPrompt::None || HeatState == EMDHeatMeterState::Overheated;
+	if (Prompt == EMDAmmoPrompt::Reload)
+	{
+		PromptText->SetText(NSLOCTEXT("MDRangedHUD", "Reload", "RELOAD"));
+	}
+	else if (Prompt == EMDAmmoPrompt::NoAmmo)
+	{
+		PromptText->SetText(NSLOCTEXT("MDRangedHUD", "NoAmmo", "NO AMMO"));
+	}
+	if (bShowPrompt)
+	{
 		PromptText->SetVisibility(ESlateVisibility::HitTestInvisible);
 		const UWorld* World = GetWorld();
 		const float Time = World ? World->GetRealTimeSeconds() : 0.0f;
@@ -123,8 +238,17 @@ void UMDAmmoCounterWidget::Refresh()
 	}
 }
 
+void UMDAmmoCounterWidget::TickFade(float DeltaSeconds)
+{
+	ShownOpacity = FMDRangedUIRules::StepOpacity(ShownOpacity, TargetOpacity, DeltaSeconds);
+	SetRenderOpacity(ShownOpacity);
+	const bool bVisible = ShownOpacity > KINDA_SMALL_NUMBER || TargetOpacity > 0.0f;
+	SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
+}
+
 void UMDAmmoCounterWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	Refresh();
+	TickFade(InDeltaTime);
 }

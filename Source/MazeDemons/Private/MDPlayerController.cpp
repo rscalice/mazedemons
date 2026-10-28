@@ -17,7 +17,6 @@
 #include "MDInteractAbility.h"
 #include "MDGameSettings.h"
 #include "MDStation.h"
-#include "MDStationAmmoPanel.h"
 #include "MDAttributeSet.h"
 #include "MDStaminaComponent.h"
 #include "Ranged/MDRangedComponent.h"
@@ -824,27 +823,13 @@ void AMDPlayerController::OpenStationLocal(AMDStation* Station)
 	OpenStation = Station;
 	bStationOpen = true;
 	GetWorldTimerManager().SetTimer(StationWatchTimer, this, &AMDPlayerController::WatchStation, 0.25f, true);
-	// R3: stations with the Ammo service get the ammo section beside the panel.
-	if (IsLocalController() && Station->Supports(EMDStationService::Ammo) && !StationAmmoPanel)
-	{
-		StationAmmoPanel = CreateWidget<UMDStationAmmoPanel>(this);
-		if (StationAmmoPanel)
-		{
-			StationAmmoPanel->SetStation(Station);
-			StationAmmoPanel->AddToViewport(60);
-		}
-	}
+	// R7: the Ammo service is a tab inside W_MDStationPanel now (UMDStationAmmoPanel reads GetOpenStation()).
 	OnStationOpened.Broadcast(Station);
 }
 
 void AMDPlayerController::CloseStation()
 {
 	GetWorldTimerManager().ClearTimer(StationWatchTimer);
-	if (StationAmmoPanel)
-	{
-		StationAmmoPanel->RemoveFromParent();
-		StationAmmoPanel = nullptr;
-	}
 	OpenStation.Reset();
 	if (bStationOpen)
 	{

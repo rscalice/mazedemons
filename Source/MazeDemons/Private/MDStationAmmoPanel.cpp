@@ -1,14 +1,13 @@
 #include "MDStationAmmoPanel.h"
 
 #include "Blueprint/WidgetTree.h"
-#include "Components/CanvasPanel.h"
-#include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "MDPlayerController.h"
 #include "MDStation.h"
 #include "MDUIWidgets.h"
 
@@ -23,6 +22,39 @@ TArray<FName> UMDStationAmmoPanel::GetSoldRows()
 	return { MDStationAmmoPanelLocal::RowLight, MDStationAmmoPanelLocal::RowHeavy };
 }
 
+int32 UMDStationAmmoPanel::NextEnabledTab(int32 Current, int32 Delta, bool bRepair, bool bUpgrade, bool bRespec, bool bAmmo)
+{
+	const bool Enabled[NumTabs] = { bRepair, bUpgrade, bRespec, bAmmo };
+	const int32 Step = Delta >= 0 ? 1 : -1;
+	const int32 Start = FMath::Clamp(Current, 0, NumTabs - 1);
+	for (int32 i = 1; i < NumTabs; ++i)
+	{
+		const int32 Candidate = ((Start + Step * i) % NumTabs + NumTabs) % NumTabs;
+		if (Enabled[Candidate])
+		{
+			return Candidate;
+		}
+	}
+	return Start;
+}
+
+int32 UMDStationAmmoPanel::PickDefaultTab(bool bRepair, bool bUpgrade, bool bRespec, bool bAmmo)
+{
+	if (bRepair)
+	{
+		return RepairTab;
+	}
+	if (bUpgrade)
+	{
+		return UpgradeTab;
+	}
+	if (bRespec)
+	{
+		return RespecTab;
+	}
+	return bAmmo ? AmmoTab : RepairTab;
+}
+
 bool UMDStationAmmoPanel::Initialize()
 {
 	const bool bResult = Super::Initialize();
@@ -35,26 +67,22 @@ bool UMDStationAmmoPanel::Initialize()
 		return bResult;
 	}
 
-	UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("Root"));
-	WidgetTree->RootWidget = Root;
-
-	UMDPanel* Panel = WidgetTree->ConstructWidget<UMDPanel>(UMDPanel::StaticClass(), TEXT("Panel"));
-	Panel->SetPadding(FMargin(16.0f, 12.0f));
-	if (UCanvasPanelSlot* PanelSlot = Root->AddChildToCanvas(Panel))
-	{
-		PanelSlot->SetAnchors(FAnchors(1.0f, 0.5f, 1.0f, 0.5f));
-		PanelSlot->SetAlignment(FVector2D(1.0f, 0.5f));
-		PanelSlot->SetPosition(FVector2D(-32.0f, 0.0f));
-		PanelSlot->SetAutoSize(true);
-	}
-
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("Column"));
-	Panel->SetContent(Column);
+	WidgetTree->RootWidget = Column;
 
 	UMDText* Title = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), TEXT("Title"));
-	Title->SetTextStyle(EMDText::Display);
+	Title->SetTextStyle(EMDText::H2);
 	Title->SetText(NSLOCTEXT("MDStation", "AmmoTitle", "Ammo"));
 	Column->AddChildToVerticalBox(Title);
+
+	UMDText* Explain = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), TEXT("Explain"));
+	Explain->SetTextStyle(EMDText::Body);
+	Explain->SetColorToken(EMDColor::TextSecondary);
+	Explain->SetText(NSLOCTEXT("MDStation", "AmmoExplain", "Bundles of 10 rounds. You can carry one full stack."));
+	if (UVerticalBoxSlot* ExplainSlot = Column->AddChildToVerticalBox(Explain))
+	{
+		ExplainSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 8.0f));
+	}
 
 	for (const FName AmmoRow : GetSoldRows())
 	{
@@ -65,7 +93,7 @@ bool UMDStationAmmoPanel::Initialize()
 		UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), *(TEXT("Line_") + Suffix));
 		if (UVerticalBoxSlot* LineSlot = Column->AddChildToVerticalBox(Line))
 		{
-			LineSlot->SetPadding(FMargin(0.0f, 10.0f, 0.0f, 0.0f));
+			LineSlot->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
 		}
 
 		Entry.Label = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), *(TEXT("Label_") + Suffix));
@@ -81,7 +109,7 @@ bool UMDStationAmmoPanel::Initialize()
 		Entry.Button->ButtonKind = EMDButton::Primary;
 		Entry.ButtonLabel = WidgetTree->ConstructWidget<UMDText>(UMDText::StaticClass(), *(TEXT("BuyLabel_") + Suffix));
 		Entry.ButtonLabel->SetTextStyle(EMDText::Body);
-		Entry.Button->SetContent(Entry.ButtonLabel);
+		Entry.Button->AddChild(Entry.ButtonLabel);
 		if (AmmoRow == MDStationAmmoPanelLocal::RowLight)
 		{
 			Entry.Button->OnClicked.AddDynamic(this, &UMDStationAmmoPanel::OnBuyLight);
@@ -103,6 +131,21 @@ bool UMDStationAmmoPanel::Initialize()
 	return bResult;
 }
 
+void UMDStationAmmoPanel::SetStation(AMDStation* InStation)
+{
+	StationOverride = InStation;
+}
+
+AMDStation* UMDStationAmmoPanel::GetStation() const
+{
+	if (AMDStation* Override = StationOverride.Get())
+	{
+		return Override;
+	}
+	const AMDPlayerController* PC = Cast<AMDPlayerController>(GetOwningPlayer());
+	return PC ? PC->GetOpenStation() : nullptr;
+}
+
 void UMDStationAmmoPanel::OnBuyLight()
 {
 	BuyRow(MDStationAmmoPanelLocal::RowLight);
@@ -116,17 +159,22 @@ void UMDStationAmmoPanel::OnBuyHeavy()
 void UMDStationAmmoPanel::BuyRow(FName AmmoRow)
 {
 	UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(GetOwningPlayer());
-	AMDStation* OpenStation = Station.Get();
+	AMDStation* OpenStation = GetStation();
 	if (Inventory && OpenStation)
 	{
 		Inventory->RequestBuyAmmo(OpenStation, AmmoRow);
 	}
 }
 
+bool UMDStationAmmoPanel::IsRowBuyEnabled(int32 Index) const
+{
+	return Rows.IsValidIndex(Index) && Rows[Index].Button && Rows[Index].Button->GetIsEnabled();
+}
+
 void UMDStationAmmoPanel::Refresh()
 {
 	const UMDInventoryComponent* Inventory = UMDGameplayStatics::GetInventory(GetOwningPlayer());
-	const AMDStation* OpenStation = Station.Get();
+	const AMDStation* OpenStation = GetStation();
 	if (!Inventory || !OpenStation)
 	{
 		return;
@@ -162,6 +210,59 @@ void UMDStationAmmoPanel::Refresh()
 			Entry.Reason->SetText(UMDInventoryComponent::GetStationRejectText(Verdict, Gold, Inventory->GetGold()));
 			Entry.Reason->SetVisibility(ESlateVisibility::HitTestInvisible);
 		}
+	}
+}
+
+void UMDStationAmmoPanel::UpdateTabState(int32 CurrentTab, UMDButton* TabButton, UMDText* TabLabel, UWidget* ListPanel)
+{
+	const AMDStation* OpenStation = GetStation();
+	const bool bOffered = OpenStation && OpenStation->Supports(EMDStationService::Ammo);
+	const bool bActive = CurrentTab == AmmoTab;
+	if (TabButton)
+	{
+		TabButton->SetIsEnabled(bOffered);
+	}
+	if (TabLabel)
+	{
+		TabLabel->SetColorToken(bActive ? EMDColor::TextPrimary : EMDColor::TextSecondary);
+	}
+	SetVisibility(bActive ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+	if (bActive && ListPanel)
+	{
+		ListPanel->SetVisibility(ESlateVisibility::Collapsed); // the Ammo tab has no item list, like Respec
+	}
+	if (bActive && !bWasActive)
+	{
+		SelectedRow = 0;
+		Refresh();
+		FocusSelectedRow();
+	}
+	bWasActive = bActive;
+}
+
+void UMDStationAmmoPanel::FocusSelectedRow()
+{
+	if (Rows.IsValidIndex(SelectedRow) && Rows[SelectedRow].Button)
+	{
+		Rows[SelectedRow].Button->SetKeyboardFocus();
+	}
+}
+
+void UMDStationAmmoPanel::MoveFocus(int32 Delta)
+{
+	if (Rows.Num() == 0)
+	{
+		return;
+	}
+	SelectedRow = FMath::Clamp(SelectedRow + Delta, 0, Rows.Num() - 1);
+	FocusSelectedRow();
+}
+
+void UMDStationAmmoPanel::ConfirmSelected()
+{
+	if (IsRowBuyEnabled(SelectedRow))
+	{
+		BuyRow(Rows[SelectedRow].AmmoRow);
 	}
 }
 

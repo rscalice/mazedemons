@@ -157,6 +157,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	UMDRangedWeaponData* GetItemRangedData(FName ItemRowName) const;
 
+	// R7: the Icon column of a DT_Items row (loads it; null when the row, column or texture is missing).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	UTexture2D* GetItemIcon(FName ItemRowName) const;
+
 	// R0: row name of the item equipped in the Ranged slot (NAME_None when empty) and its data asset (null when empty).
 	FName GetEquippedRangedRow() const;
 	UMDRangedWeaponData* GetEquippedRangedData() const;

@@ -210,6 +210,36 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
 	bool IsAutoReloadEnabled() const;
 
+	// ================= R7 HUD bindings =================
+	// Beam weapons (R5): the HUD heat / charge meter reads these. STUBS until R5: every getter returns 0 / false, so the meter stays
+	// empty. R5 only has to return the real attribute values (Heat / MaxHeat on the player ASC, Charge / MaxCharge for staves).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetHeat() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetMaxHeat() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetCharge() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetMaxCharge() const;
+
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	bool IsOverheated() const;
+
+	// The equipped gun is a beam weapon (data driven; true for the Duskray / Ember rows once R5 gives them a Beam fire mode).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	bool IsBeamWeapon() const;
+
+	// A beam weapon that drains a charge (staff) rather than building heat.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	bool IsChargeStyleBeam() const;
+
+	// Owner -> server: the player's auto-reload option (the server decides when to reload). Replicated so everyone agrees.
+	UFUNCTION(Server, Reliable)
+	void Server_SetAutoReload(bool bAuto);
+
 	// Owner machine: R / D-pad Down. Activates the LocalPredicted UMDReloadAbility when the ASC has it, else asks the server directly.
 	bool TryActivateReload();
 
@@ -282,18 +312,19 @@ protected:
 	UFUNCTION()
 	void OnRep_Reloading();
 
+	// The owner's auto-reload option (default on). IsAutoReloadEnabled() = cvar && this.
+	UPROPERTY(Replicated)
+	bool bAutoReloadPref = true;
+
 private:
+	void SyncAutoReloadPref();
 	void ApplyReloadTagLocally();
 	void ClearReloadState();
-	void UpdateAmmoCounter();
 
 	FTimerHandle ReloadTimer;
 	double NextReloadRequestTime = 0.0;
 	int32 ShotsSinceAmmoDrop = 0;
 	TMap<FName, int32> StashedMags;
-
-	UPROPERTY(Transient)
-	TObjectPtr<class UMDAmmoCounterWidget> AmmoCounter;
 
 	// ---- R1 helpers ----
 	bool ComputeAimLocal(FVector& OutMuzzle, FVector& OutAimDir, float& OutAimDistance) const;

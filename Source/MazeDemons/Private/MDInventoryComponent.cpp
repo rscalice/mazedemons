@@ -643,6 +643,30 @@ UMDRangedWeaponData* UMDInventoryComponent::GetItemRangedData(FName ItemRowName)
 	return Stats ? Stats->RangedData.LoadSynchronous() : nullptr;
 }
 
+UTexture2D* UMDInventoryComponent::GetItemIcon(FName ItemRowName) const
+{
+	if (!ItemTable || ItemRowName.IsNone())
+	{
+		return nullptr;
+	}
+	const uint8* RowData = ItemTable->FindRowUnchecked(ItemRowName);
+	const FProperty* Prop = FindRowProperty(ItemTable->GetRowStruct(), TEXT("Icon"));
+	if (!RowData || !Prop)
+	{
+		return nullptr;
+	}
+	const void* Ptr = Prop->ContainerPtrToValuePtr<void>(RowData);
+	if (const FSoftObjectProperty* Soft = CastField<FSoftObjectProperty>(Prop))
+	{
+		return Cast<UTexture2D>(Soft->GetPropertyValue(Ptr).LoadSynchronous());
+	}
+	if (const FObjectPropertyBase* Obj = CastField<FObjectPropertyBase>(Prop))
+	{
+		return Cast<UTexture2D>(Obj->GetObjectPropertyValue(Ptr));
+	}
+	return nullptr;
+}
+
 FName UMDInventoryComponent::GetEquippedRangedRow() const
 {
 	const FMDEquippedSlot* Entry = FindEquippedSlot(MDItemType::RangedSlot);

@@ -30,7 +30,7 @@
 #include "NiagaraSystem.h"
 #include "Ranged/MDProjectile.h"
 #include "Ranged/MDRangedFX.h"
-#include "Ranged/MDAmmoCounterWidget.h"
+#include "MDUISettings.h"
 #include "Ranged/MDReloadAbility.h"
 #include "Ranged/MDRangedFireAbility.h"
 #include "Ranged/MDRangedReticleWidget.h"
@@ -69,6 +69,7 @@ void UMDRangedComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(UMDRangedComponent, bReloading);
 	DOREPLIFETIME(UMDRangedComponent, ReloadStartServerTime);
 	DOREPLIFETIME(UMDRangedComponent, ReloadDuration);
+	DOREPLIFETIME(UMDRangedComponent, bAutoReloadPref);
 }
 
 UMDRangedComponent* UMDRangedComponent::Find(const AActor* Actor)
@@ -142,11 +143,6 @@ void UMDRangedComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		Reticle->RemoveFromParent();
 		Reticle = nullptr;
-	}
-	if (AmmoCounter)
-	{
-		AmmoCounter->RemoveFromParent();
-		AmmoCounter = nullptr;
 	}
 	if (const UWorld* World = GetWorld())
 	{
@@ -255,7 +251,6 @@ void UMDRangedComponent::ApplyModeLocally()
 	SetMeleeWeaponsHidden(bRangedMode);
 	RefreshWeaponMesh();
 	UpdateReticle();
-	UpdateAmmoCounter();
 	if (!bRangedMode)
 	{
 		bFireHeld = false;
@@ -994,6 +989,7 @@ void UMDRangedComponent::UpdateReticle()
 	{
 		return;
 	}
+	SyncAutoReloadPref();
 	const bool bWant = bRangedMode && IsOwnerLocal() && GetEquippedWeaponData() != nullptr;
 	if (bWant && !Reticle)
 	{
@@ -1128,9 +1124,53 @@ int32 UMDRangedComponent::GetMagSize() const
 	return Data ? Data->MagSize : 0;
 }
 
+float UMDRangedComponent::GetHeat() const { return 0.0f; }
+float UMDRangedComponent::GetMaxHeat() const { return 0.0f; }
+float UMDRangedComponent::GetCharge() const { return 0.0f; }
+float UMDRangedComponent::GetMaxCharge() const { return 0.0f; }
+bool UMDRangedComponent::IsOverheated() const { return false; }
+
+bool UMDRangedComponent::IsBeamWeapon() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	return Data && (Data->HitModel == EMDRangedHitModel::Beam || Data->FireMode == EMDFireMode::Beam);
+}
+
+bool UMDRangedComponent::IsChargeStyleBeam() const
+{
+	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
+	return IsBeamWeapon() && Data->Beam.ChargeDrainPerSecond > 0.0f;
+}
+
+void UMDRangedComponent::SyncAutoReloadPref()
+{
+	if (!IsOwnerLocal())
+	{
+		return;
+	}
+	const bool bWanted = GetDefault<UMDLocalSettings>()->bAutoReload;
+	if (bWanted == bAutoReloadPref)
+	{
+		return;
+	}
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		bAutoReloadPref = bWanted;
+	}
+	else
+	{
+		Server_SetAutoReload(bWanted);
+	}
+}
+
+void UMDRangedComponent::Server_SetAutoReload_Implementation(bool bAuto)
+{
+	bAutoReloadPref = bAuto;
+}
+
 bool UMDRangedComponent::IsAutoReloadEnabled() const
 {
-	return MDRangedComponentLocal::CVarAutoReload.GetValueOnGameThread() != 0;
+	return MDRangedComponentLocal::CVarAutoReload.GetValueOnGameThread() != 0 && bAutoReloadPref;
 }
 
 float UMDRangedComponent::GetReloadProgress() const
@@ -1219,7 +1259,6 @@ EMDReloadReject UMDRangedComponent::BeginReloadServer()
 	ReloadDuration = FMath::Max(0.05f, Data->ReloadSeconds * MDRangedComponentLocal::CVarReloadScale.GetValueOnGameThread());
 	World->GetTimerManager().SetTimer(ReloadTimer, FTimerDelegate::CreateWeakLambda(this, [this]() { CompleteReload(); }), ReloadDuration, false);
 	ApplyReloadTagLocally();
-	UpdateAmmoCounter();
 	SetComponentTickEnabled(true); // the tick watches for a stagger or death while the reload runs
 	GetOwner()->ForceNetUpdate();
 	return EMDReloadReject::None;
@@ -1271,13 +1310,11 @@ void UMDRangedComponent::ClearReloadState()
 		World->GetTimerManager().ClearTimer(ReloadTimer);
 	}
 	ApplyReloadTagLocally();
-	UpdateAmmoCounter();
 }
 
 void UMDRangedComponent::OnRep_Reloading()
 {
 	ApplyReloadTagLocally();
-	UpdateAmmoCounter();
 }
 
 void UMDRangedComponent::ApplyReloadTagLocally()
@@ -1296,30 +1333,4 @@ void UMDRangedComponent::ApplyReloadTagLocally()
 	}
 }
 
-void UMDRangedComponent::UpdateAmmoCounter()
-{
-	UWorld* World = GetWorld();
-	if (!World || World->GetNetMode() == NM_DedicatedServer)
-	{
-		return;
-	}
-	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
-	const bool bWant = bRangedMode && IsOwnerLocal() && Data != nullptr && !Data->AmmoRow.IsNone();
-	if (bWant && !AmmoCounter)
-	{
-		if (APlayerController* PC = GetOwnerController())
-		{
-			AmmoCounter = CreateWidget<UMDAmmoCounterWidget>(PC);
-			if (AmmoCounter)
-			{
-				AmmoCounter->SetRanged(this);
-				AmmoCounter->AddToViewport(40);
-			}
-		}
-	}
-	else if (!bWant && AmmoCounter)
-	{
-		AmmoCounter->RemoveFromParent();
-		AmmoCounter = nullptr;
-	}
-}
+

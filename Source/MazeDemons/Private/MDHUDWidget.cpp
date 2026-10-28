@@ -11,6 +11,7 @@
 #include "MDPlayerController.h"
 #include "MDPlayerState.h"
 #include "MDStaminaComponent.h"
+#include "Ranged/MDHUDOptions.h"
 
 #include "GameFramework/GameStateBase.h"
 #include "Engine/World.h"
@@ -23,6 +24,7 @@ float UMDHUDWidget::SafePercent(float Value, float Max)
 void UMDHUDWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	UMDHUDOptions::ApplySavedOptions(); // R7: pushes the saved off-screen threat toggle into md.UI.OffscreenThreat
 	TryBind();
 }
 

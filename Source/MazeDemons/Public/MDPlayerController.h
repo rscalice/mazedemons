@@ -458,9 +458,6 @@ private:
 	void WatchStation();
 	TWeakObjectPtr<AMDStation> OpenStation;
 
-	// R3: the ammo section shown beside the station panel while a station with the Ammo service is open (local only).
-	UPROPERTY(Transient)
-	TObjectPtr<class UMDStationAmmoPanel> StationAmmoPanel;
 	bool bStationOpen = false;
 	FTimerHandle StationWatchTimer;
 
