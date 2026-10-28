@@ -294,7 +294,10 @@ def make_modifier(state):
             for n in names:
                 try: obj.set_editor_property(n, val); break
                 except Exception: continue
-        try: obj.set_editor_property("rotation_type", unreal.MotionWarpRotationType.FACING)
+        # DEFAULT: turn to the warp target's rotation, which the attack component sets to the facing yaw at swing start.
+        # FACING recomputes a yaw from the attacker's own position every tick and degenerates (any flip) once the skew warp
+        # has put the capsule on the warp point. (ghoulwarp.py re-applies this to the existing montages.)
+        try: obj.set_editor_property("rotation_type", unreal.MotionWarpRotationType.DEFAULT)
         except Exception: pass
         state.set_editor_property(prop, obj)
         return prop

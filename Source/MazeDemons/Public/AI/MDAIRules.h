@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Animation/AnimInstance.h" // ERootMotionMode
+#include "Engine/EngineTypes.h"      // ENetRole
 #include "GameplayTagContainer.h"
 #include "AI/MDAITypes.h"
 
@@ -117,10 +119,27 @@ namespace MDBrainScheduling
 // The StateTree event tag (AI.Intent.<X>) for an intent the executor knows; an empty tag for the rest.
 MAZEDEMONS_API FGameplayTag MDIntentToTag(EMDIntent Intent);
 
-// Enemy attack timing rules (shared by the attack component and tests).
+// Enemy attack timing and networking rules (shared by the attack component, the enemy anim instance and tests).
 namespace MDEnemyAttackRules
 {
 	// Montage play rate during the wind-up so the first trace window starts TellTime after the montage started:
 	// rate = TraceWindowStart / TellTime, clamped to [MinRate, 1]. Rate 1 when there is no window or no tell.
 	MAZEDEMONS_API float WindupRate(float TraceWindowStart, float TellTime, float MinRate = 0.25f);
+
+	// Who moves the attacker during a swing. Only the authority (listen server, dedicated server, standalone) applies the
+	// montage root motion and the motion warp; the capsule then replicates through the movement component like any other
+	// movement. A simulated proxy plays the same montage cosmetically and must NOT extract root motion or warp on its own:
+	// a proxy that does fights the replicated movement with its own (differently warped) root motion, so the client sees
+	// snaps, teleports at the end of the montage and, when the warp runs with a stale or coincident target, flips.
+	MAZEDEMONS_API bool OwnsAttackMovement(ENetRole LocalRole);
+
+	// The anim instance root-motion mode for a machine with LocalRole: montages drive the authority, proxies ignore root
+	// motion (the root stays locked, so the pose plays in place on the replicated capsule).
+	MAZEDEMONS_API ERootMotionMode::Type RootMotionModeFor(ENetRole LocalRole);
+
+	// The actor rotation of an attacker facing TargetYaw: the capsule stays vertical whatever its current pitch/roll.
+	MAZEDEMONS_API FRotator FacingRotation(float TargetYaw);
+
+	// True when a rotation has drifted off vertical by more than ToleranceDegrees (a capsule should never pitch or roll).
+	MAZEDEMONS_API bool IsTilted(const FRotator& Rotation, float ToleranceDegrees = 1.0f);
 }

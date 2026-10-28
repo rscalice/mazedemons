@@ -12,9 +12,23 @@
 #include "GameFramework/Character.h"
 #include "MotionWarpingComponent.h"
 
+// "log LogMDEnemyAttack Verbose" prints each machine's playback (role, rate, warp) for 2P checks.
+DEFINE_LOG_CATEGORY_STATIC(LogMDEnemyAttack, Log, All);
+
 namespace MDEnemyAttackLocal
 {
 	const FName WarpTargetName(TEXT("AttackTarget"));
+
+	const TCHAR* RoleName(ENetRole Role)
+	{
+		switch (Role)
+		{
+		case ROLE_Authority: return TEXT("Authority");
+		case ROLE_AutonomousProxy: return TEXT("AutonomousProxy");
+		case ROLE_SimulatedProxy: return TEXT("SimulatedProxy");
+		default: return TEXT("None");
+		}
+	}
 }
 
 UMDEnemyAttackComponent::UMDEnemyAttackComponent()
@@ -144,9 +158,21 @@ void UMDEnemyAttackComponent::PlayLocal(const FMDEnemyAttack& Attack, float Wind
 		return;
 	}
 
-	ApplyWarp(Attack, Target); // before the montage so its first root-motion frame is already warped (as C1 does)
+	// Only the authority moves the attacker (MDEnemyAttackRules::OwnsAttackMovement): it faces the target and sets the warp
+	// before the montage so its first root-motion frame is already warped (as C1 does). A simulated proxy plays the montage
+	// in place (its anim instance ignores root motion) on a capsule driven by the replicated movement, so it neither warps
+	// nor turns here; its facing and travel arrive from the server.
+	const bool bOwnsMovement = MDEnemyAttackRules::OwnsAttackMovement(Owner->GetLocalRole());
+	if (bOwnsMovement)
+	{
+		ApplyWarp(Attack, Target);
+	}
 
 	const float Length = Anim->Montage_Play(Attack.Montage, FMath::Clamp(WindupRate, 0.05f, 1.0f) * FMath::Max(Attack.Step.PlayRate, 0.1f));
+	UE_LOG(LogMDEnemyAttack, Verbose, TEXT("%s [%s] plays %s at rate %.2f on %s: %s, root motion mode %d, rotation %s"), *Owner->GetName(),
+		MDEnemyAttackLocal::RoleName(Owner->GetLocalRole()), *Attack.Name.ToString(), WindupRate, *GetNameSafe(Target),
+		bOwnsMovement ? (Target ? TEXT("faces + warps") : TEXT("moves, no warp")) : TEXT("cosmetic (no root motion, no warp)"),
+		static_cast<int32>(Anim->RootMotionMode.GetValue()), *Owner->GetActorRotation().ToCompactString());
 	if (Length <= 0.0f)
 	{
 		if (Owner->HasAuthority())
@@ -176,12 +202,10 @@ void UMDEnemyAttackComponent::ApplyWarp(const FMDEnemyAttack& Attack, AActor* Ta
 		Target = nullptr;
 	}
 
-	// Face the target (or keep the current facing) at swing start.
+	// Face the target (or keep the current facing) at swing start, upright: the capsule must never carry a pitch or roll.
 	if (Target)
 	{
-		FRotator Rotation = Character->GetActorRotation();
-		Rotation.Yaw = MDWarpTargeting::YawDegrees(Target->GetActorLocation() - Origin);
-		Character->SetActorRotation(Rotation);
+		Character->SetActorRotation(MDEnemyAttackRules::FacingRotation(MDWarpTargeting::YawDegrees(Target->GetActorLocation() - Origin)));
 	}
 
 	UMotionWarpingComponent* Warping = Character->FindComponentByClass<UMotionWarpingComponent>();
@@ -190,7 +214,9 @@ void UMDEnemyAttackComponent::ApplyWarp(const FMDEnemyAttack& Attack, AActor* Ta
 		const UCapsuleComponent* Capsule = Target->FindComponentByClass<UCapsuleComponent>();
 		const float Radius = Capsule ? Capsule->GetScaledCapsuleRadius() : 0.0f;
 		const FVector Point = MDWarpTargeting::ComputeWarpPoint(Origin, Target->GetActorLocation(), Radius, Attack.Step.WarpStopDistance);
-		Warping->AddOrUpdateWarpTargetFromLocationAndRotation(MDEnemyAttackLocal::WarpTargetName, Point, FRotator(0.0, Character->GetActorRotation().Yaw, 0.0));
+		// The warp target's rotation is the facing just set; the montage's SkewWarp windows use it as their rotation target
+		// (RotationType Default), so the ghoul turns to this fixed yaw and never computes a facing from its own position.
+		Warping->AddOrUpdateWarpTargetFromLocationAndRotation(MDEnemyAttackLocal::WarpTargetName, Point, MDEnemyAttackRules::FacingRotation(Character->GetActorRotation().Yaw));
 		Character->SetAnimRootMotionTranslationScale(1.0f);
 	}
 	else
@@ -217,6 +243,14 @@ void UMDEnemyAttackComponent::ClearWarp()
 		if (UMotionWarpingComponent* Warping = Character->FindComponentByClass<UMotionWarpingComponent>())
 		{
 			Warping->RemoveWarpTarget(MDEnemyAttackLocal::WarpTargetName);
+		}
+		// Safety net: root motion rotation is applied to the capsule in full 3D, and nothing in the movement component
+		// re-rights a tilted capsule (RotationRate has no pitch/roll). A swing must leave the attacker upright.
+		const FRotator Rotation = Character->GetActorRotation();
+		if (MDEnemyAttackRules::IsTilted(Rotation))
+		{
+			UE_LOG(LogMDEnemyAttack, Warning, TEXT("%s ended an attack tilted (%s); re-righted"), *Character->GetName(), *Rotation.ToCompactString());
+			Character->SetActorRotation(MDEnemyAttackRules::FacingRotation(Rotation.Yaw));
 		}
 	}
 }

@@ -22,8 +22,11 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FMDEnemyAttackEndedNative, bool /*bInterrupt
 
 // Plays one FMDEnemyAttack of the owner's archetype (v1-design 2.3 "Attack execution"), the C1 way for enemies:
 //   - the server plays the montage and multicasts it (clients play the same montage at the same wind-up rate);
-//   - the attacker faces the target and motion-warps toward it ("AttackTarget", within the step's WarpRange / WarpStopDistance),
-//     exactly as the player's combo steps do, so a target that slides out of reach is missed honestly;
+//   - the server alone moves the attacker (MDEnemyAttackRules::OwnsAttackMovement): it faces the target and motion-warps
+//     toward it ("AttackTarget", within the step's WarpRange / WarpStopDistance), exactly as the player's combo steps do,
+//     so a target that slides out of reach is missed honestly; the capsule replicates through the movement component.
+//     A simulated proxy plays the montage in place (UMDEnemyAnimInstance puts it in IgnoreRootMotion) and never warps,
+//     so it cannot fight the replicated movement with its own root motion;
 //   - the wind-up is readable: the montage runs at WindupRate until its first MD Weapon Trace window so that window starts
 //     TellTime after the swing began (tier-scaled by the brain); the trace notify restores rate 1 on every machine;
 //   - the trace window sweeps the archetype's claw sockets through UMDCombatStatics (hit once per window, debug draw,
@@ -83,7 +86,7 @@ private:
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_StopAttack();
 
-	// Local playback on this machine (server and clients): warp, face, montage at WindupRate.
+	// Local playback on this machine: montage at WindupRate on every machine; face + warp on the authority only.
 	void PlayLocal(const FMDEnemyAttack& Attack, float WindupRate, AActor* Target);
 	void ApplyWarp(const FMDEnemyAttack& Attack, AActor* Target);
 	void ClearWarp();

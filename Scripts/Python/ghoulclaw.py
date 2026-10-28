@@ -154,16 +154,31 @@ def author(name, dist, t0, t1, fwd, ref_lock):
     # Always rebuild from the clean source so the script is idempotent.
     src = unreal.load_asset(ANIM_DIR + "/A_Ghoul_Claw")
     pos, rot, sca = [], [], []
+    ppos, prot, psca = [], [], []
+    max_root_rot = 0.0
     for i in range(nkeys):
         t = min(i / fps, src.get_play_length())
-        xf = E.get_bone_pose(E.get_anim_pose_at_time(src, t, opts), 'root', unreal.AnimPoseSpaces.LOCAL)
+        pose = E.get_anim_pose_at_time(src, t, opts)
+        xf = E.get_bone_pose(pose, 'root', unreal.AnimPoseSpaces.LOCAL)
+        pel = E.get_bone_pose(pose, 'pelvis', unreal.AnimPoseSpaces.LOCAL)
         u = max(0.0, min(1.0, (t - t0) / (t1 - t0)))
         d = dist * u * u * (3.0 - 2.0 * u)
         p = xf.translation
         pos.append(unreal.Vector(p.x + fwd.x * d, p.y + fwd.y * d, p.z))
-        rot.append(xf.rotation); sca.append(xf.scale3d)
+        # The retarget leaves the werewolf's root ROTATION on the mannequin root (a roll of up to -32 degrees during the
+        # strike, the pelvis counter-rotated so the pose reads right). With root motion enabled that rotation would turn
+        # the capsule (mesh roll = actor pitch: a ghoul diving nose-first, and worse once the warp and a client proxy
+        # compound it). Fold it into the pelvis instead: pelvis_local' = pelvis_local * root_rot keeps the same pose with
+        # an identity root, so the only root motion left is the forward dash.
+        root_rot = unreal.Transform(unreal.Vector(0, 0, 0), xf.rotation.rotator(), unreal.Vector(1, 1, 1))
+        folded = unreal.MathLibrary.compose_transforms(pel, root_rot)
+        ppos.append(folded.translation); prot.append(folded.rotation); psca.append(folded.scale3d)
+        max_root_rot = max(max_root_rot, abs(xf.rotation.rotator().pitch), abs(xf.rotation.rotator().yaw), abs(xf.rotation.rotator().roll))
+        rot.append(unreal.Quat(0.0, 0.0, 0.0, 1.0)); sca.append(xf.scale3d)
+    P("  source root rotation folded into the pelvis: max %.1f deg" % max_root_rot)
     ctl = a.controller
     ctl.open_bracket(unreal.Text("Bake ghoul attack root motion"), True)
+    ctl.set_bone_track_keys('pelvis', ppos, prot, psca, True)
     ctl.set_bone_track_keys('root', pos, rot, sca, True)
     ctl.close_bracket(True)
     a.set_editor_property('enable_root_motion', True)

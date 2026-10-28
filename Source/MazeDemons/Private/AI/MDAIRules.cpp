@@ -405,3 +405,25 @@ float MDEnemyAttackRules::WindupRate(float TraceWindowStart, float TellTime, flo
 	}
 	return FMath::Clamp(TraceWindowStart / TellTime, FMath::Clamp(MinRate, 0.05f, 1.0f), 1.0f);
 }
+
+bool MDEnemyAttackRules::OwnsAttackMovement(ENetRole LocalRole)
+{
+	// Enemies are server-owned pawns: the authority is the only machine whose movement component may consume root motion.
+	// (An autonomous proxy would predict its own; enemies never are one.)
+	return LocalRole == ROLE_Authority;
+}
+
+ERootMotionMode::Type MDEnemyAttackRules::RootMotionModeFor(ENetRole LocalRole)
+{
+	return OwnsAttackMovement(LocalRole) ? ERootMotionMode::RootMotionFromMontagesOnly : ERootMotionMode::IgnoreRootMotion;
+}
+
+FRotator MDEnemyAttackRules::FacingRotation(float TargetYaw)
+{
+	return FRotator(0.0, FRotator::NormalizeAxis(TargetYaw), 0.0);
+}
+
+bool MDEnemyAttackRules::IsTilted(const FRotator& Rotation, float ToleranceDegrees)
+{
+	return FMath::Abs(FRotator::NormalizeAxis(Rotation.Pitch)) > ToleranceDegrees || FMath::Abs(FRotator::NormalizeAxis(Rotation.Roll)) > ToleranceDegrees;
+}
