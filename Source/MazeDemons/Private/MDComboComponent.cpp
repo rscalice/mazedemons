@@ -1,5 +1,6 @@
 #include "MDComboComponent.h"
 
+#include "AI/MDPerceptionRules.h"
 #include "MDAfterImageComponent.h"
 #include "MDComboSet.h"
 #include "MDGameplayStatics.h"
@@ -463,6 +464,7 @@ void UMDComboComponent::StartStep(EMDAttackKind Kind, int32 Index)
 
 	if (IsAuthority())
 	{
+		MDNoise::Report(this, GetOwner()->GetActorLocation(), GetOwner(), FName(MDNoise::Attack)); // enemies hear every swing (V1 WP3)
 		Multicast_PlayStep(Kind, Index);
 	}
 }

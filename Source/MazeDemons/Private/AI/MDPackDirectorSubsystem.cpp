@@ -1,6 +1,8 @@
 #include "AI/MDPackDirectorSubsystem.h"
 
+#include "AI/MDAIQueries.h"
 #include "AI/MDAISubsystem.h"
+#include "AI/MDEnemyBrainComponent.h"
 #include "AI/MDEnemyCharacter.h"
 #include "AI/MDRallyPoint.h"
 #include "MDAbilitySystemComponent.h"
@@ -86,12 +88,14 @@ bool UMDPackDirectorSubsystem::IsDebugSlotsEnabled()
 void UMDPackDirectorSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	const double Start = FPlatformTime::Seconds();
 	StepAccumulator += DeltaTime;
 	if (StepAccumulator >= MDPackDirectorLocal::StepInterval)
 	{
 		StepAccumulator = 0.0f;
 		StepPacks(Now());
 	}
+	Profile.Add(FPlatformTime::Seconds() - Start); // the 0.3 ms/frame director budget (2.9), averaged over frames
 	if (IsDebugSlotsEnabled())
 	{
 		DrawSlotsDebug();
@@ -293,6 +297,34 @@ void UMDPackDirectorSubsystem::ReportDamage(AActor* Enemy, AActor* Instigator, f
 		R.Amount = Amount;
 		R.Time = Now();
 	}
+}
+
+int32 UMDPackDirectorSubsystem::ShareSighting(AActor* Seer, AActor* Player, const FVector& Location, double SightTime, float ShareDelay)
+{
+	if (!Seer || !Player || ShareDelay < 0.0f)
+	{
+		return 0;
+	}
+	const FMDPack* Pack = FindPackOf(Seer);
+	if (!Pack)
+	{
+		return 0;
+	}
+	int32 Told = 0;
+	for (const FMDPackMember& M : Pack->Members)
+	{
+		AActor* Mate = M.Enemy.Get();
+		if (!Mate || Mate == Seer)
+		{
+			continue;
+		}
+		if (UMDEnemyBrainComponent* Brain = UMDEnemyBrainComponent::FindFor(Mate))
+		{
+			Brain->ReceiveSharedSighting(Player, Location, SightTime, ShareDelay);
+			++Told;
+		}
+	}
+	return Told;
 }
 
 bool UMDPackDirectorSubsystem::GetAssignment(const AActor* Enemy, FMDEnemyAssignment& Out) const
@@ -740,43 +772,14 @@ void UMDPackDirectorSubsystem::UpdateSlots(FMDPack& Pack)
 
 bool UMDPackDirectorSubsystem::HasAnyRallyPoint(double InNow)
 {
-	if (InNow >= NextRallyRefresh)
-	{
-		NextRallyRefresh = InNow + MDPackDirectorLocal::RallyRefreshInterval;
-		RallyActors.Reset();
-		if (UWorld* World = GetWorld())
-		{
-			for (TActorIterator<AActor> It(World); It; ++It)
-			{
-				if (It->ActorHasTag(AMDRallyPoint::RallyTag))
-				{
-					RallyActors.Add(*It);
-				}
-			}
-		}
-	}
-	RallyActors.RemoveAll([](const TWeakObjectPtr<AActor>& A) { return !A.IsValid(); });
-	return RallyActors.Num() > 0;
+	// V1 WP3: the rally actors (cached by the AI subsystem) filtered through the room-reveal gate, with the room-entry fallback.
+	FVector Unused;
+	return FindRallyPoint(FVector::ZeroVector, Unused);
 }
 
 bool UMDPackDirectorSubsystem::FindRallyPoint(const FVector& Near, FVector& OutPoint) const
 {
-	double Best = TNumericLimits<double>::Max();
-	bool bFound = false;
-	for (const TWeakObjectPtr<AActor>& A : RallyActors)
-	{
-		if (const AActor* Actor = A.Get())
-		{
-			const double D = FVector::DistSquared(Near, Actor->GetActorLocation());
-			if (D < Best)
-			{
-				Best = D;
-				OutPoint = Actor->GetActorLocation();
-				bFound = true;
-			}
-		}
-	}
-	return bFound;
+	return MDAIQueries::FindRallyPointFor(GetWorld(), Near, OutPoint);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

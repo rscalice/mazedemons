@@ -4,6 +4,7 @@
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttackComponent.h"
 #include "AI/MDEnemyCharacter.h"
+#include "AI/MDEnemyController.h"
 #include "AI/MDPackDirectorSubsystem.h"
 #include "AI/MDPackRules.h"
 #include "MDAbilitySystemComponent.h"
@@ -60,6 +61,13 @@ void UMDEnemyBrainComponent::OnPossessed(APawn* InPawn)
 	Attack = NewEnemy->AttackComponent;
 	Poise = NewEnemy->Poise;
 	Tier = UMDAISubsystem::ResolveTierParams();
+
+	bDormant = false;
+	LastDamageTime = -1.0;
+	LastHeardTime = -1000.0;
+	LastHeardTag = NAME_None;
+	DefaultNetUpdateFrequency = NewEnemy->GetNetUpdateFrequency();
+	AppliedNetFrequency = DefaultNetUpdateFrequency;
 
 	bDead = NewEnemy->IsEnemyDead();
 	CurrentIntent = bDead ? EMDIntent::Dead : EMDIntent::Idle;
@@ -227,26 +235,143 @@ bool UMDEnemyBrainComponent::IsValidTargetActor(const AActor* Actor) const
 // Sense
 // ---------------------------------------------------------------------------------------------------------------------
 
-void UMDEnemyBrainComponent::ReportStimulus(AActor* Source, bool bSensed, const FVector& Location)
+void UMDEnemyBrainComponent::ReportStimulus(AActor* Source, bool bSensed, const FVector& Location, EMDStimulusKind Kind, FName Tag)
 {
 	if (!Source || bDead || !Enemy.IsValid())
 	{
 		return;
+	}
+	if (bDormant && Kind != EMDStimulusKind::Damage)
+	{
+		return; // a dormant enemy senses nothing (2.9); being hurt wakes it first
 	}
 	FMDStimulus S;
 	S.Source = Source;
 	S.bSensed = bSensed;
 	S.Location = Location;
 	S.Time = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	S.Kind = Kind;
+	S.Tag = Tag;
 	Stimuli.Push(S);
+
+	if (Kind == EMDStimulusKind::Hearing && bSensed)
+	{
+		LastHeardLocation = Location;
+		LastHeardTag = Tag;
+		LastHeardTime = S.Time;
+	}
+	if (bSensed && MDPerception::ShouldShare(Kind, Tag))
+	{
+		ShareToPack(Source, Location, S.Time);
+	}
+}
+
+void UMDEnemyBrainComponent::ReportHeard(AActor* Source, const FVector& Location, FName Tag)
+{
+	ReportStimulus(Source, true, Location, EMDStimulusKind::Hearing, Tag);
+}
+
+void UMDEnemyBrainComponent::ShareToPack(AActor* Source, const FVector& Location, double SightTime)
+{
+	// T0 never shares (ShareDelay < 0). The director fans the sighting out to the pack mates' brains.
+	const FMDTierParams Current = UMDAISubsystem::ResolveTierParams(); // md.AI.ForceTier can change between decisions
+	if (Current.ShareDelay < 0.0f)
+	{
+		return;
+	}
+	if (UMDPackDirectorSubsystem* Director = GetDirector())
+	{
+		Director->ShareSighting(Enemy.Get(), Source, Location, SightTime, Current.ShareDelay);
+	}
+}
+
+void UMDEnemyBrainComponent::ReceiveSharedSighting(AActor* Source, const FVector& Location, double SightTime, float ShareDelay)
+{
+	if (!Source || bDead || bDormant || !Enemy.IsValid())
+	{
+		return;
+	}
+	const double QueueTime = MDPerception::SharedQueueTime(SightTime, ShareDelay, UMDAISubsystem::ResolveTierParams().ReactionTime);
+	if (QueueTime < 0.0)
+	{
+		return;
+	}
+	FMDStimulus S;
+	S.Source = Source;
+	S.bSensed = true;
+	S.Location = Location;
+	S.Time = QueueTime;
+	S.Kind = EMDStimulusKind::Shared;
+	Stimuli.PushCoalesced(S);
+}
+
+bool UMDEnemyBrainComponent::GetKnownLocation(const AActor* Actor, FVector& OutLocation, bool& bOutSensedNow) const
+{
+	for (const TPair<TWeakObjectPtr<AActor>, FKnownActor>& Pair : Known)
+	{
+		if (Pair.Key.Get() == Actor)
+		{
+			bOutSensedNow = Pair.Value.bSensedNow;
+			OutLocation = Pair.Value.bSensedNow && Actor ? Actor->GetActorLocation() : Pair.Value.LastLocation;
+			return true;
+		}
+	}
+	return false;
+}
+
+void UMDEnemyBrainComponent::SetSensing(bool bActive)
+{
+	if (AMDEnemyController* Controller = Cast<AMDEnemyController>(GetOwner()))
+	{
+		Controller->SetSensesActive(bActive);
+	}
+}
+
+void UMDEnemyBrainComponent::SetDormant(bool bNewDormant, double Now)
+{
+	if (bDormant == bNewDormant || bDead)
+	{
+		return;
+	}
+	bDormant = bNewDormant;
+	if (bDormant)
+	{
+		// Forget the fight and stand down; the scheduler skips this brain from now on.
+		Stimuli.Reset();
+		Known.Reset();
+		Target.Reset();
+		ReleaseToken(true);
+		if (CurrentIntent != EMDIntent::Stagger && CurrentIntent != EMDIntent::Dead && CurrentIntent != EMDIntent::Attack && CurrentIntent != EMDIntent::Idle)
+		{
+			SetIntent(EMDIntent::Idle, true);
+		}
+	}
+	SetSensing(!bDormant);
+}
+
+void UMDEnemyBrainComponent::ApplyNetFrequency(float Hz)
+{
+	AMDEnemyCharacter* E = Enemy.Get();
+	if (!E || Hz <= 0.0f || FMath::IsNearlyEqual(Hz, AppliedNetFrequency))
+	{
+		return;
+	}
+	AppliedNetFrequency = Hz;
+	E->SetNetUpdateFrequency(Hz);
 }
 
 void UMDEnemyBrainComponent::HandleDamageApplied(AActor* Instigator, float Applied)
 {
-	// Being hit is a stimulus too (2.5 Damage sense): the attacker's position, through the same reaction delay.
+	// Being hit is a stimulus too (2.5 Damage sense): the attacker's position, through the same reaction delay. It is a
+	// last-known position, not a live one: an enemy hit from behind turns toward where the blow came from.
 	if (Instigator && Applied > 0.0f)
 	{
-		ReportStimulus(Instigator, true, Instigator->GetActorLocation());
+		LastDamageTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		if (bDormant)
+		{
+			SetDormant(false, LastDamageTime); // hurt: wake at once
+		}
+		ReportStimulus(Instigator, true, Instigator->GetActorLocation(), EMDStimulusKind::Damage);
 
 		// The pack scores this player as a threat, and a player who hurts this enemy badly becomes its target whatever the
 		// pack's focus is (damage-taken override, 2.4).
@@ -284,6 +409,22 @@ void UMDEnemyBrainComponent::UpdateKnownActors(double Now)
 			return;
 		}
 		FKnownActor& K = Known.FindOrAdd(S.Source);
+		if (S.bSensed && !MDPerception::IsLive(S.Kind))
+		{
+			// Heard, hurt by, or told about: a last-known position only. It never makes the source "sensed now" (the brain
+			// would then know its live position), never overwrites what the enemy sees with its own eyes, and an older
+			// report never overwrites a newer one.
+			if (!K.bSensedNow && S.Time >= K.LastSensedTime)
+			{
+				K.LastLocation = S.Location;
+				K.LastSensedTime = S.Time;
+			}
+			else if (K.LastSensedTime < S.Time)
+			{
+				K.LastSensedTime = S.Time;
+			}
+			return;
+		}
 		K.LastLocation = S.Location;
 		if (S.bSensed)
 		{
@@ -395,9 +536,9 @@ FMDBrainContext UMDEnemyBrainComponent::BuildContext(double Now) const
 void UMDEnemyBrainComponent::RunDecision(double Now)
 {
 	AMDEnemyCharacter* E = Enemy.Get();
-	if (bDead || !E)
+	if (bDead || !E || bDormant)
 	{
-		return;
+		return; // dormant (2.9): no sensing, no thinking until a player is within 40 m or the enemy is hurt
 	}
 
 	// A forced tier (md.AI.ForceTier) can change at any time; the tier gates what the scorer may pick.
@@ -699,4 +840,54 @@ void UMDEnemyBrainComponent::DrawDebug() const
 	}
 	const FColor Color = CurrentIntent == EMDIntent::Attack ? FColor::Red : (HoldsAttackToken() ? FColor::Orange : FColor::White);
 	DrawDebugString(World, E->GetActorLocation() + FVector(0.0f, 0.0f, 120.0f), Text, nullptr, Color, 1.0f / UMDAISubsystem::GetBrainHz() + 0.05f, true);
+}
+
+// md.AI.DebugPerception 1 (server): green cone = awake, grey = dormant, red = a player is in sight. Yellow sphere + line = the
+// last-known position of a player the enemy remembers (not in sight); red line = a player in sight; cyan sphere + tag = the
+// last noise this enemy heard (for 2 s); the faint circle is its hearing range.
+void UMDEnemyBrainComponent::DrawPerceptionDebug(float Life) const
+{
+	const AMDEnemyCharacter* E = Enemy.Get();
+	UWorld* World = GetWorld();
+	if (!E || !World)
+	{
+		return;
+	}
+	const FVector Eye = E->GetActorLocation() + FVector(0.0, 0.0, 60.0);
+	const double Now = World->GetTimeSeconds();
+	const float HalfFov = FMath::DegreesToRadians(Tier.SightFOV * 0.5f);
+	bool bSeeing = false;
+	for (const TPair<TWeakObjectPtr<AActor>, FKnownActor>& Pair : Known)
+	{
+		bSeeing |= Pair.Value.bSensedNow;
+	}
+	const FColor ConeColor = bDormant ? FColor(90, 90, 90) : (bSeeing ? FColor::Red : FColor::Green);
+	DrawDebugCone(World, Eye, E->GetActorForwardVector(), Tier.SightRadius, HalfFov, HalfFov, 12, ConeColor, false, Life, SDPG_World, 1.0f);
+	DrawDebugCircle(World, E->GetActorLocation() + FVector(0.0, 0.0, 20.0), MDPerception::HearingRange(Tier.Tier), 32, FColor(0, 110, 140), false, Life, SDPG_World, 0.0f, FVector::ForwardVector, FVector::RightVector, false);
+
+	for (const TPair<TWeakObjectPtr<AActor>, FKnownActor>& Pair : Known)
+	{
+		const AActor* Actor = Pair.Key.Get();
+		if (!Actor)
+		{
+			continue;
+		}
+		if (Pair.Value.bSensedNow)
+		{
+			DrawDebugLine(World, Eye, Actor->GetActorLocation(), FColor::Red, false, Life, SDPG_World, 1.0f);
+		}
+		else
+		{
+			DrawDebugSphere(World, Pair.Value.LastLocation, 30.0f, 8, FColor::Yellow, false, Life, SDPG_World, 1.0f);
+			DrawDebugLine(World, Eye, Pair.Value.LastLocation, FColor::Yellow, false, Life, SDPG_World, 0.5f);
+			DrawDebugString(World, Pair.Value.LastLocation + FVector(0.0, 0.0, 50.0),
+				FString::Printf(TEXT("last known %.1fs"), static_cast<float>(Now - Pair.Value.LastSensedTime)), nullptr, FColor::Yellow, Life, true);
+		}
+	}
+	if (Now - LastHeardTime < 2.0)
+	{
+		DrawDebugSphere(World, LastHeardLocation, 40.0f, 8, FColor::Cyan, false, Life, SDPG_World, 1.0f);
+		DrawDebugLine(World, Eye, LastHeardLocation, FColor::Cyan, false, Life, SDPG_World, 0.5f);
+		DrawDebugString(World, LastHeardLocation + FVector(0.0, 0.0, 60.0), FString::Printf(TEXT("heard %s"), *LastHeardTag.ToString()), nullptr, FColor::Cyan, Life, true);
+	}
 }

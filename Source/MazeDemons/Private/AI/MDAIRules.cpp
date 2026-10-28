@@ -269,6 +269,22 @@ void FMDUtilityScorer::SortDescending(MDAI::FScores& Scores)
 // FMDDelayedStimulusQueue
 // ---------------------------------------------------------------------------------------------------------------------
 
+void FMDDelayedStimulusQueue::PushCoalesced(const FMDStimulus& Stimulus)
+{
+	for (FMDStimulus& Pending_ : Pending)
+	{
+		if (Pending_.Source == Stimulus.Source && Pending_.Kind == Stimulus.Kind && Pending_.bSensed == Stimulus.bSensed)
+		{
+			if (Stimulus.Time >= Pending_.Time)
+			{
+				Pending_.Location = Stimulus.Location; // the freshest position, on the original schedule
+			}
+			return;
+		}
+	}
+	Pending.Add(Stimulus);
+}
+
 int32 FMDDelayedStimulusQueue::Pop(double Now, double Delay, TFunctionRef<void(const FMDStimulus&)> Fn)
 {
 	// Deliver in order of arrival; the queue is short (a few events per enemy), so a stable pass is fine.

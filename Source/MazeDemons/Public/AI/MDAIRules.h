@@ -5,6 +5,7 @@
 #include "Engine/EngineTypes.h"      // ENetRole
 #include "GameplayTagContainer.h"
 #include "AI/MDAITypes.h"
+#include "AI/MDPerceptionRules.h"
 
 // V1 WP1 brain rules (v1-design 2.3, 1.3, 2.9). Plain structs and functions: no world, no allocations in the hot path, so
 // every rule runs in MazeDemons.AI.Brain.* with no actors. The brain component is a thin wrapper around these.
@@ -55,12 +56,20 @@ struct FMDStimulus
 	FVector Location = FVector::ZeroVector;
 	bool bSensed = true; // false = lost
 	double Time = 0.0;   // when it happened
+	// How it reached the brain (V1 WP3): only Sight keeps the source's live position known, the rest give a last-known one.
+	EMDStimulusKind Kind = EMDStimulusKind::Sight;
+	// The noise tag of a Hearing stimulus (Attack / Sprint / Gunshot / any).
+	FName Tag = NAME_None;
 };
 
 // Reaction floor (1.3): stimuli are timestamped and only handed to the brain once they are older than ReactionTime.
 struct MAZEDEMONS_API FMDDelayedStimulusQueue
 {
 	void Push(const FMDStimulus& Stimulus) { Pending.Add(Stimulus); }
+
+	// Like Push, but a stimulus of the same source and kind that is still waiting keeps its delivery time and only takes the
+	// newer location. A 40-enemy pack sharing every sighting would otherwise queue one entry per mate per event (V1 WP3).
+	void PushCoalesced(const FMDStimulus& Stimulus);
 
 	// Removes and returns (through Fn, oldest first) every stimulus with Time + Delay <= Now. Returns how many were delivered.
 	int32 Pop(double Now, double Delay, TFunctionRef<void(const FMDStimulus&)> Fn);

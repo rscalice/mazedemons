@@ -5,6 +5,7 @@
 #include "AI/MDAITypes.h"
 #include "AI/MDPack.h"
 #include "AI/MDPackRules.h"
+#include "AI/MDPerceptionRules.h"
 #include "MDPackDirectorSubsystem.generated.h"
 
 // The squad layer (v1-design 2.4), server only. It owns:
@@ -49,6 +50,11 @@ public:
 
 	// The enemy took Amount damage from Instigator (feeds the focus score's threat term).
 	void ReportDamage(AActor* Enemy, AActor* Instigator, float Amount);
+
+	// Pack-shared awareness (V1 WP3, 2.3 / 2.5): Seer saw (or, for a loud noise, heard) Player at Location at SightTime. Every
+	// other member of Seer's pack learns the LAST-KNOWN position (never the live one) at SightTime + max(ShareDelay, its
+	// reaction time). ShareDelay < 0 (T0) shares nothing. Returns how many pack mates were told.
+	int32 ShareSighting(AActor* Seer, AActor* Player, const FVector& Location, double SightTime, float ShareDelay);
 
 	// ---- Assignment (to the brains) ----
 	bool GetAssignment(const AActor* Enemy, FMDEnemyAssignment& Out) const;
@@ -95,7 +101,8 @@ private:
 	void UpdateSlots(FMDPack& Pack);
 	void PruneMembers(FMDPack& Pack);
 
-	// Rally points are actors tagged "MDRallyPoint" (AMDRallyPoint), rescanned every 2 s. True when the level has any.
+	// Rally points are actors tagged "MDRallyPoint" (AMDRallyPoint), else room entries tagged "MDRoomEntry"; both come from
+	// UMDAISubsystem and only revealed rooms count (MDAIQueries::FindRallyPoint). True when the level has a usable one.
 	bool HasAnyRallyPoint(double InNow);
 	// The rally point nearest to Near; false when none.
 	bool FindRallyPoint(const FVector& Near, FVector& OutPoint) const;
@@ -110,6 +117,10 @@ private:
 	FMDPackTokenPool Tokens;
 	EMDIntelligenceTier LastTier = EMDIntelligenceTier::T0;
 	float StepAccumulator = 0.0f;
-	TArray<TWeakObjectPtr<AActor>> RallyActors;
-	double NextRallyRefresh = 0.0;
+	MDAIPerf::FFrameProfile Profile;
+
+public:
+	// Time spent in this subsystem's Tick (the pack step), for the 40-enemy budget test and tuning.
+	const MDAIPerf::FFrameProfile& GetProfile() const { return Profile; }
+	void ResetProfile() { Profile = MDAIPerf::FFrameProfile(); }
 };

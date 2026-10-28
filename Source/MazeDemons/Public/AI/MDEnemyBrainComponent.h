@@ -42,7 +42,38 @@ public:
 	// ---- Input ----
 	// A perception event: Source seen / heard / felt (bSensed) at Location, or lost (bSensed false). Timestamped now and
 	// delivered to the brain ReactionTime later.
-	void ReportStimulus(AActor* Source, bool bSensed, const FVector& Location);
+	// Kind (V1 WP3) says how it was sensed: Sight keeps the source's live position known; Hearing / Damage / Shared only give
+	// the position they report (the last-known one). A sensed Sight (and a loud Hearing) stimulus is also shared with the
+	// pack through the director after the tier's ShareDelay.
+	void ReportStimulus(AActor* Source, bool bSensed, const FVector& Location, EMDStimulusKind Kind = EMDStimulusKind::Sight, FName Tag = NAME_None);
+
+	// A noise heard at Location, made by Source (any tag; Gunshot is loud). Same reaction delay as sight.
+	void ReportHeard(AActor* Source, const FVector& Location, FName Tag);
+
+	// A pack mate saw Source at Location at SightTime (the pack director calls this). It reaches the brain at
+	// SightTime + max(ShareDelay, ReactionTime) as a last-known position, never the live one.
+	void ReceiveSharedSighting(AActor* Source, const FVector& Location, double SightTime, float ShareDelay);
+
+	// ---- Dormancy (V1 WP3, 2.9) ----
+	// Dormant brains are skipped by the scheduler, their senses are off and they drop what they knew. UMDAISubsystem decides
+	// (40 m from every player); damage wakes the enemy at once.
+	bool IsDormant() const { return bDormant; }
+	void SetDormant(bool bNewDormant, double Now);
+	double GetLastDamageTime() const { return LastDamageTime; }
+	// Reduces / restores the pawn's NetUpdateFrequency (10 Hz beyond 25 m from every player).
+	void ApplyNetFrequency(float Hz);
+	float GetDefaultNetFrequency() const { return DefaultNetUpdateFrequency; }
+
+	// The last noise this brain heard (for the debug draw and tests); ZeroVector / NAME_None / -1 before any.
+	FVector GetLastHeardLocation() const { return LastHeardLocation; }
+	FName GetLastHeardTag() const { return LastHeardTag; }
+	double GetLastHeardTime() const { return LastHeardTime; }
+
+	// Where Actor was last seen / heard / shared; false when the brain does not know it.
+	bool GetKnownLocation(const AActor* Actor, FVector& OutLocation, bool& bOutSensedNow) const;
+
+	// md.AI.DebugPerception 1: the sight cone, last-known positions and the last heard noise. Life = seconds the lines stay.
+	void DrawPerceptionDebug(float Life) const;
 
 	// One decision (the scheduler's entry point; tests call it directly with their own clock).
 	void RunDecision(double Now);
@@ -178,4 +209,15 @@ private:
 	int32 EnemyId = 0;
 	bool bDead = false;
 	bool bBound = false;
+
+	// V1 WP3
+	bool bDormant = false;
+	double LastDamageTime = -1.0;
+	FVector LastHeardLocation = FVector::ZeroVector;
+	FName LastHeardTag = NAME_None;
+	double LastHeardTime = -1000.0;
+	float DefaultNetUpdateFrequency = 0.0f;
+	float AppliedNetFrequency = 0.0f;
+	void ShareToPack(AActor* Source, const FVector& Location, double SightTime);
+	void SetSensing(bool bActive);
 };

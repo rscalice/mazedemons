@@ -1,6 +1,18 @@
 #include "AI/MDAISubsystem.h"
 
+#include "AI/MDAIQueries.h"
 #include "AI/MDEnemyBrainComponent.h"
+#include "AI/MDRallyPoint.h"
+#include "MDAbilitySystemComponent.h"
+#include "MDFogComponent.h"
+#include "MDGameplayStatics.h"
+#include "MDGameplayTags.h"
+#include "MDPlayerState.h"
+#include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "HAL/PlatformTime.h"
+#include "DrawDebugHelpers.h"
 #include "AI/MDEnemyCharacter.h"
 #include "AI/MDPackDirectorSubsystem.h"
 #include "Engine/World.h"
@@ -17,6 +29,17 @@ namespace MDAISubsystemLocal
 		TEXT("Decisions per second per enemy brain (5-10)."), ECVF_Cheat);
 	TAutoConsoleVariable<int32> CVarSeed(TEXT("md.AI.Seed"), 0,
 		TEXT("Run seed for the enemy brains' noise. 0 = drawn once per world (logged)."), ECVF_Cheat);
+	TAutoConsoleVariable<int32> CVarDebugPerception(TEXT("md.AI.DebugPerception"), 0,
+		TEXT("1 = draw each enemy's sight cone (green awake, red seeing a player, grey dormant), hearing range, the last-known positions it remembers and the noises it heard (server)."), ECVF_Cheat);
+	TAutoConsoleVariable<int32> CVarDormancy(TEXT("md.AI.Dormancy"), 1,
+		TEXT("1 (default) = enemies more than 40 m from every player stop sensing and thinking until a player comes in range or they are hurt. 0 = never dormant."), ECVF_Cheat);
+
+	// Seconds between the dormancy / sprint-noise passes.
+	constexpr float SlowInterval = 0.5f;
+	// Seconds between perception debug redraws.
+	constexpr float DebugInterval = 0.2f;
+	// A player is "in melee" when an enemy stands this close (cm).
+	constexpr double MeleeReach = 350.0;
 }
 
 UMDAISubsystem* UMDAISubsystem::Get(const UWorld* World)
@@ -125,27 +148,297 @@ int32 UMDAISubsystem::StepScheduler(float DeltaTime)
 		Accumulator = 0.0f;
 		return 0;
 	}
-	const int32 Batch = MDBrainScheduling::BatchSize(Brains.Num(), GetBrainHz(), DeltaTime, Accumulator);
+	// Dormant brains are skipped (2.9): the batch is sized on the awake ones so they keep their BrainHz.
+	int32 NumAwake = 0;
+	for (const TWeakObjectPtr<UMDEnemyBrainComponent>& B : Brains)
+	{
+		NumAwake += (B.IsValid() && !B->IsDormant()) ? 1 : 0;
+	}
+	const int32 Batch = MDBrainScheduling::BatchSize(NumAwake, GetBrainHz(), DeltaTime, Accumulator);
 	const double Time = Now();
-	for (int32 i = 0; i < Batch; ++i)
+	int32 Ran = 0;
+	const int32 ScanLimit = Brains.Num() + Batch;
+	for (int32 Scanned = 0; Ran < Batch && Scanned < ScanLimit; ++Scanned)
 	{
 		if (Cursor >= Brains.Num())
 		{
 			Cursor = 0;
 		}
-		if (UMDEnemyBrainComponent* Brain = Brains[Cursor].Get())
+		UMDEnemyBrainComponent* Brain = Brains[Cursor].Get();
+		++Cursor;
+		if (Brain && !Brain->IsDormant())
 		{
 			Brain->RunDecision(Time);
+			++Ran;
 		}
-		++Cursor;
 	}
-	return Batch;
+	return Ran;
 }
 
 void UMDAISubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	const double Start = FPlatformTime::Seconds();
 	StepScheduler(DeltaTime);
+
+	SlowAccumulator += DeltaTime;
+	if (SlowAccumulator >= MDAISubsystemLocal::SlowInterval)
+	{
+		SlowAccumulator = 0.0f;
+		UpdateDormancy(Now());
+		ReportSprintNoise();
+	}
+	Profile.Add(FPlatformTime::Seconds() - Start); // the brain budget (2.9): scheduler + dormancy + noise, averaged over frames
+
+	if (IsDebugPerceptionEnabled())
+	{
+		DebugAccumulator += DeltaTime;
+		if (DebugAccumulator >= MDAISubsystemLocal::DebugInterval)
+		{
+			DebugAccumulator = 0.0f;
+			for (const TWeakObjectPtr<UMDEnemyBrainComponent>& B : Brains)
+			{
+				if (const UMDEnemyBrainComponent* Brain = B.Get())
+				{
+					Brain->DrawPerceptionDebug(MDAISubsystemLocal::DebugInterval + 0.05f);
+				}
+			}
+		}
+	}
+}
+
+bool UMDAISubsystem::IsDebugPerceptionEnabled()
+{
+	return MDAISubsystemLocal::CVarDebugPerception.GetValueOnGameThread() != 0;
+}
+
+bool UMDAISubsystem::IsDormancyEnabled()
+{
+	return MDAISubsystemLocal::CVarDormancy.GetValueOnGameThread() != 0;
+}
+
+// ---- Players ----
+
+void UMDAISubsystem::TrackExtraPlayer(APawn* Pawn)
+{
+	if (Pawn)
+	{
+		ExtraPlayers.AddUnique(Pawn);
+	}
+}
+
+void UMDAISubsystem::CollectPlayerPawns(TArray<AActor*>& Out) const
+{
+	Out.Reset();
+	if (const UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			APawn* Pawn = It->IsValid() ? It->Get()->GetPawn() : nullptr;
+			if (Pawn && !UMDGameplayStatics::IsPawnDead(Pawn))
+			{
+				Out.AddUnique(Pawn);
+			}
+		}
+	}
+	for (const TWeakObjectPtr<APawn>& Extra : ExtraPlayers)
+	{
+		if (APawn* Pawn = Extra.Get())
+		{
+			if (!UMDGameplayStatics::IsPawnDead(Pawn))
+			{
+				Out.AddUnique(Pawn);
+			}
+		}
+	}
+}
+
+void UMDAISubsystem::CollectPlayerLocations(TArray<FVector>& Out) const
+{
+	TArray<AActor*> Players;
+	CollectPlayerPawns(Players);
+	Out.Reset();
+	for (const AActor* P : Players)
+	{
+		Out.Add(P->GetActorLocation());
+	}
+}
+
+void UMDAISubsystem::CollectMeleePlayerLocations(TArray<FVector>& Out) const
+{
+	TArray<AActor*> Players;
+	CollectPlayerPawns(Players);
+	Out.Reset();
+	for (const AActor* P : Players)
+	{
+		for (const TWeakObjectPtr<UMDEnemyBrainComponent>& B : Brains)
+		{
+			const UMDEnemyBrainComponent* Brain = B.Get();
+			const AMDEnemyCharacter* E = Brain ? Brain->GetEnemy() : nullptr;
+			if (E && !Brain->IsDormant() && FVector::Dist2D(E->GetActorLocation(), P->GetActorLocation()) <= MDAISubsystemLocal::MeleeReach)
+			{
+				Out.Add(P->GetActorLocation());
+				break;
+			}
+		}
+	}
+}
+
+void UMDAISubsystem::ReportSprintNoise()
+{
+	// A sprinting player is heard (tag "Sprint", quiet). Polled here rather than hooked in the stamina code: the loose
+	// State.Sprinting tag is already the server's truth for it.
+	TArray<AActor*> Players;
+	CollectPlayerPawns(Players);
+	for (AActor* Actor : Players)
+	{
+		const APawn* Pawn = Cast<APawn>(Actor);
+		const AMDPlayerState* PS = Pawn ? Pawn->GetPlayerState<AMDPlayerState>() : nullptr;
+		UMDAbilitySystemComponent* ASC = PS ? PS->GetMDAbilitySystemComponent() : nullptr;
+		if (ASC && ASC->HasMatchingGameplayTag(TAG_State_Sprinting.GetTag()))
+		{
+			MDNoise::Report(this, Actor->GetActorLocation(), Actor, FName(MDNoise::Sprint));
+		}
+	}
+}
+
+// ---- Dormancy ----
+
+int32 UMDAISubsystem::UpdateDormancy(double InNow)
+{
+	TArray<FVector> Players;
+	CollectPlayerLocations(Players);
+	const bool bEnabled = IsDormancyEnabled();
+	int32 Dormant = 0;
+	for (const TWeakObjectPtr<UMDEnemyBrainComponent>& B : Brains)
+	{
+		UMDEnemyBrainComponent* Brain = B.Get();
+		const AMDEnemyCharacter* Enemy = Brain ? Brain->GetEnemy() : nullptr;
+		if (!Brain || !Enemy)
+		{
+			continue;
+		}
+		float Nearest = -1.0f; // < 0 = no player known: never dormant
+		if (bEnabled)
+		{
+			for (const FVector& P : Players)
+			{
+				const float D = static_cast<float>(FVector::Dist(P, Enemy->GetActorLocation()));
+				Nearest = Nearest < 0.0f ? D : FMath::Min(Nearest, D);
+			}
+		}
+		const double LastDamage = Brain->GetLastDamageTime();
+		const double SinceDamage = LastDamage < 0.0 ? -1.0 : InNow - LastDamage;
+		Brain->SetDormant(MDDormancy::ShouldSleep(Nearest, SinceDamage), InNow);
+		Brain->ApplyNetFrequency(MDDormancy::NetUpdateFrequencyFor(Nearest, Brain->GetDefaultNetFrequency()));
+		Dormant += Brain->IsDormant() ? 1 : 0;
+	}
+	return Dormant;
+}
+
+int32 UMDAISubsystem::NumDormant() const
+{
+	int32 N = 0;
+	for (const TWeakObjectPtr<UMDEnemyBrainComponent>& B : Brains)
+	{
+		N += (B.IsValid() && B->IsDormant()) ? 1 : 0;
+	}
+	return N;
+}
+
+// ---- Room reveal ----
+
+void UMDAISubsystem::SetRevealGridOverride(const FMDFogGrid* Grid)
+{
+	if (Grid)
+	{
+		FogOverride = *Grid;
+	}
+	else
+	{
+		FogOverride.Reset();
+	}
+}
+
+void UMDAISubsystem::RefreshFogCache(double InNow) const
+{
+	if (InNow < NextFogRefresh)
+	{
+		return;
+	}
+	NextFogRefresh = InNow + 0.5;
+	const UMDFogComponent* Fog = UMDFogComponent::FindFor(GetWorld());
+	bFogCacheValid = Fog && Fog->BuildGrid(FogCache) && FogCache.IsValid();
+}
+
+bool UMDAISubsystem::IsRoomRevealed(const FVector& Location) const
+{
+	if (FogOverride.IsSet())
+	{
+		return MDAIQueries::IsPointRevealed(FogOverride.GetValue(), Location);
+	}
+	RefreshFogCache(Now());
+	return !bFogCacheValid || MDAIQueries::IsPointRevealed(FogCache, Location);
+}
+
+// ---- Rally points ----
+
+void UMDAISubsystem::RefreshRallyCache(double InNow) const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	// Rescan when the world's actor count changed (a rally point was spawned or destroyed) or every 5 s (streaming).
+	const int32 Count = World->GetActorCount();
+	if (Count == CachedActorCount && InNow < NextRallyRefresh)
+	{
+		return;
+	}
+	CachedActorCount = Count;
+	NextRallyRefresh = InNow + 5.0;
+	RallyActors.Reset();
+	EntryActors.Reset();
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		if (It->ActorHasTag(AMDRallyPoint::RallyTag))
+		{
+			RallyActors.Add(*It);
+		}
+		else if (It->ActorHasTag(AMDRallyPoint::RoomEntryTag))
+		{
+			EntryActors.Add(*It);
+		}
+	}
+}
+
+void UMDAISubsystem::CollectRallyPoints(TArray<FVector>& OutRallyPoints, TArray<FVector>& OutRoomEntries) const
+{
+	RefreshRallyCache(Now());
+	OutRallyPoints.Reset();
+	OutRoomEntries.Reset();
+	for (const TWeakObjectPtr<AActor>& A : RallyActors)
+	{
+		if (const AActor* Actor = A.Get())
+		{
+			OutRallyPoints.Add(Actor->GetActorLocation());
+		}
+	}
+	for (const TWeakObjectPtr<AActor>& A : EntryActors)
+	{
+		if (const AActor* Actor = A.Get())
+		{
+			OutRoomEntries.Add(Actor->GetActorLocation());
+		}
+	}
+}
+
+// ---- Navigation ----
+
+bool UMDAISubsystem::TryConsumePathRequest()
+{
+	return PathBudget.TryConsume(GFrameCounter);
 }
 
 // ---- Tokens ----
