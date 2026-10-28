@@ -109,6 +109,14 @@ public:
 	// Support-hand IK weight now (see FMDRangedRules::SupportHandIKAlpha). DisableCurve = the DisableLHandIK anim curve.
 	float GetSupportHandAlpha(float DisableCurve) const;
 
+#if !UE_BUILD_SHIPPING
+	// Debug (md.Ranged.Tune / TuneSupport): live overrides of the data asset offsets, to find grip numbers in a running game.
+	// HandOffset = the weapon mesh transform relative to the hand socket; SupportOffset = the support grip in weapon-mesh space.
+	// Dropped again when the gun mesh is rebuilt.
+	void DebugSetHandOffset(const FTransform& HandOffset, FName Socket = NAME_None);
+	void DebugSetSupportOffset(const FTransform& SupportOffset);
+#endif
+
 	// Recomputes "gun equipped / melee equipped" after the loadout changed (bound to the inventory's OnEquipmentChanged).
 	UFUNCTION()
 	void HandleEquipmentChanged();
@@ -141,6 +149,10 @@ private:
 	TObjectPtr<UMeshComponent> WeaponMeshComp;
 
 	FName WeaponMeshRow = NAME_None;
+
+#if !UE_BUILD_SHIPPING
+	TOptional<FTransform> DebugSupportOffset;
+#endif
 
 	// Row of the gun seen at the last loadout change (server): a new row means "a gun was just equipped".
 	FName LastGunRow = NAME_None;

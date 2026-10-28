@@ -98,4 +98,28 @@ struct MAZEDEMONS_API FMDRangedRules
 
 	// True when the grip needs a left-hand target (a Grip_L socket or a per-weapon offset).
 	static bool GripNeedsSupportHand(EMDGripType Grip) { return Grip != EMDGripType::OneHanded; }
+
+	// Support-hand reach rule. ArmLength = upper arm + forearm (cm, measured on the posed skeleton so it follows mesh scale);
+	// DistanceToTarget = shoulder (upperarm_l) to the support grip. The two-bone IK never stretches the arm, so a target beyond
+	// reach would leave the arm ramrod straight and the hand short of the gun. Instead the weight is 1 while the target is within
+	// FullFraction of the arm, then fades linearly to 0 at ZeroFraction (1.0 = exactly the arm length): the hand falls back to the
+	// animation pose and never hangs on a straight arm. Multiply with SupportHandIKAlpha.
+	static float SupportHandReachAlpha(float DistanceToTarget, float ArmLength, float FullFraction = 0.85f, float ZeroFraction = 1.0f)
+	{
+		if (ArmLength <= KINDA_SMALL_NUMBER || DistanceToTarget < 0.0f || !FMath::IsFinite(DistanceToTarget))
+		{
+			return 0.0f;
+		}
+		const float Full = ArmLength * FullFraction;
+		const float Zero = ArmLength * FMath::Max(ZeroFraction, FullFraction + KINDA_SMALL_NUMBER);
+		if (DistanceToTarget <= Full)
+		{
+			return 1.0f;
+		}
+		if (DistanceToTarget >= Zero)
+		{
+			return 0.0f;
+		}
+		return (Zero - DistanceToTarget) / (Zero - Full);
+	}
 };

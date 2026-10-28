@@ -284,6 +284,9 @@ void UMDRangedComponent::RefreshWeaponMesh()
 		WeaponMeshComp->DestroyComponent();
 		WeaponMeshComp = nullptr;
 		WeaponMeshRow = NAME_None;
+#if !UE_BUILD_SHIPPING
+		DebugSupportOffset.Reset();
+#endif
 	}
 	if (!bWantMesh)
 	{
@@ -334,6 +337,13 @@ bool UMDRangedComponent::GetSupportGripWorldTransform(FTransform& OutTransform) 
 	{
 		return false;
 	}
+#if !UE_BUILD_SHIPPING
+	if (DebugSupportOffset.IsSet())
+	{
+		OutTransform = DebugSupportOffset.GetValue() * WeaponMeshComp->GetComponentTransform();
+		return true;
+	}
+#endif
 	if (!Data->bHasLeftGripOffset && WeaponMeshComp->DoesSocketExist(Data->GripLSocket))
 	{
 		OutTransform = WeaponMeshComp->GetSocketTransform(Data->GripLSocket, RTS_World);
@@ -346,6 +356,25 @@ bool UMDRangedComponent::GetSupportGripWorldTransform(FTransform& OutTransform) 
 	}
 	return false;
 }
+
+#if !UE_BUILD_SHIPPING
+void UMDRangedComponent::DebugSetHandOffset(const FTransform& HandOffset, FName Socket)
+{
+	if (WeaponMeshComp)
+	{
+		if (!Socket.IsNone())
+		{
+			WeaponMeshComp->AttachToComponent(WeaponMeshComp->GetAttachParent(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, Socket);
+		}
+		WeaponMeshComp->SetRelativeTransform(HandOffset);
+	}
+}
+
+void UMDRangedComponent::DebugSetSupportOffset(const FTransform& SupportOffset)
+{
+	DebugSupportOffset = SupportOffset;
+}
+#endif
 
 float UMDRangedComponent::GetSupportHandAlpha(float DisableCurve) const
 {

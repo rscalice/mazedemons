@@ -7,6 +7,8 @@
 #include "BoneControllers/AnimNode_TwoBoneIK.h"
 #include "MDAnimNode_SupportHandIK.generated.h"
 
+class USkeletalMeshComponent;
+
 USTRUCT(BlueprintInternalUseOnly)
 struct MAZEDEMONS_API FAnimNode_MDSupportHandIK : public FAnimNode_TwoBoneIK
 {
@@ -19,4 +21,12 @@ struct MAZEDEMONS_API FAnimNode_MDSupportHandIK : public FAnimNode_TwoBoneIK
 	FName DisableCurveName = FName(TEXT("DisableLHandIK"));
 
 	virtual void PreUpdate(const UAnimInstance* InAnimInstance) override;
+
+private:
+	// Upper arm + forearm length of the IK chain (IKBone = the hand) on the posed mesh, in world units; also returns the shoulder
+	// and elbow world positions. 0 when the chain is missing.
+	float MeasureArm(const USkeletalMeshComponent* Mesh, FVector& OutShoulder, FVector& OutElbow) const;
+
+	// Reach weight after smoothing (0..1), see FMDRangedRules::SupportHandReachAlpha.
+	float SmoothedReach = 0.0f;
 };
