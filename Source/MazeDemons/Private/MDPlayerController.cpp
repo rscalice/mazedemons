@@ -20,6 +20,8 @@
 #include "MDAttributeSet.h"
 #include "MDStaminaComponent.h"
 #include "Ranged/MDRangedComponent.h"
+#include "Ranged/MDRangedCameraModifier.h"
+#include "Camera/PlayerCameraManager.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Character.h"
@@ -55,6 +57,7 @@ void AMDPlayerController::BeginPlay()
 	{
 		GetWorldTimerManager().SetTimer(FocusTraceTimer, this, &AMDPlayerController::UpdateInteractFocus,
 			FMath::Max(0.02f, FocusTraceInterval), true);
+		EnsureRangedCameraModifier();
 	}
 
 	if (!IsLocalController() || HUDWidget)
@@ -97,8 +100,18 @@ bool AMDPlayerController::WouldFocusChange(const AActor* OldFocus, const FText& 
 	return OldFocus != NewFocus || !OldPrompt.EqualTo(NewPrompt);
 }
 
+void AMDPlayerController::EnsureRangedCameraModifier()
+{
+	if (RangedCamModifier.IsValid() || !PlayerCameraManager)
+	{
+		return;
+	}
+	RangedCamModifier = Cast<UMDRangedCameraModifier>(PlayerCameraManager->AddNewCameraModifier(UMDRangedCameraModifier::StaticClass()));
+}
+
 void AMDPlayerController::UpdateInteractFocus()
 {
+	EnsureRangedCameraModifier(); // the camera manager can appear after BeginPlay
 	AActor* Target = nullptr;
 	FText Prompt;
 

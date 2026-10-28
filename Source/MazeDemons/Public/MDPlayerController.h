@@ -453,6 +453,9 @@ private:
 	void ApplyMovementReset();
 	void UpdateInteractFocus();
 	FTimerHandle FocusTraceTimer;
+	// R4 slice 1: add the ranged shoulder camera modifier once the camera manager exists (local controller only).
+	void EnsureRangedCameraModifier();
+	TWeakObjectPtr<class UMDRangedCameraModifier> RangedCamModifier;
 
 	void OpenStationLocal(AMDStation* Station);
 	void WatchStation();
