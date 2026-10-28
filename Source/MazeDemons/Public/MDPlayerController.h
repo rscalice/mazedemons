@@ -257,6 +257,11 @@ public:
 	UFUNCTION(Exec)
 	void UseItem(int32 Index);
 
+	// Console: equips the item at inventory Index (any slot, including the Ranged slot) through the same path as the
+	// inventory UI. Lets guns be equipped without the menu (editor MCP / PIE checks).
+	UFUNCTION(Exec)
+	void EquipItem(int32 Index);
+
 	// Debug (non-shipping): adds gold to this player's inventory (server).
 	UFUNCTION(Exec)
 	void GiveGold(int32 Amount);

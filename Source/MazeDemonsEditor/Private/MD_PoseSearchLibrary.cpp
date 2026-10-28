@@ -42,6 +42,21 @@ int32 UMD_PoseSearchLibrary::BuildStanceDatabase(const FString& DatabasePath, co
 		OutLog.Add(FString::Printf(TEXT("%s has no animations: no database built (placeholder stays)"), *AnimFolder));
 		return 0;
 	}
+	return BuildDatabaseFromAnims(DatabasePath, Schema, Sequences, OutLog);
+}
+
+int32 UMD_PoseSearchLibrary::BuildDatabaseFromAnims(const FString& DatabasePath, const UPoseSearchSchema* Schema, const TArray<UAnimSequence*>& Sequences, TArray<FString>& OutLog)
+{
+	if (!Schema)
+	{
+		OutLog.Add(TEXT("Error: no schema given"));
+		return -1;
+	}
+	if (Sequences.IsEmpty())
+	{
+		OutLog.Add(FString::Printf(TEXT("%s: no animations given, no database built"), *DatabasePath));
+		return 0;
+	}
 
 	const FString ShortName = FPackageName::GetShortName(DatabasePath);
 	UPackage* Package = CreatePackage(*DatabasePath);

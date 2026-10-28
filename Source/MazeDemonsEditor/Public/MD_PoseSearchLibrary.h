@@ -31,4 +31,12 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|PoseSearch")
 	static int32 BuildStanceDatabase(const FString& DatabasePath, const UPoseSearchSchema* Schema, const FString& AnimFolder, TArray<FString>& OutLog);
+
+	/**
+	 * Same as BuildStanceDatabase but from an explicit list of anim sequences (the caller picks them, for example by name from an
+	 * asset set that is split across subfolders and must not be moved). Skeleton-incompatible sequences are skipped and logged.
+	 * Returns the number of animations in the database, 0 for an empty list (nothing built), -1 on failure. Idempotent.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|PoseSearch")
+	static int32 BuildDatabaseFromAnims(const FString& DatabasePath, const UPoseSearchSchema* Schema, const TArray<UAnimSequence*>& Sequences, TArray<FString>& OutLog);
 };
