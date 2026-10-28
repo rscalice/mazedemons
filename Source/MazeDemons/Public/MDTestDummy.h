@@ -10,6 +10,7 @@
 class UMDAbilitySystemComponent;
 class UMDAttributeSet;
 class UMDPoiseComponent;
+class UMDStatusEffectComponent;
 class UCapsuleComponent;
 class USkeletalMesh;
 class USkeletalMeshComponent;
@@ -72,6 +73,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMDAttributeSet> Attributes;
+
+	// V1 WP6: status effects on the dummy (so Bleed / Frost / Poison can be tried on it).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMDStatusEffectComponent> StatusEffects;
 
 	// C1: poise and hit reactions. Its Profile defaults to /Game/Data/Combat/DA_Poise_Dummy (set in the constructor).
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")

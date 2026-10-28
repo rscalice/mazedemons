@@ -14,6 +14,7 @@ class UMDQuestComponent;
 class UMDAbilitySystemComponent;
 class UMDPerkComponent;
 class UMDStaminaComponent;
+class UMDStatusBarWidget;
 
 // Native base of the in-game HUD (W_MDHUD). Binds once to the local player's PlayerState (ASC + stamina) and keeps
 // plain cached values; the Blueprint child only lays out widgets and reacts to the events below. No game logic and no
@@ -97,6 +98,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|HUD")
 	UMDMapComponent* GetMapComponent() const { return BoundMap.Get(); }
 
+	// V1 WP6: the status chips (Bleed / Frost / Poison / Burn with stacks and seconds left) are a separate C++ widget (UMDStatusBarWidget) this
+	// HUD adds to the viewport when it binds, so no Blueprint layout is needed. Turn it off here (Blueprint child defaults) if the layout
+	// should place a UMDStatusBarWidget itself; the offset is from the bottom-left corner of the screen (negative Y = up).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze Demons|HUD|Status")
+	bool bShowStatusBar = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze Demons|HUD|Status")
+	FVector2D StatusBarOffset = FVector2D(24.0, -190.0);
+
+	// The status chip row this HUD created (null when disabled or not yet bound).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|HUD")
+	UMDStatusBarWidget* GetStatusBar() const { return StatusBar; }
+
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
@@ -179,6 +193,11 @@ private:
 	void HandleMapZoneChanged(AMDMapZone* Zone);
 	UFUNCTION()
 	void HandleLevelMapChanged(AMDLevelMap* LevelMap);
+
+	void CreateStatusBar(APlayerController* PC);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMDStatusBarWidget> StatusBar;
 
 	TWeakObjectPtr<UMDAbilitySystemComponent> BoundASC;
 	TWeakObjectPtr<UMDStaminaComponent> BoundStamina;

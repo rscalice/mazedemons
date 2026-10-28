@@ -15,6 +15,7 @@
 #include "MDGameplayStatics.h"
 #include "MDPlayerState.h"
 #include "MDPoiseComponent.h"
+#include "MDStatusEffectComponent.h"
 #include "MDUISettings.h"
 #include "AIController.h"
 #include "Components/CapsuleComponent.h"
@@ -65,6 +66,7 @@ AMDEnemyCharacter::AMDEnemyCharacter()
 
 	Poise = CreateDefaultSubobject<UMDPoiseComponent>(TEXT("Poise"));
 	Blink = CreateDefaultSubobject<UMDBlinkComponent>(TEXT("Blink"));
+	StatusEffects = CreateDefaultSubobject<UMDStatusEffectComponent>(TEXT("StatusEffects"));
 	Feedback = CreateDefaultSubobject<UMDCombatFeedbackComponent>(TEXT("Feedback"));
 	Targetable = CreateDefaultSubobject<UMDTargetableComponent>(TEXT("Targetable"));
 	AttackComponent = CreateDefaultSubobject<UMDEnemyAttackComponent>(TEXT("EnemyAttack"));

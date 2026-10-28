@@ -14,6 +14,7 @@
 #include "MDInventoryComponent.h"
 #include "MDPoiseComponent.h"
 #include "MDPoiseProfile.h"
+#include "MDStatusEffectComponent.h"
 #include "MDUISettings.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
@@ -105,6 +106,12 @@ bool UMDCombatStatics::ApplyMeleeHit(AActor* Attacker, AActor* Victim, const FHi
 	if (MDCombatDebug::ShouldDrawTraces())
 	{
 		DrawDebugSphere(Victim->GetWorld(), Context.ImpactPoint, 6.0f, 8, Damage.bCrit ? FColor::Yellow : FColor::Red, false, 0.5f);
+	}
+
+	// V1 WP6: the step's status effect (Bleed / Frost / Poison). Server authoritative; a dead victim gains nothing.
+	if (Step.OnHitStatus != EMDStatusType::None && !VictimASC->IsDead() && (Step.OnHitStatusChance >= 1.0f || FMath::FRand() < Step.OnHitStatusChance))
+	{
+		UMDStatusEffectComponent::ApplyStatusToActor(Victim, Step.OnHitStatus, Attacker);
 	}
 
 	// Poise and reaction.
@@ -241,9 +248,10 @@ bool UMDCombatStatics::ApplyTypedDamage(AActor* Instigator, AActor* Victim, floa
 		return false;
 	}
 	UMDAbilitySystemComponent* VictimASC = UMDGameplayStatics::GetMDAbilitySystemComponent(Victim);
-	const float HealthBefore = VictimASC->GetHealth();
-	VictimASC->ApplyDamage(Damage, Instigator, Instigator, false); // team rules, i-frames and kill credit; a tick never crits
-	const float Applied = HealthBefore - VictimASC->GetHealth();
+	// The DoT path: team rules, i-frames and kill credit as for a hit, but no crit, no Executioner and no armor / weapon wear.
+	FMDDamageResult Result;
+	VictimASC->ApplyDoTDamage(Damage, Instigator, DamageType, Result);
+	const float Applied = Result.Applied;
 	if (Applied <= 0.0f)
 	{
 		return false;

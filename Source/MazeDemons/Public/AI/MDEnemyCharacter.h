@@ -17,6 +17,7 @@ class UMDEnemyArchetype;
 class UMDEnemyAttackComponent;
 class UMDEnemyAttributeSet;
 class UMDPoiseComponent;
+class UMDStatusEffectComponent;
 class UMDTargetableComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
@@ -70,6 +71,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UMDBlinkComponent> Blink;
+
+	// V1 WP6: Bleed / Frost / Poison / Burn on this enemy (replicated; the WP8 health bars read it).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UMDStatusEffectComponent> StatusEffects;
 
 	// Inert on enemies (it acts for the local player's controller); present so enemy Blueprints can reuse its hit-flash and
 	// impact hooks.

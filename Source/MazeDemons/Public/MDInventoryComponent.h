@@ -462,6 +462,7 @@ private:
 	friend struct FMDUpgradeTestAccess;
 	friend struct FMDAmmoTestAccess; // R3 tests
 	friend struct FMDArmorTestAccess; // armor replication tests
+	friend struct FMDStatusTestAccess; // V1 WP6 status tests (DoT leaves durability alone)
 	// Debug exec commands (ListItemRows) read GetSlotForItem.
 	friend class AMDPlayerController;
 

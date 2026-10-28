@@ -21,6 +21,7 @@ struct FMDStaminaStepInput
 	float TimeSinceSpend = 0.0f; // seconds since stamina was last spent
 	bool bSprinting = false;
 	bool bExhausted = false;
+	bool bRegenBlocked = false; // V1 WP6: Poison stops regeneration (the sprint drain still applies)
 };
 
 struct FMDStaminaStepOutput
@@ -148,8 +149,18 @@ private:
 	bool IsPawnSprinting() const;
 	void SetExhausted(bool bNewExhausted);
 
-	// Stamina cost multiplier from the ASC attribute (1 without perks), clamped to the BALANCE floor.
+	// Stamina cost multiplier from the ASC attribute (1 without perks), clamped to the BALANCE floor, times the status drain scale
+	// (V1 WP6: Frost makes sprint, jump and vault cost 20% more).
 	float ScaleCost(float Cost) const;
+
+public:
+	// The sprint drain per second after perks and statuses (what the server tick uses). For tests and the debug overlay.
+	float GetEffectiveSprintDrain() const { return ScaleCost(SprintDrainPerSec); }
+
+	// True while a status (Poison) stops stamina regeneration.
+	bool IsRegenBlocked() const;
+
+private:
 
 	float RegenDelayReduction = 0.0f; // server only
 	double LastSpendTime = -1000.0;
