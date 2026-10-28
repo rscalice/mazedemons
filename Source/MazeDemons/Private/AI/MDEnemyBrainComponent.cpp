@@ -4,6 +4,8 @@
 #include "AI/MDEnemyArchetype.h"
 #include "AI/MDEnemyAttackComponent.h"
 #include "AI/MDEnemyCharacter.h"
+#include "AI/MDPackDirectorSubsystem.h"
+#include "AI/MDPackRules.h"
 #include "MDAbilitySystemComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDPoiseComponent.h"
@@ -91,6 +93,21 @@ void UMDEnemyBrainComponent::OnPossessed(APawn* InPawn)
 	{
 		EnemyId = Sub->RegisterBrain(this);
 	}
+
+	// Join the pack: level-placed enemies of one SpawnGroupId share a pack, the rest are packs of one.
+	Assignment = FMDEnemyAssignment();
+	RecentDamage.Reset();
+	OverrideTarget.Reset();
+	if (UMDPackDirectorSubsystem* Director = GetDirector())
+	{
+		const int32 PackId = Director->GetOrCreateGroupPack(NewEnemy->SpawnGroupId);
+		Director->RegisterEnemy(NewEnemy, PackId);
+	}
+}
+
+UMDPackDirectorSubsystem* UMDEnemyBrainComponent::GetDirector() const
+{
+	return UMDPackDirectorSubsystem::Get(GetWorld());
 }
 
 void UMDEnemyBrainComponent::OnUnpossessed()
@@ -115,6 +132,10 @@ void UMDEnemyBrainComponent::OnUnpossessed()
 			A->OnAttackEnded.RemoveAll(this);
 		}
 		bBound = false;
+	}
+	if (UMDPackDirectorSubsystem* Director = GetDirector())
+	{
+		Director->UnregisterEnemy(Enemy.Get()); // leaves the pack and returns the token
 	}
 	if (UMDAISubsystem* Sub = GetAISubsystem())
 	{
@@ -226,6 +247,31 @@ void UMDEnemyBrainComponent::HandleDamageApplied(AActor* Instigator, float Appli
 	if (Instigator && Applied > 0.0f)
 	{
 		ReportStimulus(Instigator, true, Instigator->GetActorLocation());
+
+		// The pack scores this player as a threat, and a player who hurts this enemy badly becomes its target whatever the
+		// pack's focus is (damage-taken override, 2.4).
+		if (UMDPackDirectorSubsystem* Director = GetDirector())
+		{
+			Director->ReportDamage(Enemy.Get(), Instigator, Applied);
+		}
+		const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		RecentDamage.RemoveAll([Now](const FDamageRecord& R) { return Now - R.Time > MDPack::DamageOverrideWindow || !R.Instigator.IsValid(); });
+		FDamageRecord& Record = RecentDamage.AddDefaulted_GetRef();
+		Record.Instigator = Instigator;
+		Record.Amount = Applied;
+		Record.Time = Now;
+		float FromInstigator = 0.0f;
+		for (const FDamageRecord& R : RecentDamage)
+		{
+			FromInstigator += R.Instigator.Get() == Instigator ? R.Amount : 0.0f;
+		}
+		const AMDEnemyCharacter* E = Enemy.Get();
+		const float MaxHealth = (E && E->AbilitySystem) ? E->AbilitySystem->GetMaxHealth() : 0.0f;
+		if (MaxHealth > 0.0f && FromInstigator >= MaxHealth * MDPack::DamageOverrideFraction)
+		{
+			OverrideTarget = Instigator;
+			OverrideUntil = Now + MDPack::DamageOverrideHold;
+		}
 	}
 }
 
@@ -263,7 +309,19 @@ void UMDEnemyBrainComponent::UpdateKnownActors(double Now)
 
 void UMDEnemyBrainComponent::UpdateTarget(double Now)
 {
-	// Sticky: keep the current target while it is still known (WP2's focus target replaces this rule).
+	// 1. Damage-taken override: the player who just hurt this enemy badly.
+	if (OverrideTarget.IsValid() && Now < OverrideUntil && Known.Contains(OverrideTarget))
+	{
+		Target = OverrideTarget;
+		return;
+	}
+	// 2. The pack's focus target, when this enemy knows it. Enemies that do not know it (T0 shares nothing) act alone.
+	if (Assignment.FocusTarget.IsValid() && Known.Contains(Assignment.FocusTarget))
+	{
+		Target = Assignment.FocusTarget;
+		return;
+	}
+	// 3. Sticky: keep the current target while it is still known.
 	if (Target.IsValid() && Known.Contains(Target))
 	{
 		return;
@@ -323,6 +381,11 @@ FMDBrainContext UMDEnemyBrainComponent::BuildContext(double Now) const
 	}
 	C.AttackRange = GetAttackRange();
 	C.ThreatRange = GetThreatRange();
+	C.Role = Assignment.Role;
+	C.PackState = Assignment.PackState;
+	C.bHasSlot = Assignment.bHasSlotPoint && T && Assignment.FocusTarget.Get() == T;
+	C.bHasRally = Assignment.bHasRally;
+	C.bAtRally = Assignment.bHasRally && E && FVector::Dist2D(E->GetActorLocation(), Assignment.RallyPoint) <= MDPack::RallyAcceptance;
 	C.RunSeed = Sub ? Sub->GetRunSeed() : 0;
 	C.EnemyId = EnemyId;
 	C.DecisionIndex = DecisionIndex;
@@ -337,8 +400,13 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 		return;
 	}
 
+	// A forced tier (md.AI.ForceTier) can change at any time; the tier gates what the scorer may pick.
+	Tier = UMDAISubsystem::ResolveTierParams();
+
+	ResolveAssignment(Assignment);
 	UpdateKnownActors(Now);
 	UpdateTarget(Now);
+	ReportToDirector();
 
 	// Interrupt hold: staggered until the stun ends (HandleStunChanged normally ends it; this is the safety net).
 	if (CurrentIntent == EMDIntent::Stagger && !bIntentFinished)
@@ -407,6 +475,13 @@ void UMDEnemyBrainComponent::SetIntent(EMDIntent Intent, bool bRestart)
 	if (AMDEnemyCharacter* E = Enemy.Get())
 	{
 		E->SetReplicatedIntent(Intent);
+		if (Intent == EMDIntent::Attack)
+		{
+			if (UMDAISubsystem* Sub = GetAISubsystem())
+			{
+				Sub->CommitAttackToken(E); // the swing is starting: a higher priority enemy can no longer take the token
+			}
+		}
 	}
 	OnIntentSelected.Broadcast(Intent, bRestart);
 }
@@ -494,10 +569,99 @@ void UMDEnemyBrainComponent::HandleDeath()
 		A->CancelAttack();
 	}
 	SetIntent(EMDIntent::Dead, true);
+	if (UMDPackDirectorSubsystem* Director = GetDirector())
+	{
+		Director->UnregisterEnemy(Enemy.Get()); // out of the pack at once: the survivors' retreat threshold counts the living
+	}
 	if (UMDAISubsystem* Sub = GetAISubsystem())
 	{
 		Sub->UnregisterBrain(this);
 	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Pack
+// ---------------------------------------------------------------------------------------------------------------------
+
+bool UMDEnemyBrainComponent::ResolveAssignment(FMDEnemyAssignment& Out) const
+{
+	const UMDPackDirectorSubsystem* Director = GetDirector();
+	if (Director && Enemy.IsValid() && Director->GetAssignment(Enemy.Get(), Out))
+	{
+		return true;
+	}
+	Out = FMDEnemyAssignment();
+	return false;
+}
+
+void UMDEnemyBrainComponent::ReportToDirector()
+{
+	UMDPackDirectorSubsystem* Director = GetDirector();
+	AMDEnemyCharacter* E = Enemy.Get();
+	if (!Director || !E)
+	{
+		return;
+	}
+	FMDMemberReport Report;
+	Report.Target = Target;
+	for (const TPair<TWeakObjectPtr<AActor>, FKnownActor>& Pair : Known)
+	{
+		Report.Known.Add(Pair.Key);
+	}
+	const FMDArchetypeAIParams& Params = GetAIParams();
+	for (const EMDRole Role : Params.AllowedRoles)
+	{
+		Report.AllowedMask |= MDPack::RoleBit(Role);
+	}
+	Report.PreferredRange = Params.PreferredRange;
+	Report.ThreatRange = Params.ThreatRange;
+	Report.AttackRange = GetAttackRange();
+	if (E->AbilitySystem && E->AbilitySystem->GetMaxHealth() > 0.0f)
+	{
+		Report.HealthFraction = FMath::Clamp(E->AbilitySystem->GetHealth() / E->AbilitySystem->GetMaxHealth(), 0.0f, 1.0f);
+	}
+	Report.bRecovering = Poise.IsValid() && Poise->IsStunned();
+	Director->ReportMember(E, Report);
+}
+
+bool UMDEnemyBrainComponent::GetSlotPoint(FVector& OutPoint) const
+{
+	FMDEnemyAssignment A;
+	if (!ResolveAssignment(A) || !A.bHasSlotPoint || A.FocusTarget.Get() != Target.Get() || !IsTargetSensed())
+	{
+		return false;
+	}
+	OutPoint = A.SlotPoint;
+	return true;
+}
+
+bool UMDEnemyBrainComponent::GetThreatPoint(FVector& OutPoint) const
+{
+	FMDEnemyAssignment A;
+	if (!ResolveAssignment(A) || !A.bHasSlotPoint || A.FocusTarget.Get() != Target.Get() || !IsTargetSensed())
+	{
+		return false;
+	}
+	OutPoint = A.ThreatPoint;
+	return true;
+}
+
+bool UMDEnemyBrainComponent::GetRallyPoint(FVector& OutPoint) const
+{
+	FMDEnemyAssignment A;
+	if (!ResolveAssignment(A) || !A.bHasRally)
+	{
+		return false;
+	}
+	OutPoint = A.RallyPoint;
+	return true;
+}
+
+bool UMDEnemyBrainComponent::IsAtRally() const
+{
+	FVector Rally;
+	const AMDEnemyCharacter* E = Enemy.Get();
+	return E && GetRallyPoint(Rally) && FVector::Dist2D(E->GetActorLocation(), Rally) <= MDPack::RallyAcceptance;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -518,6 +682,13 @@ void UMDEnemyBrainComponent::DrawDebug() const
 		CurrentIntent == EMDIntent::Attack && ChosenAttackIndex != INDEX_NONE && E->Archetype && E->Archetype->Attacks.IsValidIndex(ChosenAttackIndex)
 			? *FString::Printf(TEXT("(%s)"), *E->Archetype->Attacks[ChosenAttackIndex].Name.ToString()) : TEXT(""),
 		HoldsAttackToken() ? TEXT("YES") : TEXT("no"), static_cast<int32>(Tier.Tier));
+	{
+		// Pack line (V1 WP2): pack id, role, ring slot, pack state, and the pack's focus target.
+		const AActor* Focus = Assignment.FocusTarget.Get();
+		Text += FString::Printf(TEXT("\npack %d  %s  slot %s  %s  focus %s"), Assignment.PackId, *UEnum::GetValueAsString(Assignment.Role),
+			Assignment.Slot >= 0 ? *FString::FromInt(Assignment.Slot) : TEXT("-"), *UEnum::GetValueAsString(Assignment.PackState),
+			Focus ? *Focus->GetName() : TEXT("-"));
+	}
 	for (int32 i = 0; i < Sorted.Num() && i < 3; ++i)
 	{
 		Text += FString::Printf(TEXT("\n%s %.2f"), MDIntentToString(Sorted[i].Intent), Sorted[i].Score);

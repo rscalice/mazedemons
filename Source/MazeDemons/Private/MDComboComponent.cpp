@@ -6,6 +6,7 @@
 #include "MDInventoryComponent.h"
 #include "TimerManager.h"
 #include "MDPoiseComponent.h"
+#include "Ranged/MDRangedComponent.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -141,6 +142,11 @@ bool UMDComboComponent::IsGateOpen(EMDComboInput Input) const
 	const EMDAttackBlock Block = UMDGameplayStatics::EvaluateAttackGate(true, UMDGameplayStatics::IsPawnDead(Pawn), Pawn->IsLocallyControlled(),
 		UMDGameplayStatics::IsLocalMenuBlockingPawn(Pawn), true, UMDPoiseComponent::IsActorStunned(Pawn));
 	if (Block != EMDAttackBlock::None)
+	{
+		return false;
+	}
+	// R0: melee combo input is ignored while in ranged mode (the swap key flips back). Dodge stays available.
+	if ((Input == EMDComboInput::Light || Input == EMDComboInput::Heavy) && !FMDRangedRules::IsMeleeInputAllowed(UMDRangedComponent::IsActorInRangedMode(Pawn)))
 	{
 		return false;
 	}

@@ -6,6 +6,7 @@
 #include "MDInventoryTypes.generated.h"
 
 class UMDComboSet;
+class UMDRangedWeaponData;
 
 // Why a consumable use was refused (server decides, owning client shows a toast).
 UENUM(BlueprintType)
@@ -66,6 +67,10 @@ struct MAZEDEMONS_API FMDItemStatsRow : public FTableRowBase
 	// Empty = no dual set: the main-hand ComboSet is used as normal.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
 	TSoftObjectPtr<UMDComboSet> DualComboSet;
+
+	// R0: the gun's data (DA_Ranged_*). Set only on E_ItemTypes::Ranged rows; empty on every other item.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ranged")
+	TSoftObjectPtr<UMDRangedWeaponData> RangedData;
 };
 
 // Row of DT_ItemDisplay (same row names as DT_Items): player-facing text. Kept in C++ because S_ItemInfo cannot be edited via tools.
@@ -96,7 +101,55 @@ namespace MDItemType
 	constexpr uint8 Gold = 9;
 	constexpr uint8 Consumable = 10;
 	constexpr uint8 Material = 11;
-	constexpr uint8 NumEquipSlots = 9;
+	// R0: E_ItemTypes::Ranged (appended, ordinal 12). Its equip slot is RangedSlot, NOT 12, because the equip slot byte indexes
+	// the Equipped array and slot 9 is free there (Gold 9 is a currency row type, never an equip slot).
+	constexpr uint8 Ranged = 12;
+	constexpr uint8 RangedSlot = 9;
+	constexpr uint8 NumEquipSlots = 10;
+}
+
+// Paper-doll slots of the inventory panel (W_EquipmentSlotPreview): W_EquipmentSlot::EquipmentSlotIndex, and the key of
+// AC_Inventory::AttachedEquipmentInfo. AC_Inventory::DetermineEquipmentSlotIndex (Blueprint) maps an E_ItemTypes value to one of
+// these; this table is the single reference for it and is checked against the Blueprint by MazeDemons.Ranged.UI.DollMapping.
+// R0 bug: the Ranged equip slot byte 9 hit the unconnected Gold pin of that switch, so the gun reused the previous index (Boots).
+namespace MDDoll
+{
+	constexpr uint8 MainHand = 0;
+	constexpr uint8 OffHand = 1;
+	constexpr uint8 Helmet = 2;
+	constexpr uint8 Chest = 3;
+	constexpr uint8 Gloves = 4;
+	constexpr uint8 Legs = 5;
+	constexpr uint8 Boots = 6;
+	constexpr uint8 Ranged = 7;
+	constexpr uint8 NumSlots = 8;
+	constexpr uint8 None = 255;
+
+	// Doll slot of an EQUIP SLOT byte (FMDEquippedSlot::Slot). Two-handers show in the main-hand box, shields in the off-hand box.
+	constexpr uint8 IndexForEquipSlot(uint8 EquipSlot)
+	{
+		switch (EquipSlot)
+		{
+		case MDItemType::MainHand:
+		case MDItemType::TwoHanded: return MainHand;
+		case MDItemType::OffHand:
+		case MDItemType::Shield: return OffHand;
+		case MDItemType::Helmet: return Helmet;
+		case MDItemType::Chest: return Chest;
+		case MDItemType::Gloves: return Gloves;
+		case MDItemType::Legs: return Legs;
+		case MDItemType::Boots: return Boots;
+		case MDItemType::RangedSlot: return Ranged;
+		default: return None;
+		}
+	}
+
+	// Doll slot of an E_ItemTypes value (the item's own type, before slot resolution). Gold / Consumable / Material have none.
+	constexpr uint8 IndexForItemType(uint8 ItemType)
+	{
+		return ItemType == MDItemType::Ranged ? Ranged
+			: (ItemType < MDItemType::Gold ? IndexForEquipSlot(ItemType) : None);
+	}
 }
 
 // Durability value for an item without durability.

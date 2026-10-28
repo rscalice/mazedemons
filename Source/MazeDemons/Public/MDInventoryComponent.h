@@ -153,6 +153,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
 	UMDComboSet* GetItemDualComboSet(FName ItemRowName) const;
 
+	// R0: DT_ItemStats.RangedData of a gun row (loads it; null for anything that is not a gun).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Inventory")
+	UMDRangedWeaponData* GetItemRangedData(FName ItemRowName) const;
+
+	// R0: row name of the item equipped in the Ranged slot (NAME_None when empty) and its data asset (null when empty).
+	FName GetEquippedRangedRow() const;
+	UMDRangedWeaponData* GetEquippedRangedData() const;
+
+	// R0: true when a MainHand / OffHand / TwoHanded item is equipped (Shield alone does not count as a melee weapon).
+	bool HasMeleeWeaponEquipped() const;
+
 	// C1: the combo set for what is equipped right now (reads the Equipped array, so call it after the array changed).
 	// Two-hander: its ComboSet. Main hand + off hand whose rows share the same non-empty DualComboSet: that dual set.
 	// Otherwise the main hand's ComboSet. Null = old DoLightAttack path. Call on every machine that plays montages.

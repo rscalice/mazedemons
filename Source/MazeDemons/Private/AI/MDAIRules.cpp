@@ -11,6 +11,8 @@ FGameplayTag MDIntentToTag(EMDIntent Intent)
 	case EMDIntent::Chase: return TAG_AI_Intent_Chase.GetTag();
 	case EMDIntent::HoldThreat: return TAG_AI_Intent_HoldThreat.GetTag();
 	case EMDIntent::Attack: return TAG_AI_Intent_Attack.GetTag();
+	case EMDIntent::Retreat: return TAG_AI_Intent_Retreat.GetTag();
+	case EMDIntent::Regroup: return TAG_AI_Intent_Regroup.GetTag();
 	case EMDIntent::Stagger: return TAG_AI_Intent_Stagger.GetTag();
 	case EMDIntent::Dead: return TAG_AI_Intent_Dead.GetTag();
 	default: return FGameplayTag();
@@ -118,7 +120,8 @@ bool FMDTierParams::IsIntentUnlocked(EMDIntent Intent) const
 namespace MDScorerLocal
 {
 	// Scoring slots, in a fixed order so the noise draw per intent is stable.
-	constexpr EMDIntent Scored[] = { EMDIntent::Idle, EMDIntent::Chase, EMDIntent::HoldThreat, EMDIntent::Attack };
+	// New intents are appended so the noise draw of the existing ones stays the same.
+	constexpr EMDIntent Scored[] = { EMDIntent::Idle, EMDIntent::Chase, EMDIntent::HoldThreat, EMDIntent::Attack, EMDIntent::Retreat, EMDIntent::Regroup };
 	constexpr int32 NumScored = UE_ARRAY_COUNT(Scored);
 
 	float Base(EMDIntent Intent, const FMDBrainContext& C, const FMDTierParams& Tier)
@@ -164,6 +167,14 @@ namespace MDScorerLocal
 				return 0.0f;
 			}
 			return 0.45f + 0.5f * Tier.Aggression; // T0 0.75, T4 1.05
+
+		// The pack is retreating (pack state Regroup, T2+ via the tier gate): run to the rally point, then wait there. Both
+		// outrank everything that is not already committed (an attack in progress is never re-scored).
+		case EMDIntent::Retreat:
+			return (C.PackState == EMDPackState::Regroup && C.bHasRally && !C.bAtRally) ? 1.3f : 0.0f;
+
+		case EMDIntent::Regroup:
+			return (C.PackState == EMDPackState::Regroup && C.bHasRally && C.bAtRally) ? 1.3f : 0.0f;
 
 		default:
 			return 0.0f;
@@ -393,4 +404,26 @@ float MDEnemyAttackRules::WindupRate(float TraceWindowStart, float TellTime, flo
 		return 1.0f;
 	}
 	return FMath::Clamp(TraceWindowStart / TellTime, FMath::Clamp(MinRate, 0.05f, 1.0f), 1.0f);
+}
+
+bool MDEnemyAttackRules::OwnsAttackMovement(ENetRole LocalRole)
+{
+	// Enemies are server-owned pawns: the authority is the only machine whose movement component may consume root motion.
+	// (An autonomous proxy would predict its own; enemies never are one.)
+	return LocalRole == ROLE_Authority;
+}
+
+ERootMotionMode::Type MDEnemyAttackRules::RootMotionModeFor(ENetRole LocalRole)
+{
+	return OwnsAttackMovement(LocalRole) ? ERootMotionMode::RootMotionFromMontagesOnly : ERootMotionMode::IgnoreRootMotion;
+}
+
+FRotator MDEnemyAttackRules::FacingRotation(float TargetYaw)
+{
+	return FRotator(0.0, FRotator::NormalizeAxis(TargetYaw), 0.0);
+}
+
+bool MDEnemyAttackRules::IsTilted(const FRotator& Rotation, float ToleranceDegrees)
+{
+	return FMath::Abs(FRotator::NormalizeAxis(Rotation.Pitch)) > ToleranceDegrees || FMath::Abs(FRotator::NormalizeAxis(Rotation.Roll)) > ToleranceDegrees;
 }

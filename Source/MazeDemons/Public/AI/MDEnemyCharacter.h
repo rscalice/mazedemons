@@ -109,9 +109,20 @@ public:
 	void FaceTarget(AActor* Target);
 	bool IsFacingTarget() const { return bFacingTarget; }
 
+	// Level-placed enemies with the same non-empty SpawnGroupId form one pack (V1 WP2) and share a retreat threshold. Empty =
+	// a loose enemy (a pack of one). Spawners that know their group call UMDPackDirectorSubsystem::RegisterSpawnGroup instead.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy|AI")
+	FName SpawnGroupId;
+
 	// Seconds the corpse stays before it is destroyed (server). 0 or less keeps it.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy", meta = (ClampMin = "0"))
 	float CorpseLifetime = 15.0f;
+
+	// Collision rules shared by every enemy, on the capsule and the mesh: Visibility BLOCKS (the weapon sweeps, the interact
+	// and aim traces) and Camera IGNORES (the player's camera probe must pass through enemies, or the view collapses into
+	// the player's shoulder whenever an enemy stands close). Called from the constructor and again from PostInitializeComponents
+	// because a Blueprint subclass serializes its own collision settings over the constructor's.
+	void ApplyCollisionResponses();
 
 protected:
 	virtual void PostInitializeComponents() override;

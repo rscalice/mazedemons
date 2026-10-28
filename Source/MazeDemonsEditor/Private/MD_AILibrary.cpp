@@ -128,6 +128,8 @@ bool UMD_AILibrary::BuildEnemyStateTree(const FString& PackagePath, TArray<FStri
 	UStateTreeState& Idle = AddLeaf(TEXT("Idle"), MDIntentToTag(EMDIntent::Idle), TEXT("No target: stand still."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyIdle>(); });
 	AddLeaf(TEXT("Chase"), MDIntentToTag(EMDIntent::Chase), TEXT("Move on the navmesh to the brain's target (last known position when out of sight)."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyChase>(); });
 	AddLeaf(TEXT("HoldThreat"), MDIntentToTag(EMDIntent::HoldThreat), TEXT("No attack token: hold the archetype's threat range, facing the target."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyHoldThreat>(); });
+	AddLeaf(TEXT("Retreat"), MDIntentToTag(EMDIntent::Retreat), TEXT("The pack is regrouping (T2+): run to the rally point the pack director picked."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyRetreat>(); });
+	AddLeaf(TEXT("Regroup"), MDIntentToTag(EMDIntent::Regroup), TEXT("At the rally point: wait until the regroup ends, then the brain chases again."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyRegroup>(); });
 	AddLeaf(TEXT("Attack"), MDIntentToTag(EMDIntent::Attack), TEXT("Play the chosen attack montage (motion warp to the target, claw trace window). The montage end returns control to the brain."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyAttack>(); });
 	AddLeaf(TEXT("Stagger"), MDIntentToTag(EMDIntent::Stagger), TEXT("Poise broke: stop until the stun ends (interrupt, token returned)."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyStagger>(); });
 	AddLeaf(TEXT("Dead"), MDIntentToTag(EMDIntent::Dead), TEXT("Dead: stop; the character ragdolls and detaches its controller."), [](UStateTreeState& S) { S.AddTask<FMDST_EnemyDead>(); });

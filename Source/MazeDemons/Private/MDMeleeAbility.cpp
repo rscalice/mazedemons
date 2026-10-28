@@ -6,6 +6,7 @@
 #include "MDComboComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDPoiseComponent.h"
+#include "Ranged/MDRangedComponent.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
 
@@ -66,7 +67,8 @@ bool UMDMeleeAbility::CanActivateAbility(const FGameplayAbilitySpecHandle Handle
 	const EMDAttackBlock Block = UMDGameplayStatics::EvaluateAttackGate(Pawn != nullptr, UMDGameplayStatics::IsPawnDead(Pawn),
 		Pawn && Pawn->IsLocallyControlled(), UMDGameplayStatics::IsLocalMenuBlockingPawn(Pawn), bHasCombat,
 		UMDPoiseComponent::IsActorStunned(Pawn));
-	return Block == EMDAttackBlock::None;
+	// R0: melee input is ignored while in ranged mode.
+	return Block == EMDAttackBlock::None && FMDRangedRules::IsMeleeInputAllowed(UMDRangedComponent::IsActorInRangedMode(Pawn));
 }
 
 void UMDMeleeAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,

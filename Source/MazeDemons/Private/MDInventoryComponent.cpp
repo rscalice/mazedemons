@@ -10,6 +10,7 @@
 #include "MDGameSettings.h"
 #include "MDPerkComponent.h"
 #include "MDPlayerController.h"
+#include "Ranged/MDRangedWeaponData.h"
 #include "MDStation.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/Actor.h"
@@ -635,6 +636,29 @@ UMDComboSet* UMDInventoryComponent::GetItemComboSet(FName ItemRowName) const
 	return Stats ? Stats->ComboSet.LoadSynchronous() : nullptr;
 }
 
+UMDRangedWeaponData* UMDInventoryComponent::GetItemRangedData(FName ItemRowName) const
+{
+	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
+	return Stats ? Stats->RangedData.LoadSynchronous() : nullptr;
+}
+
+FName UMDInventoryComponent::GetEquippedRangedRow() const
+{
+	const FMDEquippedSlot* Entry = FindEquippedSlot(MDItemType::RangedSlot);
+	return Entry ? Entry->ItemRowName : NAME_None;
+}
+
+UMDRangedWeaponData* UMDInventoryComponent::GetEquippedRangedData() const
+{
+	const FName Row = GetEquippedRangedRow();
+	return Row.IsNone() ? nullptr : GetItemRangedData(Row);
+}
+
+bool UMDInventoryComponent::HasMeleeWeaponEquipped() const
+{
+	return FindEquippedSlot(MDItemType::MainHand) || FindEquippedSlot(MDItemType::OffHand) || FindEquippedSlot(MDItemType::TwoHanded);
+}
+
 UMDComboSet* UMDInventoryComponent::GetItemDualComboSet(FName ItemRowName) const
 {
 	const FMDItemStatsRow* Stats = FindItemStats(ItemRowName);
@@ -668,6 +692,10 @@ TArray<uint8> UMDInventoryComponent::GetConflictingSlots(uint8 Slot)
 uint8 UMDInventoryComponent::GetEquipDestinationSlot(FName ItemRowName) const
 {
 	const uint8 Natural = GetSlotForItem(ItemRowName);
+	if (Natural == MDItemType::Ranged)
+	{
+		return MDItemType::RangedSlot; // R0: E_ItemTypes::Ranged equips into slot 9 (conflicts with nothing)
+	}
 	if (Natural != MDItemType::MainHand)
 	{
 		return Natural;
@@ -1021,7 +1049,7 @@ void UMDInventoryComponent::Server_EquipItem_Implementation(int32 Index)
 
 bool UMDInventoryComponent::Server_UnequipSlot_Validate(uint8 Slot)
 {
-	return Slot < GoldSlot;
+	return Slot < MDItemType::NumEquipSlots;
 }
 
 void UMDInventoryComponent::Server_UnequipSlot_Implementation(uint8 Slot)
@@ -1053,9 +1081,9 @@ void UMDInventoryComponent::EquipItem_Impl(int32 Index)
 		return;
 	}
 	const uint8 Slot = GetEquipDestinationSlot(NewRow); // dual wield: a 2nd matching sword goes to the off hand
-	if (Slot >= GoldSlot)
+	if (Slot >= MDItemType::NumEquipSlots || GetSlotForItem(NewRow) == GoldSlot)
 	{
-		return;
+		return; // Gold (type 9 shares the number of the Ranged slot) / Consumable / Material / unknown never equip
 	}
 
 	// Two-handed exclusivity: gather the equipped items that conflict with the destination slot and make sure the bag can

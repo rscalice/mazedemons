@@ -63,7 +63,8 @@ struct MAZEDEMONS_API FMDST_EnemyIdle : public FMDSTEnemyTaskBase
 #endif
 };
 
-// Chase: move on the navmesh to the brain's target (its last known position when it is out of sight).
+// Chase: move on the navmesh to the brain's ring slot around the target (V1 WP2), else to the target itself (its last known
+// position when it is out of sight).
 USTRUCT(meta = (DisplayName = "MD Enemy Chase", Category = "MazeDemons"))
 struct MAZEDEMONS_API FMDST_EnemyChase : public FMDSTEnemyTaskBase
 {
@@ -85,7 +86,8 @@ private:
 	void IssueMove(AMDEnemyController& Controller, FInstanceDataType& Data, double Now) const;
 };
 
-// HoldThreat: no token -> keep the archetype's ThreatRange to the target, facing it (approach and threaten, never swing).
+// HoldThreat: no token -> stand on the threat ring point of the brain's slot (4-6 m from the target, V1 WP2), else keep the
+// archetype's ThreatRange to the target, facing it (approach and threaten, never swing).
 USTRUCT(meta = (DisplayName = "MD Enemy Hold Threat", Category = "MazeDemons"))
 struct MAZEDEMONS_API FMDST_EnemyHoldThreat : public FMDSTEnemyTaskBase
 {
@@ -109,6 +111,43 @@ struct MAZEDEMONS_API FMDST_EnemyHoldThreat : public FMDSTEnemyTaskBase
 	// Pure rule: where to stand given the target, the enemy and the range (on the target->enemy line at Range), or no move
 	// when within Tolerance. Returns false when no move is needed.
 	static bool ComputeHoldPoint(const FVector& TargetLocation, const FVector& EnemyLocation, float Range, float Tolerance, FVector& OutPoint);
+};
+
+// Retreat (V1 WP2, minimal): the pack is regrouping; run to the rally point the pack director picked. The brain switches to
+// Regroup once the enemy is within reach of it.
+USTRUCT(meta = (DisplayName = "MD Enemy Retreat", Category = "MazeDemons"))
+struct MAZEDEMONS_API FMDST_EnemyRetreat : public FMDSTEnemyTaskBase
+{
+	GENERATED_BODY()
+
+	FMDST_EnemyRetreat();
+	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+	virtual EStateTreeRunStatus Tick(FStateTreeExecutionContext& Context, const float DeltaTime) const override;
+	virtual void ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+#if WITH_EDITOR
+	virtual FText GetDescription(const FGuid& ID, FStateTreeDataView InstanceDataView, const IStateTreeBindingLookup& BindingLookup, EStateTreeNodeFormatting Formatting = EStateTreeNodeFormatting::Text) const override;
+#endif
+
+	UPROPERTY(EditAnywhere, Category = "Retreat", meta = (ClampMin = "0.05"))
+	float UpdateInterval = 0.4f;
+
+	// Stop this far (cm) from the rally point; the brain counts arrival a little further out so a crowd fits.
+	UPROPERTY(EditAnywhere, Category = "Retreat", meta = (ClampMin = "0"))
+	float Acceptance = 250.0f;
+};
+
+// Regroup (V1 WP2, minimal): wait at the rally point, facing the pack's target, until the pack director ends the regroup
+// (the pack state goes back to Engage and the brain scores Chase again).
+USTRUCT(meta = (DisplayName = "MD Enemy Regroup", Category = "MazeDemons"))
+struct MAZEDEMONS_API FMDST_EnemyRegroup : public FMDSTEnemyTaskBase
+{
+	GENERATED_BODY()
+
+	FMDST_EnemyRegroup();
+	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+#if WITH_EDITOR
+	virtual FText GetDescription(const FGuid& ID, FStateTreeDataView InstanceDataView, const IStateTreeBindingLookup& BindingLookup, EStateTreeNodeFormatting Formatting = EStateTreeNodeFormatting::Text) const override;
+#endif
 };
 
 // Attack: play the brain's chosen attack at its target through the attack component; the montage end tells the brain.

@@ -8,6 +8,7 @@
 #include "MDInventoryComponent.h"
 #include "MDPhysicalHitReactComponent.h"
 #include "MDPerkComponent.h"
+#include "Ranged/MDRangedComponent.h"
 #include "MDRagdollTuning.h"
 #include "MDStaminaComponent.h"
 #include "GameFramework/Pawn.h"
@@ -49,6 +50,8 @@ AMDPlayerState::AMDPlayerState()
 	StaminaComponent = CreateDefaultSubobject<UMDStaminaComponent>(TEXT("StaminaComponent"));
 
 	PerkComponent = CreateDefaultSubobject<UMDPerkComponent>(TEXT("PerkComponent"));
+
+	RangedComponent = CreateDefaultSubobject<UMDRangedComponent>(TEXT("RangedComponent"));
 
 	SetNetUpdateFrequency(100.0f);
 }

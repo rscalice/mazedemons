@@ -5,8 +5,8 @@ import unreal, traceback, math
 #      (its 79 bones are a strict subset of the 161 of SK_Mannequin), physics asset PA_Ghoul_UE5
 #   3. Locomotion anims retargeted from the Fab Manny demo (MM_Idle / MM_Walk_Fwd / MM_Run_Fwd) onto SK_Ghoul
 #   4. BS_Ghoul_Locomotion (1D blend space on Speed)
-#   5. Attack montages (Swipe, Lunge) chosen from the project's Manny attack anims by their root motion travel,
-#      with MD Weapon Trace + Motion Warping windows placed from the hand speed peak
+#   5. Attack montages (Swipe, Lunge) from the Werewolf claw clip retargeted by ghoulclaw.py (run it before this script),
+#      with MD Weapon Trace + Motion Warping windows (WINDOWS below)
 #   6. DA_Archetype_Ghoul.Attacks filled; BP_Enemy_Ghoul mesh swapped
 # Report: Saved/ClaudeDump/ghoulassets.txt
 out = r"C:/Users/Robert Scalice/Documents/Unreal Projects/mazedemons/Saved/ClaudeDump/ghoulassets.txt"
@@ -178,23 +178,16 @@ def s_abp():
 abp = sec("AnimBlueprint", s_abp)
 
 # ---------------------------------------------------------------- 5. Attack analysis + montages
+# Attack sources: the Werewolf claw attack retargeted by ghoulclaw.py (run that first), with a baked step-in / leap on the
+# root bone. The earlier picks (twin-axe ComboA1 = a 360 degree spin, twin-sword Attack48 = a flipping jump) read as a
+# human swordsman and went upside down; the project has no other creature melee clips.
 CANDIDATES = [
-    "/Game/Animations/WeaponStances/DynamicTwinAxe/Animations/Manny_UE5/RootMotion/ComboAttack/Anim_DTA_ComboA1_RM",
-    "/Game/Animations/WeaponStances/DynamicTwinAxe/Animations/Manny_UE5/RootMotion/ComboAttack/Anim_DTA_ComboA2_RM",
-    "/Game/Animations/WeaponStances/DynamicTwinAxe/Animations/Manny_UE5/RootMotion/ComboAttack/Anim_DTA_ComboA3_RM",
-    "/Game/Animations/WeaponStances/DynamicTwinAxe/Animations/Manny_UE5/RootMotion/ComboAttack/Anim_DTA_ComboB1_RM",
-    "/Game/Animations/WeaponStances/DynamicTwinAxe/Animations/Manny_UE5/RootMotion/ComboAttack/Anim_DTA_ComboC1_RM",
-    "/Game/Animations/WeaponStances/DynamicTwinAxe/Animations/Manny_UE5/RootMotion/ComboAttack/Anim_DTA_ComboD_RM",
-    "/Game/Animations/WeaponStances/DynamicSwordShieldV3/Animations/Manny_UE5/RootMotion/Attack/Anim_DSS3_Combo_A1_RM",
-    "/Game/Animations/WeaponStances/DynamicSwordShieldV3/Animations/Manny_UE5/RootMotion/Attack/Anim_DSS3_Combo_B1_RM",
-    "/Game/Animations/WeaponStances/DynamicSwordShieldV3/Animations/Manny_UE5/RootMotion/Attack/Anim_DSS3_Combo_C1_RM",
-    "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack14",
-    "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack16",
-    "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack46",
-    "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack48",
-    "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack_Start_2",
-    "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack_Start_4",
+    "/Game/Animations/Enemies/Ghoul/A_Ghoul_Swipe_RM",
+    "/Game/Animations/Enemies/Ghoul/A_Ghoul_Lunge_RM",
 ]
+# Trace window per source (clip time, before the wind-up rate scaling); both claws trace.
+WINDOWS = {"A_Ghoul_Swipe_RM": (0.50, 0.98), "A_Ghoul_Lunge_RM": (0.60, 1.05)}
+
 def analyze(anim):
     """Returns dict: len, travel (root motion cm), hand peak time/speed per hand."""
     length = anim.get_play_length()
@@ -255,11 +248,10 @@ analysis = sec("Analyze", s_analyze) or []
 open(out, "w").write("\n".join(L))
 
 # ---------------------------------------------------------------- 5b. Pick attacks and build montages
-SWIPE_OVERRIDE = None   # asset path to force
-# Attack46 (auto pick) strikes at 0.15 s: even at the 0.25x wind-up floor its tell is only 0.6 s < 0.9 s.
-# Attack48 strikes at 0.45 s (window 0.33 s -> 0.37x rate reaches the 0.9 s tell) and travels 509 cm, a real lunge.
-LUNGE_OVERRIDE = "/Game/Animations/WeaponStances/TwinSwordExpansion/Attacks/RM/UE5_TwinSword_Attack48"
+SWIPE_OVERRIDE = "/Game/Animations/Enemies/Ghoul/A_Ghoul_Swipe_RM"
+LUNGE_OVERRIDE = "/Game/Animations/Enemies/Ghoul/A_Ghoul_Lunge_RM"
 WARP_TARGET = "AttackTarget"
+WARP_END = {"A_Ghoul_Swipe_RM": 0.80, "A_Ghoul_Lunge_RM": 0.85}  # clip seconds; travel ends at 0.85 / 0.90
 
 def pick_attacks(rows):
     def dist(d): return math.sqrt(d["travel"].x ** 2 + d["travel"].y ** 2)
@@ -275,7 +267,7 @@ def pick_attacks(rows):
         lunge = c[0][0] if c else None
     return swipe, lunge
 
-def window_for(d):
+def window_for(d, name=None):
     hr, hl = d["hands"]["hand_r"], d["hands"]["hand_l"]
     peak = hr if hr[1] >= hl[1] else hl
     start = max(0.15, peak[0] - 0.12)
@@ -285,6 +277,9 @@ def window_for(d):
     top = max(hr[1], hl[1])
     if hr[1] >= 0.6 * top: sockets.append("hand_r")
     if hl[1] >= 0.6 * top: sockets.append("hand_l")
+    if name in WINDOWS:
+        start, end = WINDOWS[name]
+        sockets = ["hand_r", "hand_l"]
     return start, end, sockets
 
 def make_modifier(state):
@@ -299,7 +294,10 @@ def make_modifier(state):
             for n in names:
                 try: obj.set_editor_property(n, val); break
                 except Exception: continue
-        try: obj.set_editor_property("rotation_type", unreal.MotionWarpRotationType.FACING)
+        # DEFAULT: turn to the warp target's rotation, which the attack component sets to the facing yaw at swing start.
+        # FACING recomputes a yaw from the attacker's own position every tick and degenerates (any flip) once the skew warp
+        # has put the capsule on the warp point. (ghoulwarp.py re-applies this to the existing montages.)
+        try: obj.set_editor_property("rotation_type", unreal.MotionWarpRotationType.DEFAULT)
         except Exception: pass
         state.set_editor_property(prop, obj)
         return prop
@@ -346,7 +344,7 @@ def build_montage(name, src_path, d):
         mode = unreal.MontageBlendMode.INERTIALIZATION
         m.set_editor_property('blend_mode_in', mode); m.set_editor_property('blend_mode_out', mode)
     except Exception: pass
-    start, end, sockets = window_for(d)
+    start, end, sockets = window_for(d, src.get_name())
     for nm in ("MD Weapon Trace", "AnimNotifyState_MotionWarping", "MotionWarping"):
         try: lib.remove_animation_notify_events_by_name(m, nm)
         except Exception: pass
@@ -363,6 +361,10 @@ def build_montage(name, src_path, d):
     # window: the claws reach the warp point while they are live; the authored follow-through after that (printed
     # below) only presses against the target's capsule, as the player's own warped combos do.
     warp_end = min(d["len"] - 0.05, end)
+    # The baked claw clips finish their travel (ghoulclaw.py VARIANTS) well before the trace window ends. A skew warp that
+    # keeps running after the enemy has reached the warp point faces a zero-length direction and can flip the actor 180
+    # degrees, so the window stops just before the authored travel does (the last few cm play unwarped).
+    warp_end = min(warp_end, WARP_END.get(src.get_name(), warp_end))
     follow_through = travel_after(d, warp_end)
     warp_cls = unreal.load_class(None, "/Script/MotionWarping.AnimNotifyState_MotionWarping")
     wv = lib.add_animation_notify_state_event(m, "Warp", 0.0, warp_end, warp_cls)
@@ -388,7 +390,7 @@ montages = sec("Montages", s_montages) or {}
 def s_archetype():
     da = unreal.load_asset("/Game/Data/Enemies/DA_Archetype_Ghoul")
     attacks = []
-    specs = [("Swipe", "AM_Ghoul_Swipe", 220.0, 0.8, 0.8, 1.0, 15.0, 0.0, 250.0),
+    specs = [("Swipe", "AM_Ghoul_Swipe", 170.0, 0.8, 0.8, 1.0, 15.0, 0.0, 180.0),
              ("Lunge", "AM_Ghoul_Lunge", 450.0, 0.9, 1.5, 1.3, 25.0, 350.0, 520.0)]
     for nm, mn, rng, tell, cd, dmg, poise, kb, warp in specs:
         if mn not in montages: continue
@@ -413,6 +415,10 @@ def s_archetype():
     P("  attacks now: %s" % [(str(x.name), x.montage.get_name() if x.montage else None, x.range, [str(s) for s in x.trace_sockets]) for x in da.get_editor_property('attacks')])
 sec("Archetype", s_archetype)
 
+# ECollisionResponse is exposed as unreal.CollisionResponseType
+CR_IGNORE = unreal.CollisionResponseType.ECR_IGNORE
+CR_BLOCK = unreal.CollisionResponseType.ECR_BLOCK
+
 def s_blueprint():
     bp = unreal.load_asset("/Game/Blueprints/Enemies/BP_Enemy_Ghoul")
     cdo = unreal.get_default_object(bp.generated_class())
@@ -431,11 +437,19 @@ def s_blueprint():
             ad.set_editor_property('anim_to_play', idle)
             mesh.set_editor_property('animation_data', ad)
         P("  ABP_Ghoul not built yet: single-node A_Ghoul_Idle for now")
+    # The BP's serialized collision (profile Custom, everything blocking) overrides the C++ constructor, so the camera
+    # channel is cleared on the BP's components as well: the player's camera probe must pass through enemies. Visibility
+    # stays blocking for the weapon sweeps. (AMDEnemyCharacter::PostInitializeComponents enforces the same at runtime.)
+    for comp in (cdo.get_editor_property('capsule_component'), cdo.get_editor_property('mesh')):
+        comp.set_collision_response_to_channel(unreal.CollisionChannel.ECC_CAMERA, CR_IGNORE)
+        comp.set_collision_response_to_channel(unreal.CollisionChannel.ECC_VISIBILITY, CR_BLOCK)
     bp.modify()
     unreal.BlueprintEditorLibrary.compile_blueprint(bp)
     save("/Game/Blueprints/Enemies/BP_Enemy_Ghoul")
     cdo = unreal.get_default_object(unreal.load_asset("/Game/Blueprints/Enemies/BP_Enemy_Ghoul").generated_class())
     P("  BP mesh now: %s" % cdo.get_editor_property('mesh').skeletal_mesh_asset.get_path_name())
+    for comp in (cdo.get_editor_property('capsule_component'), cdo.get_editor_property('mesh')):
+        P("  %s: Camera %s, Visibility %s" % (comp.get_name(), comp.get_collision_response_to_channel(unreal.CollisionChannel.ECC_CAMERA), comp.get_collision_response_to_channel(unreal.CollisionChannel.ECC_VISIBILITY)))
 sec("Blueprint", s_blueprint)
 
 open(out, "w").write("\n".join(L))

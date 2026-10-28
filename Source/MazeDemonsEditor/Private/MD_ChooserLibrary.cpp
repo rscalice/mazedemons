@@ -317,6 +317,49 @@ bool UMD_ChooserLibrary::SetEnumCellMask(UChooserTable* Table, int32 ColumnIndex
 	return false;
 }
 
+UObject* UMD_ChooserLibrary::GetRowObject(UChooserTable* Table, int32 RowIndex)
+{
+	return MD_ChooserLib::RowObject(Table, RowIndex);
+}
+
+bool UMD_ChooserLibrary::RemoveRow(UChooserTable* Table, int32 RowIndex)
+{
+	using namespace MD_ChooserLib;
+	if (!Table || !Table->ResultsStructs.IsValidIndex(RowIndex)) { return false; }
+	Touch(Table);
+	for (int32 c = 0; c < Table->ColumnsStructs.Num(); ++c)
+	{
+		if (FChooserColumnBase* Col = ColumnAt(Table, c))
+		{
+			int RowToDelete = RowIndex;
+			Col->DeleteRows(TArrayView<int>(&RowToDelete, 1));
+		}
+	}
+	Table->ResultsStructs.RemoveAt(RowIndex);
+	if (Table->DisabledRows.IsValidIndex(RowIndex)) { Table->DisabledRows.RemoveAt(RowIndex); }
+	return true;
+}
+
+int32 UMD_ChooserLibrary::GetEnumCellMask(UChooserTable* Table, int32 ColumnIndex, int32 RowIndex)
+{
+	using namespace MD_ChooserLib;
+	if (!ColumnAt(Table, ColumnIndex)) { return INDEX_NONE; }
+	uint8* Memory = Table->ColumnsStructs[ColumnIndex].GetMutableMemory();
+	if (IsMultiEnumColumn(Table, ColumnIndex))
+	{
+		FMultiEnumColumn* M = reinterpret_cast<FMultiEnumColumn*>(Memory);
+		return M->RowValues.IsValidIndex(RowIndex) ? static_cast<int32>(M->RowValues[RowIndex].Value) : INDEX_NONE;
+	}
+	if (IsEnumColumn(Table, ColumnIndex))
+	{
+		FEnumColumn* E = reinterpret_cast<FEnumColumn*>(Memory);
+		if (!E->RowValues.IsValidIndex(RowIndex)) { return INDEX_NONE; }
+		const FChooserEnumRowData& Cell = E->RowValues[RowIndex];
+		return Cell.Comparison == EEnumColumnCellValueComparison::MatchAny ? 0 : (1 << Cell.Value);
+	}
+	return INDEX_NONE;
+}
+
 bool UMD_ChooserLibrary::SetRowStance(UChooserTable* Table, int32 RowIndex, FName BoundPropertyName, int32 StanceMask)
 {
 	const int32 Col = FindColumnByBinding(Table, BoundPropertyName);

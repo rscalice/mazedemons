@@ -21,6 +21,8 @@
 #include "MDPoiseComponent.h"
 
 #include "Animation/AnimMontage.h"
+#include "AnimNotifyState_MotionWarping.h"
+#include "RootMotionModifier.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
@@ -188,7 +190,7 @@ bool FMDAIBrainScorerDeterministicForSeedTest::RunTest(const FString& Parameters
 	const FMDBrainContext Far = MakeContext(900.0f, false);
 	const MDAI::FScores A = FMDUtilityScorer::Score(Far, Params, T0);
 	const MDAI::FScores B = FMDUtilityScorer::Score(Far, Params, T0);
-	if (!TestEqual(TEXT("scores one slot per scored intent"), A.Num(), 4) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
+	if (!TestEqual(TEXT("scores one slot per scored intent (Idle, Chase, HoldThreat, Attack, Retreat, Regroup)"), A.Num(), 6) || !TestEqual(TEXT("same count twice"), B.Num(), A.Num()))
 	{
 		return false;
 	}
@@ -573,6 +575,34 @@ bool FMDAIBrainSchedulerAndRulesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Who moves an attacking enemy (MDEnemyAttackRules): the authority alone consumes montage root motion and warps; a simulated
+// proxy (every client's view of an enemy) plays the montage in place and follows the replicated capsule. The 2P symptom
+// this rules out: a client proxy simulating its own, differently warped root motion on top of the server's movement
+// (snaps, a teleport when the montage ends, flips when the warp degenerates).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDAIBrainAttackMovementOwnershipTest, "MazeDemons.AI.Brain.AttackMovementOwnership", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FMDAIBrainAttackMovementOwnershipTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("authority owns the attack movement"), MDEnemyAttackRules::OwnsAttackMovement(ROLE_Authority));
+	TestFalse(TEXT("a simulated proxy never does"), MDEnemyAttackRules::OwnsAttackMovement(ROLE_SimulatedProxy));
+	TestFalse(TEXT("an autonomous proxy never does (enemies are server pawns)"), MDEnemyAttackRules::OwnsAttackMovement(ROLE_AutonomousProxy));
+	TestFalse(TEXT("no role never does"), MDEnemyAttackRules::OwnsAttackMovement(ROLE_None));
+
+	TestTrue(TEXT("authority: montages drive the capsule"), MDEnemyAttackRules::RootMotionModeFor(ROLE_Authority) == ERootMotionMode::RootMotionFromMontagesOnly);
+	TestTrue(TEXT("simulated proxy: root motion extracted (root locked) and discarded"), MDEnemyAttackRules::RootMotionModeFor(ROLE_SimulatedProxy) == ERootMotionMode::IgnoreRootMotion);
+	TestTrue(TEXT("autonomous proxy: ignored too"), MDEnemyAttackRules::RootMotionModeFor(ROLE_AutonomousProxy) == ERootMotionMode::IgnoreRootMotion);
+
+	// A facing is a yaw on an upright capsule, whatever it was tilted to.
+	const FRotator Facing = MDEnemyAttackRules::FacingRotation(400.0f);
+	TestEqual(TEXT("facing yaw normalised"), Facing.Yaw, 40.0, 0.001);
+	TestEqual(TEXT("facing has no pitch"), Facing.Pitch, 0.0, 0.001);
+	TestEqual(TEXT("facing has no roll"), Facing.Roll, 0.0, 0.001);
+	TestFalse(TEXT("upright is not tilted"), MDEnemyAttackRules::IsTilted(FRotator(0.0, 123.0, 0.0)));
+	TestFalse(TEXT("a hair off is not tilted"), MDEnemyAttackRules::IsTilted(FRotator(0.4, -50.0, -0.4)));
+	TestTrue(TEXT("a flat ghoul is tilted"), MDEnemyAttackRules::IsTilted(FRotator(-90.0, 10.0, 0.0)));
+	TestTrue(TEXT("a rolled ghoul is tilted"), MDEnemyAttackRules::IsTilted(FRotator(0.0, 10.0, 180.0)));
+	return true;
+}
+
 // The enemy anim instance reads the pawn's velocity on every update (listen server and clients alike): the locomotion
 // blend space in ABP_Ghoul is driven by Speed, so a stale Speed means an enemy gliding in its idle pose.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDAIBrainAnimInstanceSpeedTest, "MazeDemons.AI.Brain.AnimInstanceSpeed", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -680,8 +710,64 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 		}
 		TestTrue(*FString::Printf(TEXT("%s montage has root motion"), *Attack.Name.ToString()), Attack.Montage->HasRootMotion());
 		const FTransform Travel = Attack.Montage->ExtractRootMotionFromTrackRange(0.0f, Attack.Montage->GetPlayLength(), FAnimExtractContext());
-		TestTrue(*FString::Printf(TEXT("%s travels forward (%.0f cm)"), *Attack.Name.ToString(), Travel.GetTranslation().Size2D()), Travel.GetTranslation().Size2D() > 50.0f);
+		// The ghoul claws (a werewolf clip with a baked root dash): the Swipe is a short step-in, the Lunge a 3-4 m leap, and neither
+		// lifts, flips or spins the root (the sword clips used before did all three).
+		const double Dist2D = Travel.GetTranslation().Size2D();
+		if (Attack.Name == FName(TEXT("Swipe")))
+		{
+			TestTrue(*FString::Printf(TEXT("Swipe is a short step-in (%.0f cm, 15..60)"), Dist2D), Dist2D > 15.0 && Dist2D < 60.0);
+		}
+		else if (Attack.Name == FName(TEXT("Lunge")))
+		{
+			TestTrue(*FString::Printf(TEXT("Lunge is a forward leap (%.0f cm, 300..400)"), Dist2D), Dist2D > 300.0 && Dist2D < 400.0);
+		}
+		else
+		{
+			TestTrue(*FString::Printf(TEXT("%s travels forward (%.0f cm)"), *Attack.Name.ToString(), Dist2D), Dist2D > 50.0);
+		}
+		TestTrue(*FString::Printf(TEXT("%s has no vertical root travel (%.0f cm)"), *Attack.Name.ToString(), Travel.GetTranslation().Z), FMath::Abs(Travel.GetTranslation().Z) < 5.0);
+		const FRotator RootTurn = Travel.GetRotation().Rotator();
+		TestTrue(*FString::Printf(TEXT("%s root does not spin or flip (%s)"), *Attack.Name.ToString(), *RootTurn.ToString()),
+			FMath::Abs(RootTurn.Yaw) < 5.0 && FMath::Abs(RootTurn.Pitch) < 5.0 && FMath::Abs(RootTurn.Roll) < 5.0);
+		// ...at any point of the clip, not only over its whole length: the werewolf retarget left a root roll of up to 32
+		// degrees that returned to zero by the end (mesh roll = actor pitch: the capsule dived nose-first mid-strike).
+		double MaxRootTilt = 0.0;
+		float MaxTiltTime = 0.0f;
+		for (float T = 0.05f; T < Attack.Montage->GetPlayLength(); T += 0.05f)
+		{
+			const FRotator Partial = Attack.Montage->ExtractRootMotionFromTrackRange(0.0f, T, FAnimExtractContext()).GetRotation().Rotator();
+			const double Tilt = FMath::Max(FMath::Abs(Partial.Pitch), FMath::Abs(Partial.Roll));
+			if (Tilt > MaxRootTilt)
+			{
+				MaxRootTilt = Tilt;
+				MaxTiltTime = T;
+			}
+		}
+		TestTrue(*FString::Printf(TEXT("%s root never pitches or rolls mid-clip (max %.1f deg at %.2f s)"), *Attack.Name.ToString(), MaxRootTilt, MaxTiltTime), MaxRootTilt < 2.0);
 		TestTrue(*FString::Printf(TEXT("%s root motion scale is not zero"), *Attack.Name.ToString()), Attack.Step.RootMotionScale > 0.0f);
+
+		// Every warp window turns to the warp target's rotation (the facing the attack component set at swing start). The
+		// Facing type recomputes a yaw from the attacker's own position each tick and degenerates once the skew warp has put
+		// the capsule on the warp point: that is the 180 degree flip seen before.
+		int32 WarpWindows = 0;
+		for (const FAnimNotifyEvent& Event : Attack.Montage->Notifies)
+		{
+			const UAnimNotifyState_MotionWarping* WarpNotify = Cast<UAnimNotifyState_MotionWarping>(Event.NotifyStateClass);
+			if (!WarpNotify)
+			{
+				continue;
+			}
+			++WarpWindows;
+			const URootMotionModifier_Warp* Warp = Cast<URootMotionModifier_Warp>(WarpNotify->RootMotionModifier);
+			if (TestNotNull(*FString::Printf(TEXT("%s warp window has a warp modifier"), *Attack.Name.ToString()), Warp))
+			{
+				TestTrue(*FString::Printf(TEXT("%s warp window targets AttackTarget"), *Attack.Name.ToString()), Warp->WarpTargetName == FName(TEXT("AttackTarget")));
+				TestTrue(*FString::Printf(TEXT("%s warp window warps rotation"), *Attack.Name.ToString()), Warp->bWarpRotation);
+				TestTrue(*FString::Printf(TEXT("%s warp window turns to the target rotation, not a recomputed facing"), *Attack.Name.ToString()), Warp->RotationType == EMotionWarpRotationType::Default);
+				TestTrue(*FString::Printf(TEXT("%s warp window ignores Z"), *Attack.Name.ToString()), Warp->bIgnoreZAxis);
+			}
+		}
+		TestEqual(*FString::Printf(TEXT("%s has one warp window"), *Attack.Name.ToString()), WarpWindows, 1);
 	}
 
 	// Runtime: a ghoul on a floor, no target (no warp), plays its last (longest) attack and must move.
@@ -762,15 +848,19 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 	}
 	const FVector Start2 = Enemy->GetActorLocation();
 	const double DistBefore = FVector::Dist2D(Start2, Target->GetActorLocation());
+	Enemy->FaceTarget(Target); // attacks run in the face-target mode (MDSTEnemyTasks), not orient-to-movement: the authored recoil must not turn the ghoul around
 	const float Tell = Ghoul->Attacks[AttackIndex].TellTime; // the real wind-up: slowed play rate until the trace notify restores it
 	if (!TestTrue(TEXT("attack at the target starts"), Enemy->AttackComponent->StartAttack(AttackIndex, Target, Tell)))
 	{
 		return false;
 	}
 	FString Trace;
+	double MaxTilt = 0.0;
 	for (int32 i = 0; i < FMath::CeilToInt((Length + Tell) / Dt) + 10; ++i)
 	{
 		TickWorld();
+		const FRotator Now = Enemy->GetActorRotation();
+		MaxTilt = FMath::Max(MaxTilt, FMath::Max(FMath::Abs(FRotator::NormalizeAxis(Now.Pitch)), FMath::Abs(FRotator::NormalizeAxis(Now.Roll))));
 		if (i % 10 == 0)
 		{
 			const FVector Loc = Enemy->GetActorLocation();
@@ -788,6 +878,44 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 	// never through it: the warp window covers the strike.
 	TestTrue(*FString::Printf(TEXT("warped attack stops in front of the target (%.0f cm)"), DistAfter), DistAfter > 50.0 && DistAfter < 220.0);
 	TestTrue(TEXT("still facing the target"), FVector::DotProduct(Enemy->GetActorForwardVector(), (Target->GetActorLocation() - Enemy->GetActorLocation()).GetSafeNormal2D()) > 0.7);
+	// Upright on every tick, not just re-righted at the end by the attack component's safety net.
+	TestTrue(*FString::Printf(TEXT("the authority stays upright through a warped attack (max tilt %.1f deg)"), MaxTilt), MaxTilt < 2.0);
+	TestFalse(*FString::Printf(TEXT("the authority ends a warped attack upright (%s)"), *Enemy->GetActorRotation().ToString()), MDEnemyAttackRules::IsTilted(Enemy->GetActorRotation()));
+	UMDEnemyAnimInstance* EnemyAnim = Cast<UMDEnemyAnimInstance>(Enemy->GetMesh()->GetAnimInstance());
+	if (TestNotNull(TEXT("ABP_Ghoul is an MD enemy anim instance"), EnemyAnim))
+	{
+		TestTrue(TEXT("authority: montages drive the capsule"), EnemyAnim->RootMotionMode == ERootMotionMode::RootMotionFromMontagesOnly);
+	}
+
+	// A client's view of the same ghoul: a simulated proxy. The multicast plays the montage on it; its anim instance must
+	// switch to IgnoreRootMotion so the capsule never moves or tilts on its own (in a real game it follows the replicated
+	// movement instead; here there is none, so it must stay put).
+	if (EnemyAnim)
+	{
+		Enemy->SetRole(ROLE_SimulatedProxy);
+		TickWorld(); // the anim update re-applies the mode for the new role
+		TestTrue(TEXT("proxy: root motion ignored"), EnemyAnim->RootMotionMode == ERootMotionMode::IgnoreRootMotion);
+		const FVector ProxyStart = Enemy->GetActorLocation();
+		const FRotator ProxyRotation = Enemy->GetActorRotation();
+		UAnimMontage* Montage = Ghoul->Attacks[AttackIndex].Montage;
+		TestTrue(TEXT("proxy: montage plays cosmetically"), EnemyAnim->Montage_Play(Montage, 1.0f) > 0.0f);
+		TestFalse(TEXT("proxy: not a networked root-motion montage (no client-side simulation)"), Enemy->IsPlayingNetworkedRootMotionMontage());
+		bool bPlayedMidway = false;
+		for (int32 i = 0; i < FMath::CeilToInt(Length / Dt) + 10; ++i)
+		{
+			TickWorld();
+			if (i == FMath::CeilToInt(Length / Dt) / 2)
+			{
+				bPlayedMidway = EnemyAnim->Montage_IsPlaying(Montage);
+			}
+		}
+		TestTrue(TEXT("proxy: the montage was playing midway"), bPlayedMidway);
+		const double ProxyMoved = FVector::Dist(Enemy->GetActorLocation(), ProxyStart);
+		TestTrue(*FString::Printf(TEXT("proxy: the capsule did not move on its own (%.1f cm)"), ProxyMoved), ProxyMoved < 1.0);
+		TestTrue(*FString::Printf(TEXT("proxy: the capsule did not turn or tilt on its own (%s -> %s)"), *ProxyRotation.ToString(), *Enemy->GetActorRotation().ToString()),
+			Enemy->GetActorRotation().Equals(ProxyRotation, 0.5));
+		Enemy->SetRole(ROLE_Authority);
+	}
 	return true;
 }
 

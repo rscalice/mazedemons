@@ -4,12 +4,14 @@
 #include "Components/ActorComponent.h"
 #include "AI/MDAIRules.h"
 #include "AI/MDAITypes.h"
+#include "AI/MDPack.h"
 #include "MDCombatTypes.h"
 #include "MDEnemyBrainComponent.generated.h"
 
 class AMDEnemyCharacter;
 class UMDAISubsystem;
 class UMDEnemyAttackComponent;
+class UMDPackDirectorSubsystem;
 class UMDPoiseComponent;
 
 // Server: the brain (re)selected an intent. bRestart = the executor must enter the state again even if it is the same
@@ -78,6 +80,23 @@ public:
 	// Tier-scaled tell of the chosen attack (0 when none).
 	float GetChosenTellTime() const;
 
+	// ---- Pack (V1 WP2) ----
+	// What the pack director assigned at the last decision (role, pack state, focus target).
+	const FMDEnemyAssignment& GetAssignment() const { return Assignment; }
+	EMDRole GetRole() const { return Assignment.Role; }
+	EMDPackState GetPackState() const { return Assignment.PackState; }
+
+	// Live queries to the director for the executor. True when the point exists:
+	//   slot point    the melee ring slot around the focus target (only while the focus target is this brain's target and sensed)
+	//   threat point  the 4-6 m ring point on the same angle, where an enemy without a token holds
+	//   rally point   where a retreating pack runs to (only while the pack is in Regroup)
+	bool GetSlotPoint(FVector& OutPoint) const;
+	bool GetThreatPoint(FVector& OutPoint) const;
+	bool GetRallyPoint(FVector& OutPoint) const;
+
+	// Within reach of the rally point.
+	bool IsAtRally() const;
+
 	int32 GetEnemyId() const { return EnemyId; }
 	AMDEnemyCharacter* GetEnemy() const { return Enemy.Get(); }
 	UMDAISubsystem* GetAISubsystem() const;
@@ -126,6 +145,21 @@ private:
 	bool IsValidTargetActor(const AActor* Actor) const;
 	FMDBrainContext BuildContext(double Now) const;
 	void ReleaseToken(bool bImmediate);
+	UMDPackDirectorSubsystem* GetDirector() const;
+	void ReportToDirector();
+	bool ResolveAssignment(FMDEnemyAssignment& Out) const;
+
+	struct FDamageRecord
+	{
+		TWeakObjectPtr<AActor> Instigator;
+		float Amount = 0.0f;
+		double Time = 0.0;
+	};
+
+	FMDEnemyAssignment Assignment;
+	TArray<FDamageRecord> RecentDamage;
+	TWeakObjectPtr<AActor> OverrideTarget;
+	double OverrideUntil = 0.0;
 
 	TWeakObjectPtr<AMDEnemyCharacter> Enemy;
 	TWeakObjectPtr<UMDEnemyAttackComponent> Attack;

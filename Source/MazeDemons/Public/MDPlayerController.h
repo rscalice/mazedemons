@@ -257,6 +257,11 @@ public:
 	UFUNCTION(Exec)
 	void UseItem(int32 Index);
 
+	// Console: equips the item at inventory Index (any slot, including the Ranged slot) through the same path as the
+	// inventory UI. Lets guns be equipped without the menu (editor MCP / PIE checks).
+	UFUNCTION(Exec)
+	void EquipItem(int32 Index);
+
 	// Debug (non-shipping): adds gold to this player's inventory (server).
 	UFUNCTION(Exec)
 	void GiveGold(int32 Amount);
@@ -424,6 +429,12 @@ protected:
 	void Client_ResetMovementState();
 
 private:
+	// R0: Q / D-pad Up swaps melee and ranged mode. The server validates and flips UMDRangedComponent.
+	void RangedSwapPressed();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestRangedSwap();
+
 	void OnQuickSlot1(const FInputActionValue& Value);
 	void OnQuickSlot2(const FInputActionValue& Value);
 	void OnPause(const FInputActionValue& Value);
