@@ -445,6 +445,19 @@ bool FMDRangedR1FriendlyFireTest::RunTest(const FString& Parameters)
 	On->AdvanceSimulation(0.1f);
 	TestTrue(TEXT("friendly fire on: the teammate is hurt"), HealthOf(Victim) < Start);
 	TestEqual(TEXT("one hit counted"), On->GetHitCount(), 1);
+
+	// Q6: a bullet does half damage to a teammate player, an enemy takes the full amount.
+	const float Friendly = Start - HealthOf(Victim);
+	AMDEnemyCharacter* Enemy = Fx.SpawnEnemy(FVector(800.0, 600.0, 100.0));
+	if (TestNotNull(TEXT("enemy"), Enemy))
+	{
+		const float EnemyStart = HealthOf(Enemy);
+		AMDProjectile::SpawnReal(Fx.World, Fx.MakeParams(FVector(40.0, 600.0, 44.0), FVector::ForwardVector, 3))->AdvanceSimulation(0.1f);
+		const float Full = EnemyStart - HealthOf(Enemy);
+		TestTrue(TEXT("enemy took a full hit"), Full > 0.0f);
+		TestTrue(TEXT("teammate took half of that"), FMath::IsNearlyEqual(Friendly, Full * FMDRangedMath::FriendlyFireRangedScale, 0.1f));
+	}
+	TestEqual(TEXT("scale constant is 0.5"), FMDRangedMath::FriendlyFireRangedScale, 0.5f);
 	return true;
 }
 

@@ -27,6 +27,8 @@
 #include "GameFramework/DamageType.h"
 #include "Kismet/GameplayStatics.h"
 #include "Ranged/MDRangedComponent.h"
+#include "Ranged/MDRangedMath.h"
+#include "GameFramework/PlayerState.h"
 
 namespace MDCombatNumberLocal
 {
@@ -167,6 +169,17 @@ bool UMDCombatStatics::ApplyRangedHit(AActor* Attacker, AActor* Victim, const FH
 	Context.Instigator = Attacker;
 	Context.Causer = Attacker;
 	Context.BaseDamage = Params.Damage; // the step multiplier stays 1: falloff, headshot, perks and condition are already in
+	{
+		// Ranged-design Q6 (approved): bullets and beams that hit a teammate player do FriendlyFireRangedScale (x0.5). The friendly-fire
+		// toggle itself is enforced by ApplyDamage (off = no damage at all); melee keeps full damage.
+		const APawn* AttackerPawn = Cast<APawn>(Attacker);
+		const APawn* VictimPawn = Cast<APawn>(Victim);
+		if (AttackerPawn && VictimPawn && AttackerPawn->GetPlayerState() && VictimPawn->GetPlayerState()
+			&& UMDGameplayStatics::GetTeamId(Attacker) == UMDGameplayStatics::GetTeamId(Victim))
+		{
+			Context.BaseDamage *= FMDRangedMath::FriendlyFireRangedScale;
+		}
+	}
 	Context.Kind = EMDAttackKind::Light;
 	Context.PoiseDamage = Params.PoiseDamage;
 	Context.Reaction = EMDHitReaction::Flinch;

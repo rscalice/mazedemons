@@ -55,6 +55,7 @@ struct MAZEDEMONS_API FMDRangedMath
 	static constexpr float MinDirToleranceDeg = 2.0f;    // floor so a perfectly accurate gun still tolerates network rounding
 	static constexpr float MaxFutureSeconds = 0.25f;     // ClientTime may lead the server clock by this much
 	static constexpr float MaxSpawnFastForward = 0.1f;   // 100 ms cap on the server spawn fast-forward
+	static constexpr float FriendlyFireRangedScale = 0.5f; // Q6: bullets / beams hurt teammate players for half (the toggle still turns it off)
 
 	static float AngleBetweenDeg(const FVector& A, const FVector& B)
 	{
