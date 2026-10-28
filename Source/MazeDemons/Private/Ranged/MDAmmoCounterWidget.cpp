@@ -103,7 +103,7 @@ bool UMDAmmoCounterWidget::Initialize()
 	}
 	// Starts hidden; the fade brings it in when the player swaps to a gun.
 	SetRenderOpacity(0.0f);
-	SetVisibility(ESlateVisibility::Hidden); // Hidden, not Collapsed: a collapsed widget stops ticking and could never fade back in
+	SetVisibility(ESlateVisibility::HitTestInvisible); // never Hidden/Collapsed: a non-visible widget stops ticking and could never fade back in; opacity 0 hides it
 	return bResult;
 }
 
@@ -242,8 +242,8 @@ void UMDAmmoCounterWidget::TickFade(float DeltaSeconds)
 {
 	ShownOpacity = FMDRangedUIRules::StepOpacity(ShownOpacity, TargetOpacity, DeltaSeconds);
 	SetRenderOpacity(ShownOpacity);
-	const bool bVisible = ShownOpacity > KINDA_SMALL_NUMBER || TargetOpacity > 0.0f;
-	SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
+	// Visibility stays HitTestInvisible at all times (see Initialize): the render opacity alone hides the counter.
+	SetVisibility(ESlateVisibility::HitTestInvisible);
 }
 
 void UMDAmmoCounterWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
