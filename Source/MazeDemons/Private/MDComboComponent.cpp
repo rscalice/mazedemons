@@ -18,6 +18,7 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
 #include "MDWarpTargeting.h"
+#include "LockOn/MDLockOnComponent.h"
 #include "MotionWarpingComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/OverlapResult.h"
@@ -606,10 +607,27 @@ FMDWarpHint UMDComboComponent::BuildWarpHint() const
 	{
 		Facing = FRotator(0.0, Pawn->GetControlRotation().Yaw, 0.0).Vector();
 	}
+	// V1 WP7: a locked target overrides the cone pick when it is in warp range and (while moving) within 90 degrees of the input; with
+	// no move input the step snaps to face the locked target instead of the camera.
+	const FVector InputDir = Facing;
+	const bool bHasMoveInput = !MDWarpTargeting::Planar(Pawn->GetLastMovementInputVector()).IsNearlyZero();
+	AActor* LockedTarget = nullptr;
+	if (const UMDLockOnComponent* Lock = Pawn->IsPlayerControlled() ? UMDLockOnComponent::FindFor(Pawn) : nullptr)
+	{
+		if (const AActor* Locked = Lock->GetLockTarget())
+		{
+			const FVector ToLocked = MDWarpTargeting::Planar(Locked->GetActorLocation() - Pawn->GetActorLocation());
+			if (FMDLockOnRules::ShouldSnapToTarget(true, bHasMoveInput) && !ToLocked.IsNearlyZero())
+			{
+				Facing = ToLocked;
+			}
+			LockedTarget = Lock->GetWarpOverrideTarget(bHasMoveInput, InputDir, GetMaxWarpRange());
+		}
+	}
 	Hint.bValid = true;
 	Hint.Time = Now();
 	Hint.Yaw = MDWarpTargeting::YawDegrees(Facing);
-	if (AActor* Target = FindWarpTarget(Facing, GetMaxWarpRange()))
+	if (AActor* Target = LockedTarget ? LockedTarget : FindWarpTarget(Facing, GetMaxWarpRange()))
 	{
 		Hint.Target = Target;
 		Hint.Yaw = MDWarpTargeting::YawDegrees(Target->GetActorLocation() - Pawn->GetActorLocation());
@@ -628,6 +646,10 @@ void UMDComboComponent::ApplyStepWarp(const FMDAttackStep& Step)
 	FMDWarpHint Hint;
 	if (IsOwnerLocal())
 	{
+		if (UMDLockOnComponent* Lock = UMDLockOnComponent::FindFor(Pawn))
+		{
+			Lock->NotifyPlayerAttacked(); // opens the auto-retarget window (and the optional auto-lock) before the hint is built
+		}
 		if (!IsAuthority() && ClientHint.bValid && Now() - ClientHint.Time < 0.1)
 		{
 			Hint = ClientHint; // just built for this input and already sent
@@ -661,7 +683,10 @@ void UMDComboComponent::ApplyWarpHint(const FMDWarpHint& Hint, const FMDAttackSt
 	if (Target)
 	{
 		const float Tolerance = IsOwnerLocal() ? 0.0f : MDWarpServerTolerance; // the server's position lags the client's
-		if (!IsValidWarpTarget(Target) || !MDWarpTargeting::IsTargetWithinReach(Origin, Target->GetActorLocation(), Step.WarpRange, Tolerance))
+		// A locked target may be picked from 1.25 x the step's range (v1-design 5.1); the server only knows the lock it validated.
+		const UMDLockOnComponent* Lock = Character->IsPlayerControlled() ? UMDLockOnComponent::FindFor(Character) : nullptr;
+		const float Reach = Step.WarpRange * ((Lock && Lock->IsLockedOn(Target)) ? Lock->GetTuning().WarpRangeScale : 1.0f);
+		if (!IsValidWarpTarget(Target) || !MDWarpTargeting::IsTargetWithinReach(Origin, Target->GetActorLocation(), Reach, Tolerance))
 		{
 			Target = nullptr;
 		}
@@ -679,7 +704,9 @@ void UMDComboComponent::ApplyWarpHint(const FMDWarpHint& Hint, const FMDAttackSt
 	if (Target && Warping)
 	{
 		const UCapsuleComponent* Capsule = Target->FindComponentByClass<UCapsuleComponent>();
-		const float Radius = Capsule ? Capsule->GetScaledCapsuleRadius() : 0.0f;
+		// Stop short by BOTH capsule radii plus the step's stop distance, so the two bodies never end a warp interpenetrating.
+		const UCapsuleComponent* OwnCapsule = Character->GetCapsuleComponent();
+		const float Radius = (Capsule ? Capsule->GetScaledCapsuleRadius() : 0.0f) + (OwnCapsule ? OwnCapsule->GetScaledCapsuleRadius() : 0.0f);
 		const FVector Point = MDWarpTargeting::ComputeWarpPoint(Origin, Target->GetActorLocation(), Radius, Step.WarpStopDistance);
 		Warping->AddOrUpdateWarpTargetFromLocationAndRotation(MDAttackWarpTarget, Point, FRotator(0.0, Yaw, 0.0));
 		Character->SetAnimRootMotionTranslationScale(1.0f);

@@ -19,6 +19,7 @@
 #include "MDStation.h"
 #include "MDAttributeSet.h"
 #include "MDStaminaComponent.h"
+#include "LockOn/MDLockOnComponent.h"
 #include "Ranged/MDRangedComponent.h"
 #include "Ranged/MDRangedCameraModifier.h"
 #include "Camera/PlayerCameraManager.h"
@@ -47,6 +48,39 @@
 AMDPlayerController::AMDPlayerController()
 {
 	MapComponent = CreateDefaultSubobject<UMDMapComponent>(TEXT("MapComponent"));
+	LockOn = CreateDefaultSubobject<UMDLockOnComponent>(TEXT("LockOn"));
+}
+
+void AMDPlayerController::LockOnPressed()
+{
+	if (LockOn)
+	{
+		LockOn->OnLockPressed();
+	}
+}
+
+void AMDPlayerController::LockOnReleased()
+{
+	if (LockOn)
+	{
+		LockOn->OnLockReleased();
+	}
+}
+
+void AMDPlayerController::LockOnCycleLeft()
+{
+	if (LockOn)
+	{
+		LockOn->CycleTarget(-1);
+	}
+}
+
+void AMDPlayerController::LockOnCycleRight()
+{
+	if (LockOn)
+	{
+		LockOn->CycleTarget(1);
+	}
 }
 
 void AMDPlayerController::BeginPlay()
@@ -219,6 +253,21 @@ void AMDPlayerController::SetupInputComponent()
 		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, IE_Pressed, this, &AMDPlayerController::RangedSwapPressed);
 		// R3 reload: D-pad Down on a gamepad (R is shared with the Run tab: in ranged mode R reloads, see TryReloadFromKey).
 		InputComponent->BindKey(EKeys::Gamepad_DPad_Down, IE_Pressed, this, &AMDPlayerController::RangedReloadPressed);
+		// V1 WP7 lock-on. Lock: Middle Mouse / Right Stick click (toggle, or hold by option). Cycle: mouse wheel while locked, [ ] on a
+		// keyboard; the gamepad flick is read by the component from the right stick. None consumes input, so the wheel still zooms when not locked.
+		for (const FKey& LockKey : { EKeys::MiddleMouseButton, EKeys::Gamepad_RightThumbstick })
+		{
+			InputComponent->BindKey(LockKey, IE_Pressed, this, &AMDPlayerController::LockOnPressed).bConsumeInput = false;
+			InputComponent->BindKey(LockKey, IE_Released, this, &AMDPlayerController::LockOnReleased).bConsumeInput = false;
+		}
+		for (const FKey& LeftKey : { EKeys::MouseScrollUp, EKeys::LeftBracket })
+		{
+			InputComponent->BindKey(LeftKey, IE_Pressed, this, &AMDPlayerController::LockOnCycleLeft).bConsumeInput = false;
+		}
+		for (const FKey& RightKey : { EKeys::MouseScrollDown, EKeys::RightBracket })
+		{
+			InputComponent->BindKey(RightKey, IE_Pressed, this, &AMDPlayerController::LockOnCycleRight).bConsumeInput = false;
+		}
 		// R1 fire: LMB / right trigger. Not consumed, so melee's own LMB binding keeps working outside ranged mode.
 		for (const FKey& FireKey : { EKeys::LeftMouseButton, EKeys::Gamepad_RightTrigger })
 		{

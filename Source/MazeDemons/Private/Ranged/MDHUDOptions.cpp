@@ -43,6 +43,30 @@ void UMDHUDOptions::SetOffscreenThreat(bool bEnabled)
 	ApplySavedOptions();
 }
 
+void UMDHUDOptions::SetLockOnAssistStrength(float Strength01)
+{
+	GetMutableDefault<UMDLocalSettings>()->LockOnAssistStrength = FMath::Clamp(Strength01, 0.0f, 1.0f);
+	SaveSettings();
+}
+
+void UMDHUDOptions::SetLockOnHold(bool bHold)
+{
+	GetMutableDefault<UMDLocalSettings>()->bLockOnHold = bHold;
+	SaveSettings();
+}
+
+void UMDHUDOptions::SetLockOnReticleScale(float Scale)
+{
+	GetMutableDefault<UMDLocalSettings>()->LockOnReticleScale = FMath::Clamp(Scale, 0.5f, 2.0f);
+	SaveSettings();
+}
+
+void UMDHUDOptions::SetLockOnAutoAcquire(bool bAuto)
+{
+	GetMutableDefault<UMDLocalSettings>()->bLockOnAutoAcquire = bAuto;
+	SaveSettings();
+}
+
 void UMDHUDOptions::ApplySavedOptions()
 {
 	if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(TEXT("md.UI.OffscreenThreat")))

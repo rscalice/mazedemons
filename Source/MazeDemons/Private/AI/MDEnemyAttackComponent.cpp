@@ -212,7 +212,8 @@ void UMDEnemyAttackComponent::ApplyWarp(const FMDEnemyAttack& Attack, AActor* Ta
 	if (Target && Warping)
 	{
 		const UCapsuleComponent* Capsule = Target->FindComponentByClass<UCapsuleComponent>();
-		const float Radius = Capsule ? Capsule->GetScaledCapsuleRadius() : 0.0f;
+		// V1 WP7: both capsule radii, so the warp never ends with the two bodies interpenetrating.
+		const float Radius = (Capsule ? Capsule->GetScaledCapsuleRadius() : 0.0f) + Character->GetCapsuleComponent()->GetScaledCapsuleRadius();
 		const FVector Point = MDWarpTargeting::ComputeWarpPoint(Origin, Target->GetActorLocation(), Radius, Attack.Step.WarpStopDistance);
 		// The warp target's rotation is the facing just set; the montage's SkewWarp windows use it as their rotation target
 		// (RotationType Default), so the ghoul turns to this fixed yaw and never computes a facing from its own position.
