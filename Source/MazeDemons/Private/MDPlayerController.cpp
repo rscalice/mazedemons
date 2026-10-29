@@ -269,6 +269,7 @@ void AMDPlayerController::SetupInputComponent()
 			InputComponent->BindKey(RightKey, IE_Pressed, this, &AMDPlayerController::LockOnCycleRight).bConsumeInput = false;
 		}
 		// R1 fire: LMB / right trigger. Not consumed, so melee's own LMB binding keeps working outside ranged mode.
+		UE_LOG(LogTemp, Display, TEXT("LockOn: input bound on %s (MMB / R3 lock, wheel and [ ] cycle)"), *GetName());
 		for (const FKey& FireKey : { EKeys::LeftMouseButton, EKeys::Gamepad_RightTrigger })
 		{
 			InputComponent->BindKey(FireKey, IE_Pressed, this, &AMDPlayerController::RangedFirePressed).bConsumeInput = false;

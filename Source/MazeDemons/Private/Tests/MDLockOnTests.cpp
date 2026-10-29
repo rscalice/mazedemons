@@ -245,6 +245,11 @@ bool FMDLockOnServerTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Dead"), FMDLockOnRules::ValidateServerTarget(false, true, 1000.0f, 0.0f, T));
 	TestFalse(TEXT("Not hostile (a teammate)"), FMDLockOnRules::ValidateServerTarget(true, false, 1000.0f, 0.0f, T));
 
+	// Line of sight: only level geometry occludes (a weapon attached to the target or player, or another pawn, never does).
+	TestTrue(TEXT("A wall occludes"), FMDLockOnRules::IsLineOfSightOccluder(false, false));
+	TestFalse(TEXT("Another pawn does not occlude"), FMDLockOnRules::IsLineOfSightOccluder(true, false));
+	TestFalse(TEXT("An attached weapon does not occlude"), FMDLockOnRules::IsLineOfSightOccluder(false, true));
+
 	// The component: no world, no pawn, no target - every hint is refused, nothing sticks.
 	UMDLockOnComponent* Lock = NewObject<UMDLockOnComponent>(GetTransientPackage());
 	TestNotNull(TEXT("Component created"), Lock);

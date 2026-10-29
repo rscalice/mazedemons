@@ -7,6 +7,7 @@
 
 class UMDLockOnReticleWidget;
 class APlayerController;
+class USkeletalMeshComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMDLockTargetChanged, AActor*, NewTarget, AActor*, OldTarget);
 
@@ -116,6 +117,8 @@ private:
 	static FVector ChestOf(const AActor* Actor);
 
 	void ScanCandidates();
+	void ApplyHighlight(AActor* Target);
+	void ClearHighlight();
 	void SetLockTarget(AActor* NewTarget, bool bSendToServer);
 	void BreakLock(EMDLockBreak Reason);
 	void UpdateBreakRules(float DeltaTime);
@@ -139,6 +142,11 @@ private:
 	TArray<FMDLockOnCandidate> Candidates;
 	TArray<TWeakObjectPtr<AActor>> CandidateActors; // index = FMDLockOnCandidate::Id
 	FMDLockOnRules::FFlick Flick;
+	struct FMDScanStats { int32 Pawns = 0; int32 NotLockable = 0; int32 OutOfRange = 0; int32 NoLOS = 0; };
+	FString LastScanSummary;
+	bool bSelfTested = false;
+	bool bSelfShot = false;
+	TArray<TWeakObjectPtr<USkeletalMeshComponent>> HighlightMeshes;
 
 	// Camera assist bookkeeping: the rotation we left the camera at, and when anything else last moved it.
 	FRotator LastAssistedRotation = FRotator::ZeroRotator;
@@ -152,4 +160,8 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMDLockOnReticleWidget> Reticle;
+
+	// Subtle local-only overlay tint on the locked enemy (removed on unlock / death).
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> HighlightMID;
 };

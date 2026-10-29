@@ -4,10 +4,12 @@
 #include "AI/MDTargetableComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "DrawDebugHelpers.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerInput.h"
 #include "HAL/IConsoleManager.h"
 #include "InputCoreTypes.h"
 #include "LockOn/MDLockOnReticleWidget.h"
@@ -17,15 +19,30 @@
 #include "MDPlayerController.h"
 #include "MDPoiseComponent.h"
 #include "MDUISettings.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogMDLockOn, Log, All);
 
 namespace MDLockOnLocal
 {
+	// Subtle lock highlight: the same overlay material as the hit / tell flash (M_HitFlashOverlay, parameter HitFlash) at a low value.
+	// The hit-flash overlay asset currently sits under Content/Fab/Staticshes (the path the combat code loads, /Game/Materials/Combat, does
+	// not exist), so try both.
+	const TCHAR* const HighlightOverlayPaths[] = {
+		TEXT("/Game/Materials/Combat/M_HitFlashOverlay.M_HitFlashOverlay"),
+		TEXT("/Game/Fab/Staticshes/Materials/Combat/M_HitFlashOverlay.M_HitFlashOverlay") };
+	const FName HighlightParameter(TEXT("HitFlash"));
+	constexpr float HighlightIntensity = 0.14f;
 	TAutoConsoleVariable<int32> CVarDebug(TEXT("md.LockOn.Debug"), 0,
 		TEXT("1 = draw every lock-on candidate with its score and log lock changes / breaks."), ECVF_Default);
 	TAutoConsoleVariable<float> CVarAssist(TEXT("md.LockOn.Assist"), -1.0f,
 		TEXT("Camera assist strength 0..1 overriding the option (-1 = use the option)."), ECVF_Default);
 	TAutoConsoleVariable<float> CVarRange(TEXT("md.LockOn.Range"), 0.0f,
 		TEXT("Lock-on candidate range in cm (0 = the 30 m default)."), ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarSelfTest(TEXT("md.LockOn.SelfTest"), 0.0f,
+		TEXT("Seconds into the level at which the local lock-on locks the best target once and dumps its state (headless checks)."), ECVF_Default);
 
 	constexpr float ScanInterval = 0.1f;
 	constexpr float ReassertInterval = 1.5f;
@@ -147,9 +164,32 @@ bool UMDLockOnComponent::HasLineOfSight(const AActor* Target, const FVector& Fro
 	{
 		return false;
 	}
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDLockOnLOS), false, GetPawn());
+	// Only level geometry occludes: other pawns, and actors attached to the player or the target (weapons, armor, shields), do not.
+	// A plain test trace used to be blocked by the target's own weapon actor or by the player's, so no enemy ever passed.
+	const APawn* Player = GetPawn();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MDLockOnLOS), false, Player);
 	Params.AddIgnoredActor(Target);
-	return !World->LineTraceTestByChannel(From, ChestOf(Target), ECC_Visibility, Params);
+	TArray<FHitResult> Hits;
+	World->LineTraceMultiByChannel(Hits, From, ChestOf(Target), ECC_Visibility, Params);
+	for (const FHitResult& Hit : Hits)
+	{
+		if (!Hit.bBlockingHit)
+		{
+			continue;
+		}
+		const AActor* HitActor = Hit.GetActor();
+		bool bAttachedToEndpoint = false;
+		for (const AActor* Parent = HitActor ? HitActor->GetAttachParentActor() : nullptr; Parent && !bAttachedToEndpoint; Parent = Parent->GetAttachParentActor())
+		{
+			bAttachedToEndpoint = Parent == Target || Parent == Player;
+		}
+		if (!FMDLockOnRules::IsLineOfSightOccluder(Cast<APawn>(HitActor) != nullptr, bAttachedToEndpoint))
+		{
+			continue;
+		}
+		return false;
+	}
+	return true;
 }
 
 void UMDLockOnComponent::BeginPlay()
@@ -160,7 +200,7 @@ void UMDLockOnComponent::BeginPlay()
 
 void UMDLockOnComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (Reticle)
+	ClearHighlight();	if (Reticle)
 	{
 		Reticle->RemoveFromParent(); // only when the controller itself goes away
 		Reticle = nullptr;
@@ -176,6 +216,61 @@ bool UMDLockOnComponent::CanProjectTarget(const AActor* Target, FVector2D& OutPi
 {
 	const APlayerController* PC = GetPC();
 	return PC && Target && PC->ProjectWorldLocationToScreen(ChestOf(Target), OutPixel, false);
+}
+
+void UMDLockOnComponent::ApplyHighlight(AActor* Target)
+{
+	if (!Target)
+	{
+		return;
+	}
+	if (!HighlightMID)
+	{
+		for (const TCHAR* Path : MDLockOnLocal::HighlightOverlayPaths)
+		{
+			if (UMaterialInterface* Overlay = LoadObject<UMaterialInterface>(nullptr, Path, nullptr, LOAD_NoWarn | LOAD_Quiet))
+			{
+				HighlightMID = UMaterialInstanceDynamic::Create(Overlay, this);
+				break;
+			}
+		}
+	}
+	if (!HighlightMID)
+	{
+		UE_LOG(LogMDLockOn, Warning, TEXT("LockOn: highlight overlay material M_HitFlashOverlay not found"));
+		return;
+	}
+	const float Intensity = MDLockOnLocal::HighlightIntensity * (GetDefault<UMDLocalSettings>()->VFXLevel == EMDVFXLevel::Reduced ? 0.5f : 1.0f);
+	HighlightMID->SetScalarParameterValue(MDLockOnLocal::HighlightParameter, Intensity);
+	TInlineComponentArray<USkeletalMeshComponent*> Meshes(Target);
+	for (USkeletalMeshComponent* Mesh : Meshes)
+	{
+		// Local only: overlay materials are not replicated. A hit or tell flash saves this as its "previous" overlay and restores it after.
+		if (Mesh && Mesh->GetSkeletalMeshAsset() && !Mesh->GetOverlayMaterial())
+		{
+			Mesh->SetOverlayMaterial(HighlightMID);
+			HighlightMeshes.Add(Mesh);
+		}
+	}
+}
+
+void UMDLockOnComponent::ClearHighlight()
+{
+	if (HighlightMID)
+	{
+		HighlightMID->SetScalarParameterValue(MDLockOnLocal::HighlightParameter, 0.0f); // covers a flash that still holds this MID as its previous overlay
+	}
+	for (const TWeakObjectPtr<USkeletalMeshComponent>& Weak : HighlightMeshes)
+	{
+		if (USkeletalMeshComponent* Mesh = Weak.Get())
+		{
+			if (Mesh->GetOverlayMaterial() == HighlightMID)
+			{
+				Mesh->SetOverlayMaterial(nullptr);
+			}
+		}
+	}
+	HighlightMeshes.Reset();
 }
 
 void UMDLockOnComponent::ScanCandidates()
@@ -198,22 +293,31 @@ void UMDLockOnComponent::ScanCandidates()
 	const FVector Forward = CamRot.Vector();
 	const float Fov = PC->PlayerCameraManager ? PC->PlayerCameraManager->GetFOVAngle() : 90.0f;
 	const UMDAbilitySystemComponent* MyASC = UMDGameplayStatics::GetMDAbilitySystemComponent(Pawn);
+	FMDScanStats Stats;
 
 	for (TActorIterator<APawn> It(World); It; ++It)
 	{
 		APawn* Other = *It;
+		if (Other == Pawn)
+		{
+			continue;
+		}
+		++Stats.Pawns;
 		if (!IsLockable(Other))
 		{
+			++Stats.NotLockable;
 			continue;
 		}
 		const float Dist = static_cast<float>(FVector::Dist(Other->GetActorLocation(), Pawn->GetActorLocation()));
 		if (Dist > Tuning.MaxRange)
 		{
+			++Stats.OutOfRange;
 			continue;
 		}
 		const FVector Chest = ChestOf(Other);
 		if (!HasLineOfSight(Other, CamLoc))
 		{
+			++Stats.NoLOS;
 			continue;
 		}
 		const FVector To = (Chest - CamLoc).GetSafeNormal();
@@ -236,6 +340,7 @@ void UMDLockOnComponent::ScanCandidates()
 		Candidates.Add(C);
 		CandidateActors.Add(Other);
 	}
+	LastScanSummary = FString::Printf(TEXT("pawns=%d notLockable=%d outOfRange=%d noLOS=%d candidates=%d"), Stats.Pawns, Stats.NotLockable, Stats.OutOfRange, Stats.NoLOS, Candidates.Num());
 
 	if (MDLockOnLocal::IsDebug())
 	{
@@ -267,9 +372,11 @@ void UMDLockOnComponent::SetLockTarget(AActor* NewTarget, bool bSendToServer)
 	{
 		Reticle->BeginSnapOff();
 	}
-	if (MDLockOnLocal::IsDebug())
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: lock %s -> %s"), Old ? *Old->GetName() : TEXT("none"), NewTarget ? *NewTarget->GetName() : TEXT("none"));
+	ClearHighlight();
+	if (NewTarget && IsLocal())
 	{
-		UE_LOG(LogTemp, Display, TEXT("LockOn: %s -> %s"), Old ? *Old->GetName() : TEXT("none"), NewTarget ? *NewTarget->GetName() : TEXT("none"));
+		ApplyHighlight(NewTarget);
 	}
 	if (bSendToServer)
 	{
@@ -285,10 +392,7 @@ void UMDLockOnComponent::BreakLock(EMDLockBreak Reason)
 		return;
 	}
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-	if (MDLockOnLocal::IsDebug())
-	{
-		UE_LOG(LogTemp, Display, TEXT("LockOn: break (%s)"), MDLockOnLocal::BreakName(Reason));
-	}
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: unlock (%s)"), MDLockOnLocal::BreakName(Reason));
 	SetLockTarget(nullptr, true);
 	if (Reason == EMDLockBreak::TargetDied)
 	{
@@ -315,21 +419,24 @@ bool UMDLockOnComponent::AcquireBestTarget()
 {
 	if (!IsLocal() || IsPlayerDead() || IsMenuOpen())
 	{
+		UE_LOG(LogMDLockOn, Display, TEXT("LockOn: acquire refused (local=%d dead=%d menu=%d)"), IsLocal() ? 1 : 0, IsPlayerDead() ? 1 : 0, IsMenuOpen() ? 1 : 0);
 		return false;
 	}
 	ScanCandidates();
 	const int32 Best = FMDLockOnRules::PickBest(Candidates, Tuning, true);
 	if (Best == INDEX_NONE)
 	{
+		UE_LOG(LogMDLockOn, Display, TEXT("LockOn: acquire found no target (%s, range=%.0f)"), *LastScanSummary, Tuning.MaxRange);
 		return false;
 	}
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: acquire picked candidate %d (%s)"), Best, *LastScanSummary);
 	SetLockTarget(CandidateActors[Best].Get(), true);
 	return LockTarget.Get() != nullptr;
 }
 
 void UMDLockOnComponent::OnLockPressed()
 {
-	if (!IsLocal() || IsPlayerDead() || IsMenuOpen())
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: lock key pressed (locked=%d)"), LockTarget.Get() ? 1 : 0);	if (!IsLocal() || IsPlayerDead() || IsMenuOpen())
 	{
 		return;
 	}
@@ -347,9 +454,15 @@ void UMDLockOnComponent::OnLockPressed()
 	{
 		ClearLock();
 	}
-	else
+	else if (!AcquireBestTarget())
 	{
-		AcquireBestTarget();
+#if !UE_BUILD_SHIPPING
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(static_cast<uint64>(reinterpret_cast<uintptr_t>(this)), 1.5f, FColor::Silver,
+				FString::Printf(TEXT("Lock-on: no target in range (%.0f m, on screen, in view)"), Tuning.MaxRange / 100.0f));
+		}
+#endif
 	}
 }
 
@@ -365,6 +478,7 @@ void UMDLockOnComponent::OnLockReleased()
 void UMDLockOnComponent::CycleTarget(int32 Direction)
 {
 	AActor* Current = LockTarget.Get();
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: cycle %d (locked=%d)"), Direction, Current ? 1 : 0);
 	if (!Current || !IsLocal() || IsPlayerDead() || IsMenuOpen())
 	{
 		return;
@@ -629,11 +743,30 @@ void UMDLockOnComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	const UWorld* World = GetWorld();
 	const float RangeOverride = MDLockOnLocal::CVarRange.GetValueOnGameThread();
 	Tuning.MaxRange = RangeOverride > 0.0f ? RangeOverride : FMDLockOnTuning().MaxRange;
+	Tuning.BreakRange = RangeOverride > 0.0f ? RangeOverride * 1.2f : FMDLockOnTuning().BreakRange; // the override moves the break distance with it
 
 	ServerUpkeep(DeltaTime);
 	if (!World || !IsLocal())
 	{
 		return;
+	}
+
+	const float SelfTestAt = MDLockOnLocal::CVarSelfTest.GetValueOnGameThread();
+	if (SelfTestAt > 0.0f && !bSelfTested && GetPawn() && World->GetTimeSeconds() > SelfTestAt)
+	{
+		bSelfTested = true;
+		// Through the real input stack (Enhanced Input + the controller's key bindings), so a broken bind shows up here.
+		if (APlayerController* PC = GetPC())
+		{
+			PC->InputKey(FInputKeyParams(EKeys::MiddleMouseButton, IE_Pressed, 1.0));
+			PC->InputKey(FInputKeyParams(EKeys::MiddleMouseButton, IE_Released, 0.0));
+		}
+		DumpState();
+	}
+	if (SelfTestAt > 0.0f && bSelfTested && !bSelfShot && GEngine && World->GetTimeSeconds() > SelfTestAt + 3.0f)
+	{
+		bSelfShot = true; // screenshot (UI included) of the locked state, for checking the reticle and the highlight
+		GEngine->Exec(GetWorld(), TEXT("Shot"));
 	}
 
 	const double Now = World->GetTimeSeconds();

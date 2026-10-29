@@ -105,6 +105,9 @@ struct MAZEDEMONS_API FMDLockOnRules
 	// Locked and no move input: the step snaps to face the target instead of the camera.
 	static bool ShouldSnapToTarget(bool bLocked, bool bHasMoveInput) { return bLocked && !bHasMoveInput; }
 
+	// Line-of-sight: a blocking hit occludes only when it is level geometry (not another pawn, not attached to the player or the target).
+	static bool IsLineOfSightOccluder(bool bHitIsPawn, bool bAttachedToPlayerOrTarget) { return !bHitIsPawn && !bAttachedToPlayerOrTarget; }
+
 	// Server check of Server_SetLockTarget: alive, hostile, within range (+ tolerance) and seen within the LOS window.
 	static bool ValidateServerTarget(bool bAlive, bool bHostile, float DistanceCm, float SecondsSinceLOS, const FMDLockOnTuning& Tuning);
 
