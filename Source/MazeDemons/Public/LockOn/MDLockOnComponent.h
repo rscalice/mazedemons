@@ -41,6 +41,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|LockOn")
 	bool GetLockAimPoint(FVector& OutPoint) const;
 
+	// True for a hard lock (Middle Mouse / right stick click: camera assist, cycling); false for the autonomous soft lock and when not
+	// locked. Local lock on the owning machine, the server's validated copy on the server.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|LockOn")
+	bool IsHardLock() const;
+
+	// True when the current lock is a soft lock (attack-driven, never moves the camera).
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|LockOn")
+	bool IsSoftLock() const { return HasLockTarget() && !IsHardLock(); }
+
 	// True when Target is this player's current lock (local or server copy).
 	bool IsLockedOn(const AActor* Target) const { return Target && GetLockTarget() == Target; }
 
@@ -67,19 +76,24 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|LockOn")
 	void ClearLock();
 
-	// The combo component calls this when the local player starts a swing: opens the auto-retarget window and, with the
-	// "auto-lock when attacking" option on, locks the nearest good target.
+	// The combo / ranged components call this when the local player starts a swing or fires: stamps the attack time (hard auto-retarget
+	// window, soft timeout) and, with the soft lock option on and no hard lock, picks / keeps / retargets the soft target.
 	void NotifyPlayerAttacked();
+
+	// Soft lock: pick the best in-view target now (false if none). Used by the attack hook and the md.LockOn.SoftAcquire command.
+	bool AcquireSoftTarget(bool bAtAttackStart);
 
 	// ---- Server ----
 
 	// Client -> server: the target this player locked (null = unlocked). The server drops it unless the target is alive, hostile, within
 	// range and seen recently (FMDLockOnRules::ValidateServerTarget). An invalid hint clears the server copy.
+	// bSoft: the lock is a soft lock (validated against the 15 m soft break range instead of the 30 m hard range). Sent only when the
+	// target (or its mode) changes.
 	UFUNCTION(Server, Reliable)
-	void Server_SetLockTarget(AActor* Target);
+	void Server_SetLockTarget(AActor* Target, bool bSoft);
 
 	// Authority only (tests / debugging): the server-side check for a target seen from the controller's pawn.
-	bool ValidateTargetOnServer(const AActor* Target) const;
+	bool ValidateTargetOnServer(const AActor* Target, bool bSoft = false) const;
 
 	// The server-validated target (authority only; null on clients).
 	AActor* GetServerLockTarget() const { return ServerTarget.Get(); }
@@ -119,7 +133,13 @@ private:
 	void ScanCandidates();
 	void ApplyHighlight(AActor* Target);
 	void ClearHighlight();
-	void SetLockTarget(AActor* NewTarget, bool bSendToServer);
+	void SetLockTarget(AActor* NewTarget, bool bSendToServer, bool bHard = true);
+	bool IsSoftEnabled() const;
+	void RefreshTuning();
+	void UpdateSoft();
+	void DropSoft(const TCHAR* Why);
+	// Hostile, alive, in-view (viewport + margin), LOS-passing candidates within SoftBreakRange of the pawn, with the move-input angle.
+	void BuildSoftCandidates(TArray<FMDSoftCandidate>& Out, TArray<TWeakObjectPtr<AActor>>& OutActors, bool& bOutHasInput) const;
 	void BreakLock(EMDLockBreak Reason);
 	void UpdateBreakRules(float DeltaTime);
 	void UpdateFlick(float DeltaTime);
@@ -133,6 +153,7 @@ private:
 
 	// Local state.
 	TWeakObjectPtr<AActor> LockTarget;
+	bool bLockIsHard = false; // meaningful while LockTarget is set: hard (key) vs soft (attack-driven)
 	float NoLOSSeconds = 0.0f;
 	bool bTargetHasLOS = true;
 	double LastAttackTime = -1000.0;
@@ -155,6 +176,7 @@ private:
 
 	// Server state.
 	TWeakObjectPtr<AActor> ServerTarget;
+	bool bServerSoft = false;
 	mutable double ServerLastLOSTime = -1000.0; // ValidateTargetOnServer refreshes it
 	float ServerUpkeepTimer = 0.0f;
 

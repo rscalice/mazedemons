@@ -160,9 +160,87 @@ bool FMDLockOnRules::UseLockedTargetForWarp(bool bHasMoveInput, const FVector& I
 	return FVector::DotProduct(In, To / Dist) >= FMath::Cos(FMath::DegreesToRadians(Tuning.WarpAngleDeg));
 }
 
-bool FMDLockOnRules::ValidateServerTarget(bool bAlive, bool bHostile, float DistanceCm, float SecondsSinceLOS, const FMDLockOnTuning& Tuning)
+bool FMDLockOnRules::ValidateServerTarget(bool bAlive, bool bHostile, float DistanceCm, float SecondsSinceLOS, const FMDLockOnTuning& Tuning, bool bSoft)
 {
-	return bAlive && bHostile && DistanceCm <= Tuning.MaxRange + Tuning.ServerRangeTolerance && SecondsSinceLOS <= Tuning.ServerLOSWindow;
+	const float Range = bSoft ? Tuning.SoftBreakRange : Tuning.MaxRange;
+	return bAlive && bHostile && DistanceCm <= Range + Tuning.ServerRangeTolerance && SecondsSinceLOS <= Tuning.ServerLOSWindow;
+}
+
+float FMDLockOnRules::SoftScore(const FMDSoftCandidate& C, const FMDLockOnTuning& Tuning, bool bHasMoveInput)
+{
+	const float Close = FMath::Clamp(1.0f - C.DistanceCm / FMath::Max(Tuning.SoftRange, 1.0f), 0.0f, 1.0f);
+	const float Centre = FMath::Clamp(1.0f - C.CentreOffset, 0.0f, 1.0f);
+	float Score = Tuning.SoftWeightDistance * Close + Tuning.SoftWeightCentre * Centre;
+	if (bHasMoveInput && C.InputAngleDeg >= 0.0f)
+	{
+		Score += Tuning.SoftWeightInput * FMath::Clamp(1.0f - C.InputAngleDeg / FMath::Max(Tuning.SoftInputFullDeg, 1.0f), 0.0f, 1.0f);
+	}
+	return Score;
+}
+
+int32 FMDLockOnRules::PickSoftBest(const TArray<FMDSoftCandidate>& Candidates, const FMDLockOnTuning& Tuning, bool bHasMoveInput, float* OutScore)
+{
+	const FMDSoftCandidate* Best = nullptr;
+	float BestScore = -1.0f;
+	for (const FMDSoftCandidate& C : Candidates)
+	{
+		if (!C.bInView || C.DistanceCm > Tuning.SoftRange)
+		{
+			continue;
+		}
+		const float S = SoftScore(C, Tuning, bHasMoveInput);
+		const bool bBetter = !Best || S > BestScore + 1.0e-5f
+			|| (FMath::Abs(S - BestScore) <= 1.0e-5f && (C.DistanceCm < Best->DistanceCm || (C.DistanceCm == Best->DistanceCm && C.Id < Best->Id)));
+		if (bBetter)
+		{
+			Best = &C;
+			BestScore = S;
+		}
+	}
+	if (OutScore)
+	{
+		*OutScore = Best ? BestScore : 0.0f;
+	}
+	return Best ? Best->Id : INDEX_NONE;
+}
+
+bool FMDLockOnRules::IsInView(const FVector2D& Pixel, bool bProjected, const FVector2D& ViewSize, float Margin)
+{
+	if (!bProjected)
+	{
+		return false;
+	}
+	const double MX = ViewSize.X * Margin;
+	const double MY = ViewSize.Y * Margin;
+	return Pixel.X >= -MX && Pixel.X <= ViewSize.X + MX && Pixel.Y >= -MY && Pixel.Y <= ViewSize.Y + MY;
+}
+
+float FMDLockOnRules::CentreOffset(const FVector2D& Pixel, const FVector2D& ViewSize)
+{
+	const double HX = FMath::Max(ViewSize.X * 0.5, 1.0);
+	const double HY = FMath::Max(ViewSize.Y * 0.5, 1.0);
+	return static_cast<float>(FMath::Max(FMath::Abs(Pixel.X - HX) / HX, FMath::Abs(Pixel.Y - HY) / HY));
+}
+
+bool FMDLockOnRules::HasCandidateInInputCone(const TArray<FMDSoftCandidate>& Candidates, int32 ExcludeId, const FMDLockOnTuning& Tuning)
+{
+	for (const FMDSoftCandidate& C : Candidates)
+	{
+		if (C.Id != ExcludeId && C.bInView && C.DistanceCm <= Tuning.SoftRange && C.InputAngleDeg >= 0.0f && C.InputAngleDeg <= Tuning.SoftInputConeDeg)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FMDLockOnRules::ShouldSoftRetarget(const FMDSoftRetargetInput& In, const FMDLockOnTuning& Tuning)
+{
+	if (!In.bTargetValid || !In.bInView || In.DistanceCm > Tuning.SoftBreakRange)
+	{
+		return true;
+	}
+	return In.bHasMoveInput && In.TargetInputAngleDeg > Tuning.SoftRetargetInputDeg && In.bOtherInInputCone;
 }
 
 float FMDLockOnRules::AssistStep(float ErrorDeg, float Strength01, float SecondsSincePlayerInput, float DeltaSeconds, const FMDLockOnTuning& Tuning)

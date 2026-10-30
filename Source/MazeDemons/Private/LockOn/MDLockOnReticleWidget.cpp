@@ -14,9 +14,10 @@ namespace MDLockOnReticleLocal
 	}
 }
 
-void UMDLockOnReticleWidget::SetLocked(const FVector2D& TargetPixel, float PoiseFraction, bool bThreatening, float Scale)
+void UMDLockOnReticleWidget::SetLocked(const FVector2D& TargetPixel, float PoiseFraction, bool bThreatening, float Scale, bool bSoftLock)
 {
 	bLocked = true;
+	bSoft = bSoftLock;
 	SnapOffAlpha = 0.0f;
 	Pixel = TargetPixel;
 	Poise = PoiseFraction;
@@ -73,10 +74,11 @@ int32 UMDLockOnReticleWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 	// Slate paint is in the widget's local (DPI-scaled) space: convert from viewport pixels.
 	const float DPI = FMath::Max(AllottedGeometry.GetAccumulatedLayoutTransform().GetScale(), 0.01f);
 	const FVector2D Centre = Pixel / DPI;
-	const float Fade = bLocked ? 1.0f : SnapOffAlpha;
+	const float SoftFade = bSoft ? SoftAlpha : 1.0f;
+	const float Fade = (bLocked ? 1.0f : SnapOffAlpha) * SoftFade;
 	// Snap-off: the diamond opens up and fades; locked: steady.
 	const float Grow = bLocked ? 1.0f : 1.0f + (1.0f - SnapOffAlpha) * 0.9f;
-	const float R = HalfDiagonal * ReticleScale * Grow;
+	const float R = HalfDiagonal * ReticleScale * (bSoft ? SoftScale : 1.0f) * Grow;
 
 	const FLinearColor Calm(0.88f, 0.86f, 0.80f, 0.95f * Fade); // muted off-white
 	const FLinearColor Alert(0.92f, 0.20f, 0.16f, 0.98f * Fade);
@@ -91,7 +93,7 @@ int32 UMDLockOnReticleWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 	++LayerId;
 
 	// Poise ring: a thin arc, full = full poise.
-	if (bLocked && Poise >= 0.0f)
+	if (bLocked && !bSoft && Poise >= 0.0f)
 	{
 		const float Radius = RingRadius * ReticleScale;
 		const int32 Segments = FMath::Clamp(FMath::CeilToInt(RingSegments * FMath::Clamp(Poise, 0.0f, 1.0f)), 0, RingSegments);

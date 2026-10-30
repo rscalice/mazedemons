@@ -13,6 +13,7 @@
 #include "MDComboComponent.h"
 #include "MDGameplayStatics.h"
 #include "MDInventoryComponent.h"
+#include "LockOn/MDLockOnComponent.h"
 #include "MDPoiseComponent.h"
 #include "Engine/World.h"
 #include "Net/UnrealNetwork.h"
@@ -720,6 +721,14 @@ bool UMDRangedComponent::FireShotLocal()
 	if (Now < NextLocalShotTime || GetViewMagRounds() <= 0 || bReloading || UMDGameplayStatics::IsPawnDead(Pawn) || UMDPoiseComponent::IsActorStunned(Pawn))
 	{
 		return false;
+	}
+	// Autonomous soft lock: firing picks / keeps / retargets the soft target (local controller only; a hard lock is left alone).
+	if (Pawn->IsPlayerControlled())
+	{
+		if (UMDLockOnComponent* Lock = UMDLockOnComponent::FindFor(Pawn))
+		{
+			Lock->NotifyPlayerAttacked();
+		}
 	}
 	FVector Muzzle;
 	FVector AimDir;

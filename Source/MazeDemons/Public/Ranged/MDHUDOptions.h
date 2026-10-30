@@ -40,8 +40,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
 	static void SetLockOnReticleScale(float Scale);
 
-	// Lock the best target by itself when attacking with no lock.
+	// Autonomous soft lock on / off (default on).
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
+	static void SetSoftLockOn(bool bEnabled);
+
+	// Old name of SetSoftLockOn (the "auto-lock when attacking" option became the soft lock). Kept so existing Blueprint calls still work.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options", meta = (DeprecatedFunction, DeprecationMessage = "Use SetSoftLockOn"))
 	static void SetLockOnAutoAcquire(bool bAuto);
 
 	// Pushes the saved values that live in console variables (the off-screen threat toggle). Cheap; the HUD calls it on construct.

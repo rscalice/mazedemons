@@ -15,7 +15,11 @@ class MAZEDEMONS_API UMDLockOnReticleWidget : public UUserWidget
 
 public:
 	// Locked: the diamond sits at TargetPixel. PoiseFraction < 0 hides the ring. Neighbour pixels with bHas* false are not drawn.
-	void SetLocked(const FVector2D& TargetPixel, float PoiseFraction, bool bThreatening, float Scale);
+	// bSoft: the autonomous soft lock: a smaller, dimmer diamond (60 % alpha, 75 % size, no poise ring). Hard lock: full.
+	void SetLocked(const FVector2D& TargetPixel, float PoiseFraction, bool bThreatening, float Scale, bool bSoftLock = false);
+	bool IsSoftState() const { return bSoft; }
+	static constexpr float SoftAlpha = 0.6f;
+	static constexpr float SoftScale = 0.75f;
 	void SetNeighbours(bool bHasLeft, const FVector2D& LeftPixel, bool bHasRight, const FVector2D& RightPixel);
 	// The lock broke: play the snap-off animation at the last position, then hide.
 	void BeginSnapOff();
@@ -39,6 +43,7 @@ private:
 	FVector2D Pixel = FVector2D::ZeroVector;
 	float Poise = -1.0f;
 	bool bThreat = false;
+	bool bSoft = false;
 	float ReticleScale = 1.0f;
 	bool bHasLeft = false;
 	bool bHasRight = false;

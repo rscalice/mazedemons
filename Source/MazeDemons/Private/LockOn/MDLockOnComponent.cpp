@@ -44,6 +44,18 @@ namespace MDLockOnLocal
 	TAutoConsoleVariable<float> CVarSelfTest(TEXT("md.LockOn.SelfTest"), 0.0f,
 		TEXT("Seconds into the level at which the local lock-on locks the best target once and dumps its state (headless checks)."), ECVF_Default);
 
+	// Autonomous soft lock (distances in cm, like md.LockOn.Range).
+	TAutoConsoleVariable<int32> CVarSoft(TEXT("md.LockOn.Soft"), -1,
+		TEXT("1 / 0 = force the autonomous soft lock on / off (-1 = use the option)."), ECVF_Default);
+	TAutoConsoleVariable<float> CVarSoftRange(TEXT("md.LockOn.SoftRange"), 1200.0f,
+		TEXT("Soft lock acquire range in cm (default 1200 = 12 m)."), ECVF_Default);
+	TAutoConsoleVariable<float> CVarSoftBreakRange(TEXT("md.LockOn.SoftBreakRange"), 1500.0f,
+		TEXT("Soft lock retargets at attack start beyond this distance in cm (default 1500 = 15 m). The server validates against it."), ECVF_Default);
+	TAutoConsoleVariable<float> CVarSoftTimeout(TEXT("md.LockOn.SoftTimeout"), 4.0f,
+		TEXT("Seconds without an attack before the soft lock drops."), ECVF_Default);
+	TAutoConsoleVariable<float> CVarSoftViewMargin(TEXT("md.LockOn.SoftViewMargin"), 0.10f,
+		TEXT("Fraction of the viewport the soft lock's in-view test is widened by on every side."), ECVF_Default);
+
 	constexpr float ScanInterval = 0.1f;
 	constexpr float ReassertInterval = 1.5f;
 	constexpr float ChestLift = 20.0f; // actor origin of a character is the capsule centre
@@ -144,6 +156,32 @@ bool UMDLockOnComponent::GetLockAimPoint(FVector& OutPoint) const
 	}
 	OutPoint = ChestOf(Target);
 	return true;
+}
+
+bool UMDLockOnComponent::IsHardLock() const
+{
+	if (LockTarget.Get())
+	{
+		return bLockIsHard;
+	}
+	return ServerTarget.Get() && !bServerSoft;
+}
+
+bool UMDLockOnComponent::IsSoftEnabled() const
+{
+	const int32 Override = MDLockOnLocal::CVarSoft.GetValueOnGameThread();
+	return Override >= 0 ? Override != 0 : GetDefault<UMDLocalSettings>()->bSoftLockOn;
+}
+
+void UMDLockOnComponent::RefreshTuning()
+{
+	const float RangeOverride = MDLockOnLocal::CVarRange.GetValueOnGameThread();
+	Tuning.MaxRange = RangeOverride > 0.0f ? RangeOverride : FMDLockOnTuning().MaxRange;
+	Tuning.BreakRange = RangeOverride > 0.0f ? RangeOverride * 1.2f : FMDLockOnTuning().BreakRange; // the override moves the break distance with it
+	Tuning.SoftRange = FMath::Max(MDLockOnLocal::CVarSoftRange.GetValueOnGameThread(), 1.0f);
+	Tuning.SoftBreakRange = FMath::Max(MDLockOnLocal::CVarSoftBreakRange.GetValueOnGameThread(), Tuning.SoftRange);
+	Tuning.SoftTimeout = FMath::Max(MDLockOnLocal::CVarSoftTimeout.GetValueOnGameThread(), 0.0f);
+	Tuning.SoftViewMargin = FMath::Clamp(MDLockOnLocal::CVarSoftViewMargin.GetValueOnGameThread(), 0.0f, 1.0f);
 }
 
 bool UMDLockOnComponent::IsLockable(const AActor* Actor) const
@@ -357,14 +395,26 @@ void UMDLockOnComponent::ScanCandidates()
 	}
 }
 
-void UMDLockOnComponent::SetLockTarget(AActor* NewTarget, bool bSendToServer)
+void UMDLockOnComponent::SetLockTarget(AActor* NewTarget, bool bSendToServer, bool bHard)
 {
 	AActor* Old = LockTarget.Get();
 	if (Old == NewTarget)
 	{
+		if (NewTarget && bLockIsHard != bHard)
+		{
+			// Same enemy, new mode (hard key on a soft target, or the reverse): no new target, but the server must learn the mode.
+			bLockIsHard = bHard;
+			UE_LOG(LogMDLockOn, Display, TEXT("LockOn: %s lock on %s"), bHard ? TEXT("hard") : TEXT("soft"), *NewTarget->GetName());
+			NoLOSSeconds = 0.0f;
+			if (bSendToServer)
+			{
+				Server_SetLockTarget(NewTarget, !bHard);
+			}
+		}
 		return;
 	}
 	LockTarget = NewTarget;
+	bLockIsHard = NewTarget && bHard;
 	NoLOSSeconds = 0.0f;
 	bTargetHasLOS = true;
 	LastReassertTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -372,7 +422,8 @@ void UMDLockOnComponent::SetLockTarget(AActor* NewTarget, bool bSendToServer)
 	{
 		Reticle->BeginSnapOff();
 	}
-	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: lock %s -> %s"), Old ? *Old->GetName() : TEXT("none"), NewTarget ? *NewTarget->GetName() : TEXT("none"));
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: %s lock %s -> %s"), NewTarget && !bHard ? TEXT("soft") : TEXT("hard"),
+		Old ? *Old->GetName() : TEXT("none"), NewTarget ? *NewTarget->GetName() : TEXT("none"));
 	ClearHighlight();
 	if (NewTarget && IsLocal())
 	{
@@ -380,7 +431,7 @@ void UMDLockOnComponent::SetLockTarget(AActor* NewTarget, bool bSendToServer)
 	}
 	if (bSendToServer)
 	{
-		Server_SetLockTarget(NewTarget); // runs locally on a listen server host
+		Server_SetLockTarget(NewTarget, NewTarget && !bHard); // only on a target / mode change; runs locally on a listen server host
 	}
 	OnLockTargetChanged.Broadcast(NewTarget, Old);
 }
@@ -392,8 +443,14 @@ void UMDLockOnComponent::BreakLock(EMDLockBreak Reason)
 		return;
 	}
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: unlock (%s)"), MDLockOnLocal::BreakName(Reason));
+	const bool bWasHard = bLockIsHard;
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: unlock (%s, was %s)"), MDLockOnLocal::BreakName(Reason), bWasHard ? TEXT("hard") : TEXT("soft"));
 	SetLockTarget(nullptr, true);
+	// Unlocking a hard lock returns to soft mode: the next attack soft-locks again. A dead hard target also keeps the chain going.
+	if (Reason == EMDLockBreak::TargetDied && !bWasHard)
+	{
+		return; // soft kills are chained by UpdateSoft
+	}
 	if (Reason == EMDLockBreak::TargetDied)
 	{
 		ScanCandidates();
@@ -423,6 +480,16 @@ bool UMDLockOnComponent::AcquireBestTarget()
 		return false;
 	}
 	ScanCandidates();
+	// The key on a soft-locked enemy makes that lock hard (same target) instead of jumping to a different one.
+	if (AActor* Soft = LockTarget.Get())
+	{
+		if (!bLockIsHard && CandidateActors.Contains(Soft))
+		{
+			UE_LOG(LogMDLockOn, Display, TEXT("LockOn: hard lock promotes soft target %s"), *Soft->GetName());
+			SetLockTarget(Soft, true, true);
+			return true;
+		}
+	}
 	const int32 Best = FMDLockOnRules::PickBest(Candidates, Tuning, true);
 	if (Best == INDEX_NONE)
 	{
@@ -436,21 +503,24 @@ bool UMDLockOnComponent::AcquireBestTarget()
 
 void UMDLockOnComponent::OnLockPressed()
 {
-	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: lock key pressed (locked=%d)"), LockTarget.Get() ? 1 : 0);	if (!IsLocal() || IsPlayerDead() || IsMenuOpen())
+	const bool bHardLocked = LockTarget.Get() && bLockIsHard;
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: lock key pressed (hardLocked=%d softLocked=%d)"), bHardLocked ? 1 : 0, LockTarget.Get() && !bLockIsHard ? 1 : 0);
+	if (!IsLocal() || IsPlayerDead() || IsMenuOpen())
 	{
 		return;
 	}
+	// The key is the HARD lock: it overrides a soft lock, and unlocking returns to soft mode.
 	const bool bHold = GetDefault<UMDLocalSettings>()->bLockOnHold;
 	if (bHold)
 	{
 		bHoldLocked = true;
-		if (!LockTarget.Get())
+		if (!bHardLocked)
 		{
 			AcquireBestTarget();
 		}
 		return;
 	}
-	if (LockTarget.Get())
+	if (bHardLocked)
 	{
 		ClearLock();
 	}
@@ -478,8 +548,8 @@ void UMDLockOnComponent::OnLockReleased()
 void UMDLockOnComponent::CycleTarget(int32 Direction)
 {
 	AActor* Current = LockTarget.Get();
-	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: cycle %d (locked=%d)"), Direction, Current ? 1 : 0);
-	if (!Current || !IsLocal() || IsPlayerDead() || IsMenuOpen())
+	UE_LOG(LogMDLockOn, Display, TEXT("LockOn: cycle %d (locked=%d hard=%d)"), Direction, Current ? 1 : 0, bLockIsHard ? 1 : 0);
+	if (!Current || !bLockIsHard || !IsLocal() || IsPlayerDead() || IsMenuOpen())
 	{
 		return;
 	}
@@ -507,9 +577,171 @@ void UMDLockOnComponent::NotifyPlayerAttacked()
 		return;
 	}
 	LastAttackTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-	if (!LockTarget.Get() && GetDefault<UMDLocalSettings>()->bLockOnAutoAcquire)
+	RefreshTuning();
+	if (IsPlayerDead() || IsMenuOpen() || !FMDLockOnRules::ShouldSoftAcquire(IsSoftEnabled(), LockTarget.Get() && bLockIsHard))
 	{
-		AcquireBestTarget();
+		return; // a hard lock stays; soft lock off
+	}
+	AcquireSoftTarget(true);
+}
+
+void UMDLockOnComponent::BuildSoftCandidates(TArray<FMDSoftCandidate>& Out, TArray<TWeakObjectPtr<AActor>>& OutActors, bool& bOutHasInput) const
+{
+	Out.Reset();
+	OutActors.Reset();
+	bOutHasInput = false;
+	const APlayerController* PC = GetPC();
+	const APawn* Pawn = GetPawn();
+	UWorld* World = GetWorld();
+	if (!PC || !Pawn || !World)
+	{
+		return;
+	}
+	int32 SizeX = 0;
+	int32 SizeY = 0;
+	PC->GetViewportSize(SizeX, SizeY);
+	const FVector2D View(SizeX, SizeY);
+	FVector CamLoc;
+	FRotator CamRot;
+	PC->GetPlayerViewPoint(CamLoc, CamRot);
+	const FVector Input = FVector(Pawn->GetLastMovementInputVector().X, Pawn->GetLastMovementInputVector().Y, 0.0).GetSafeNormal();
+	bOutHasInput = !Input.IsNearlyZero();
+
+	for (TActorIterator<APawn> It(World); It; ++It)
+	{
+		APawn* Other = *It;
+		if (Other == Pawn || !IsLockable(Other))
+		{
+			continue;
+		}
+		const FVector ToOther = Other->GetActorLocation() - Pawn->GetActorLocation();
+		const float Dist = static_cast<float>(ToOther.Size());
+		if (Dist > Tuning.SoftBreakRange) // SoftRange is applied by the picker; the wider band lets the current target be judged
+		{
+			continue;
+		}
+		FVector2D Pixel(0, 0);
+		const bool bProjected = PC->ProjectWorldLocationToScreen(ChestOf(Other), Pixel, false);
+		const bool bInView = FMDLockOnRules::IsInView(Pixel, bProjected, View, Tuning.SoftViewMargin);
+		if (!bInView || !HasLineOfSight(Other, CamLoc)) // level geometry only; other pawns and attached weapons never occlude
+		{
+			continue;
+		}
+		FMDSoftCandidate C;
+		C.Id = Out.Num();
+		C.DistanceCm = Dist;
+		C.CentreOffset = FMDLockOnRules::CentreOffset(Pixel, View);
+		C.bInView = true;
+		const FVector Planar = FVector(ToOther.X, ToOther.Y, 0.0).GetSafeNormal();
+		if (bOutHasInput && !Planar.IsNearlyZero())
+		{
+			C.InputAngleDeg = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(static_cast<float>(FVector::DotProduct(Input, Planar)), -1.0f, 1.0f)));
+		}
+		Out.Add(C);
+		OutActors.Add(Other);
+	}
+}
+
+bool UMDLockOnComponent::AcquireSoftTarget(bool bAtAttackStart)
+{
+	if (!IsLocal() || IsPlayerDead() || IsMenuOpen())
+	{
+		return false;
+	}
+	RefreshTuning();
+	TArray<FMDSoftCandidate> Soft;
+	TArray<TWeakObjectPtr<AActor>> SoftActors;
+	bool bHasInput = false;
+	BuildSoftCandidates(Soft, SoftActors, bHasInput);
+
+	AActor* Current = LockTarget.Get();
+	int32 CurrentId = INDEX_NONE;
+	for (int32 i = 0; i < SoftActors.Num(); ++i)
+	{
+		if (SoftActors[i].Get() == Current)
+		{
+			CurrentId = i;
+			break;
+		}
+	}
+	if (Current && !bLockIsHard)
+	{
+		// Keep the soft target unless the retarget rules say otherwise (dead / out of view / beyond 15 m / input steering elsewhere).
+		FMDSoftRetargetInput In;
+		In.bTargetValid = CurrentId != INDEX_NONE && IsLockable(Current); // not in the list = out of view, no LOS or too far
+		In.bInView = CurrentId != INDEX_NONE;
+		In.DistanceCm = CurrentId != INDEX_NONE ? Soft[CurrentId].DistanceCm : 0.0f;
+		In.bHasMoveInput = bHasInput;
+		In.TargetInputAngleDeg = CurrentId != INDEX_NONE ? FMath::Max(Soft[CurrentId].InputAngleDeg, 0.0f) : 0.0f;
+		In.bOtherInInputCone = FMDLockOnRules::HasCandidateInInputCone(Soft, CurrentId, Tuning);
+		if (!FMDLockOnRules::ShouldSoftRetarget(In, Tuning))
+		{
+			return true;
+		}
+		UE_LOG(LogMDLockOn, Display, TEXT("LockOn: soft retarget from %s (valid=%d inView=%d dist=%.0f input=%d angle=%.0f)"), *Current->GetName(),
+			In.bTargetValid ? 1 : 0, In.bInView ? 1 : 0, In.DistanceCm, In.bHasMoveInput ? 1 : 0, In.TargetInputAngleDeg);
+	}
+	else if (Current)
+	{
+		return true; // hard lock: never replaced by a soft pick
+	}
+
+	const int32 Best = FMDLockOnRules::PickSoftBest(Soft, Tuning, bHasInput);
+	if (Best == INDEX_NONE)
+	{
+		UE_LOG(LogMDLockOn, Display, TEXT("LockOn: soft acquire found no target (%d in view, range=%.0f, %s)"), Soft.Num(), Tuning.SoftRange,
+			bAtAttackStart ? TEXT("attack") : TEXT("chain"));
+		if (Current && !bLockIsHard)
+		{
+			DropSoft(TEXT("no candidate"));
+		}
+		return false;
+	}
+	AActor* NewTarget = SoftActors[Best].Get();
+	if (NewTarget != Current)
+	{
+		UE_LOG(LogMDLockOn, Display, TEXT("LockOn: soft acquire %s dist=%.0f centre=%.2f input=%.0f (%s)"), *NewTarget->GetName(), Soft[Best].DistanceCm,
+			Soft[Best].CentreOffset, Soft[Best].InputAngleDeg, bAtAttackStart ? TEXT("attack") : TEXT("chain"));
+		SetLockTarget(NewTarget, true, false);
+	}
+	return true;
+}
+
+void UMDLockOnComponent::DropSoft(const TCHAR* Why)
+{
+	if (LockTarget.Get() && !bLockIsHard)
+	{
+		UE_LOG(LogMDLockOn, Display, TEXT("LockOn: soft drop %s (%s)"), *LockTarget.Get()->GetName(), Why);
+		SetLockTarget(nullptr, true);
+	}
+}
+
+// Per-frame upkeep of a soft lock: timeout, death (chain to the next best in view), invalid. Never touches the camera.
+void UMDLockOnComponent::UpdateSoft()
+{
+	const AActor* Target = LockTarget.Get();
+	if (!Target || bLockIsHard)
+	{
+		return;
+	}
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (IsPlayerDead() || IsMenuOpen())
+	{
+		DropSoft(TEXT("player dead / menu"));
+	}
+	else if (!IsSoftEnabled())
+	{
+		DropSoft(TEXT("option off"));
+	}
+	else if (FMDLockOnRules::IsSoftExpired(static_cast<float>(Now - LastAttackTime), Tuning))
+	{
+		DropSoft(TEXT("timeout"));
+	}
+	else if (!IsLockable(Target))
+	{
+		UE_LOG(LogMDLockOn, Display, TEXT("LockOn: soft target %s died / invalid: chaining"), *Target->GetName());
+		SetLockTarget(nullptr, true);
+		AcquireSoftTarget(false);
 	}
 }
 
@@ -528,7 +760,7 @@ AActor* UMDLockOnComponent::GetWarpOverrideTarget(bool bHasMoveInput, const FVec
 // Server
 // ---------------------------------------------------------------------------------------------------------------------
 
-bool UMDLockOnComponent::ValidateTargetOnServer(const AActor* Target) const
+bool UMDLockOnComponent::ValidateTargetOnServer(const AActor* Target, bool bSoft) const
 {
 	const APawn* Player = GetPawn();
 	const UWorld* World = GetWorld();
@@ -548,19 +780,22 @@ bool UMDLockOnComponent::ValidateTargetOnServer(const AActor* Target) const
 	{
 		ServerLastLOSTime = -1000.0; // a new target must be visible now
 	}
-	return FMDLockOnRules::ValidateServerTarget(bAlive, bHostile, Dist, static_cast<float>(Now - ServerLastLOSTime), Tuning);
+	return FMDLockOnRules::ValidateServerTarget(bAlive, bHostile, Dist, static_cast<float>(Now - ServerLastLOSTime), Tuning, bSoft);
 }
 
-void UMDLockOnComponent::Server_SetLockTarget_Implementation(AActor* Target)
+void UMDLockOnComponent::Server_SetLockTarget_Implementation(AActor* Target, bool bSoft)
 {
+	RefreshTuning(); // the server's soft ranges come from the same cvars
 	if (!Target)
 	{
 		ServerTarget = nullptr;
+		bServerSoft = false;
 		return;
 	}
-	if (ValidateTargetOnServer(Target))
+	if (ValidateTargetOnServer(Target, bSoft))
 	{
 		ServerTarget = Target;
+		bServerSoft = bSoft;
 	}
 	else
 	{
@@ -569,6 +804,7 @@ void UMDLockOnComponent::Server_SetLockTarget_Implementation(AActor* Target)
 			UE_LOG(LogTemp, Display, TEXT("LockOn: server rejected lock hint %s"), *Target->GetName());
 		}
 		ServerTarget = nullptr; // an invalid hint never leaves a stale lock behind
+		bServerSoft = false;
 	}
 }
 
@@ -587,10 +823,12 @@ void UMDLockOnComponent::ServerUpkeep(float DeltaTime)
 	ServerUpkeepTimer = 0.0f;
 	const AActor* Target = ServerTarget.Get();
 	const APawn* Player = GetPawn();
-	const bool bFar = Player && FVector::Dist(Target->GetActorLocation(), Player->GetActorLocation()) > Tuning.BreakRange;
+	const float BreakRange = bServerSoft ? Tuning.SoftBreakRange + Tuning.ServerRangeTolerance : Tuning.BreakRange;
+	const bool bFar = Player && FVector::Dist(Target->GetActorLocation(), Player->GetActorLocation()) > BreakRange;
 	if (!Player || bFar || MDLockOnLocal::IsActorDead(Target) || MDLockOnLocal::IsActorDead(Player) || !UMDTargetableComponent::IsActorTargetable(Target))
 	{
 		ServerTarget = nullptr;
+		bServerSoft = false;
 	}
 }
 
@@ -650,6 +888,11 @@ void UMDLockOnComponent::UpdateCameraAssist(float DeltaTime)
 	APlayerController* PC = GetPC();
 	const AActor* Target = LockTarget.Get();
 	FVector2D Pixel;
+	if (!FMDLockOnRules::ShouldAssistCamera(bLockIsHard)) // a soft lock never touches the camera
+	{
+		bHaveAssistRotation = false;
+		return;
+	}
 	if (!PC || !Target || IsMenuOpen() || !CanProjectTarget(Target, Pixel))
 	{
 		bHaveAssistRotation = false;
@@ -716,7 +959,12 @@ void UMDLockOnComponent::UpdateReticle()
 	}
 	const AMDEnemyCharacter* Enemy = Cast<AMDEnemyCharacter>(Target);
 	const bool bThreat = Enemy && Enemy->bThreatening && Enemy->ThreatTarget == GetPawn();
-	Reticle->SetLocked(Pixel, Poise, bThreat, GetDefault<UMDLocalSettings>()->LockOnReticleScale);
+	Reticle->SetLocked(Pixel, Poise, bThreat, GetDefault<UMDLocalSettings>()->LockOnReticleScale, !bLockIsHard);
+	if (!bLockIsHard)
+	{
+		Reticle->SetNeighbours(false, FVector2D::ZeroVector, false, FVector2D::ZeroVector); // cycling hints are a hard-lock thing
+		return;
+	}
 
 	int32 Left = INDEX_NONE;
 	int32 Right = INDEX_NONE;
@@ -741,9 +989,7 @@ void UMDLockOnComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	const UWorld* World = GetWorld();
-	const float RangeOverride = MDLockOnLocal::CVarRange.GetValueOnGameThread();
-	Tuning.MaxRange = RangeOverride > 0.0f ? RangeOverride : FMDLockOnTuning().MaxRange;
-	Tuning.BreakRange = RangeOverride > 0.0f ? RangeOverride * 1.2f : FMDLockOnTuning().BreakRange; // the override moves the break distance with it
+	RefreshTuning();
 
 	ServerUpkeep(DeltaTime);
 	if (!World || !IsLocal())
@@ -778,20 +1024,27 @@ void UMDLockOnComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		FRotator CamRot;
 		GetPC()->GetPlayerViewPoint(CamLoc, CamRot);
 		ScanTimer += DeltaTime;
-		bTargetHasLOS = HasLineOfSight(Target, CamLoc);
-		if (ScanTimer >= MDLockOnLocal::ScanInterval)
+		if (!bLockIsHard)
 		{
-			ScanTimer = 0.0;
-			ScanCandidates();
+			UpdateSoft(); // timeout / death chain / invalid; no camera, no scan, no cycling
 		}
-		UpdateBreakRules(DeltaTime);
-		UpdateFlick(DeltaTime);
-		UpdateCameraAssist(DeltaTime);
-		// Late join / dropped hint: tell the server again now and then.
-		if (LockTarget.Get() && !GetOwner()->HasAuthority() && Now - LastReassertTime > MDLockOnLocal::ReassertInterval)
+		else
+		{
+			bTargetHasLOS = HasLineOfSight(Target, CamLoc);
+			if (ScanTimer >= MDLockOnLocal::ScanInterval)
+			{
+				ScanTimer = 0.0;
+				ScanCandidates();
+			}
+			UpdateBreakRules(DeltaTime);
+			UpdateFlick(DeltaTime);
+			UpdateCameraAssist(DeltaTime);
+		}
+		// Late join / dropped hint: tell the server again now and then (hard lock only; a soft lock sends on changes only).
+		if (LockTarget.Get() && bLockIsHard && !GetOwner()->HasAuthority() && Now - LastReassertTime > MDLockOnLocal::ReassertInterval)
 		{
 			LastReassertTime = Now;
-			Server_SetLockTarget(LockTarget.Get());
+			Server_SetLockTarget(LockTarget.Get(), false);
 		}
 		(void)Pawn;
 	}
@@ -799,14 +1052,24 @@ void UMDLockOnComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	{
 		if (LockTarget.IsStale())
 		{
+			const bool bWasHard = bLockIsHard;
 			LockTarget.Reset();
 			if (Reticle)
 			{
 				Reticle->BeginSnapOff();
 			}
-			Server_SetLockTarget(nullptr);
+			Server_SetLockTarget(nullptr, false);
 			OnLockTargetChanged.Broadcast(nullptr, nullptr);
-			BreakLock(EMDLockBreak::TargetDied); // destroyed with the lock on it: counts as a kill for auto-retarget
+			if (bWasHard)
+			{
+				BreakLock(EMDLockBreak::TargetDied); // destroyed with the lock on it: counts as a kill for auto-retarget
+				bLockIsHard = LockTarget.Get() != nullptr; // BreakLock may have hard-retargeted
+			}
+			else if (IsSoftEnabled() && !FMDLockOnRules::IsSoftExpired(static_cast<float>(Now - LastAttackTime), Tuning))
+			{
+				bLockIsHard = false;
+				AcquireSoftTarget(false); // a destroyed soft target is a kill: keep the chain going
+			}
 		}
 		bHaveAssistRotation = false;
 		Flick.Update(0.0f, DeltaTime);
@@ -817,9 +1080,10 @@ void UMDLockOnComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 void UMDLockOnComponent::DumpState() const
 {
 	const AActor* Target = GetLockTarget();
-	UE_LOG(LogTemp, Display, TEXT("LockOn: local=%d locked=%s server=%s candidates=%d noLOS=%.2f assist=%.2f range=%.0f"), IsLocal() ? 1 : 0,
-		Target ? *Target->GetName() : TEXT("none"), ServerTarget.Get() ? *ServerTarget.Get()->GetName() : TEXT("none"), Candidates.Num(),
-		NoLOSSeconds, GetAssistStrength(), Tuning.MaxRange);
+	UE_LOG(LogTemp, Display, TEXT("LockOn: local=%d locked=%s mode=%s server=%s candidates=%d noLOS=%.2f assist=%.2f range=%.0f soft=%d softRange=%.0f softBreak=%.0f softTimeout=%.1f"), IsLocal() ? 1 : 0,
+		Target ? *Target->GetName() : TEXT("none"), !Target ? TEXT("-") : (IsHardLock() ? TEXT("hard") : TEXT("soft")),
+		ServerTarget.Get() ? *ServerTarget.Get()->GetName() : TEXT("none"), Candidates.Num(),
+		NoLOSSeconds, GetAssistStrength(), Tuning.MaxRange, IsSoftEnabled() ? 1 : 0, Tuning.SoftRange, Tuning.SoftBreakRange, Tuning.SoftTimeout);
 	for (int32 i = 0; i < Candidates.Num(); ++i)
 	{
 		UE_LOG(LogTemp, Display, TEXT("  [%d] %s score %.2f dist %.0f angle %.1f onScreen %d threat %d"), i,
@@ -848,6 +1112,15 @@ namespace MDLockOnConsoleLocal
 			if (UMDLockOnComponent* Lock = UMDLockOnComponent::GetLocal(World))
 			{
 				Lock->AcquireBestTarget();
+				Lock->DumpState();
+			}
+		}));
+	FAutoConsoleCommandWithWorldAndArgs CmdSoftAcquire(TEXT("md.LockOn.SoftAcquire"), TEXT("Run the soft lock pick now, as an attack would (needs the soft lock on)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>&, UWorld* World)
+		{
+			if (UMDLockOnComponent* Lock = UMDLockOnComponent::GetLocal(World))
+			{
+				Lock->NotifyPlayerAttacked();
 				Lock->DumpState();
 			}
 		}));

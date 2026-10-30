@@ -61,10 +61,15 @@ void UMDHUDOptions::SetLockOnReticleScale(float Scale)
 	SaveSettings();
 }
 
+void UMDHUDOptions::SetSoftLockOn(bool bEnabled)
+{
+	GetMutableDefault<UMDLocalSettings>()->bSoftLockOn = bEnabled;
+	SaveSettings();
+}
+
 void UMDHUDOptions::SetLockOnAutoAcquire(bool bAuto)
 {
-	GetMutableDefault<UMDLocalSettings>()->bLockOnAutoAcquire = bAuto;
-	SaveSettings();
+	SetSoftLockOn(bAuto);
 }
 
 void UMDHUDOptions::ApplySavedOptions()

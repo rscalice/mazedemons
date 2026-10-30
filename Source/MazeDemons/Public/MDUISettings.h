@@ -120,7 +120,8 @@ public:
 	UPROPERTY(Config, BlueprintReadWrite, Category = "LockOn", meta = (ClampMin = "0.5", ClampMax = "2"))
 	float LockOnReticleScale = 1.0f;
 
-	// Lock the best target by itself when attacking with no lock (off by default).
+	// Autonomous soft lock (default on): attacking soft-locks the best enemy in view and keeps chaining after kills; no button. The lock key
+	// (Middle Mouse / right stick click) is still the hard lock and overrides it. Replaces the old "auto-lock when attacking" option.
 	UPROPERTY(Config, BlueprintReadWrite, Category = "LockOn")
-	bool bLockOnAutoAcquire = false;
+	bool bSoftLockOn = true;
 };

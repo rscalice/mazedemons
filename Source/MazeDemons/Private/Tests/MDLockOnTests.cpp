@@ -17,6 +17,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnServerTest, "MazeDemons.LockOn.ServerV
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnAssistTest, "MazeDemons.LockOn.CameraAssist", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnSeparationTest, "MazeDemons.LockOn.PawnSeparation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnSoftAcquireTest, "MazeDemons.LockOn.SoftAcquireOnAttack", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnSoftInputTest, "MazeDemons.LockOn.SoftInputSteer", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnSoftChainTest, "MazeDemons.LockOn.SoftChainOnKill", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnSoftTimeoutTest, "MazeDemons.LockOn.SoftTimeout", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnHardOverridesSoftTest, "MazeDemons.LockOn.HardOverridesSoft", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnSoftNoCameraTest, "MazeDemons.LockOn.SoftNoCameraAssist", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMDLockOnSoftServerTest, "MazeDemons.LockOn.SoftServerRange", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 static FMDLockOnCandidate MakeLockCandidate(int32 Id, float ScreenX, float AngleDeg, float DistanceCm, bool bOnScreen = true)
 {
 	FMDLockOnCandidate C;
@@ -256,7 +264,7 @@ bool FMDLockOnServerTest::RunTest(const FString& Parameters)
 	if (Lock)
 	{
 		TestFalse(TEXT("A null hint is refused"), Lock->ValidateTargetOnServer(nullptr));
-		Lock->Server_SetLockTarget_Implementation(nullptr);
+		Lock->Server_SetLockTarget_Implementation(nullptr, false);
 		TestNull(TEXT("Server copy empty"), Lock->GetServerLockTarget());
 		TestFalse(TEXT("No lock"), Lock->HasLockTarget());
 		FVector Point;
@@ -355,6 +363,234 @@ bool FMDLockOnSeparationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("The overlap only ever shrinks"), bMonotonic);
 	TestTrue(TEXT("Bodies no longer interpenetrate after half a second"), LastPen <= 1.0f);
 	TestTrue(TEXT("The player stayed where it was"), Player.IsNearlyZero());
+	return true;
+}
+
+// ---- Autonomous soft lock ----
+
+namespace MDLockOnSoftTestLocal
+{
+	const FVector2D View(1920, 1080);
+
+	// A candidate as the component builds it: view test and centre offset from a projected pixel.
+	FMDSoftCandidate Make(int32 Id, float DistCm, const FVector2D& Pixel, bool bProjected = true, float InputAngle = -1.0f, float Margin = 0.10f)
+	{
+		FMDSoftCandidate C;
+		C.Id = Id;
+		C.DistanceCm = DistCm;
+		C.CentreOffset = FMDLockOnRules::CentreOffset(Pixel, View);
+		C.bInView = FMDLockOnRules::IsInView(Pixel, bProjected, View, Margin);
+		C.InputAngleDeg = InputAngle;
+		return C;
+	}
+	const FVector2D Centre(960, 540);
+}
+
+bool FMDLockOnSoftAcquireTest::RunTest(const FString& Parameters)
+{
+	using namespace MDLockOnSoftTestLocal;
+	const FMDLockOnTuning T;
+	TestEqual(TEXT("Soft range defaults to 12 m"), T.SoftRange, 1200.0f);
+	TestEqual(TEXT("Soft break range defaults to 15 m"), T.SoftBreakRange, 1500.0f);
+
+	// In-view test: widened by 10 % of the viewport on every side; behind the camera (not projected) never.
+	TestTrue(TEXT("Screen centre"), FMDLockOnRules::IsInView(Centre, true, View, 0.10f));
+	TestTrue(TEXT("Just past the left edge, inside the margin"), FMDLockOnRules::IsInView(FVector2D(-150, 540), true, View, 0.10f));
+	TestFalse(TEXT("Well off the left edge"), FMDLockOnRules::IsInView(FVector2D(-300, 540), true, View, 0.10f));
+	TestTrue(TEXT("Past the right edge, inside the margin"), FMDLockOnRules::IsInView(FVector2D(2050, 540), true, View, 0.10f));
+	TestFalse(TEXT("Past the bottom margin"), FMDLockOnRules::IsInView(FVector2D(960, 1300), true, View, 0.10f));
+	TestFalse(TEXT("Behind the camera"), FMDLockOnRules::IsInView(Centre, false, View, 0.10f));
+	TestTrue(TEXT("Centre offset 0 at the centre"), FMath::IsNearlyZero(FMDLockOnRules::CentreOffset(Centre, View)));
+	TestTrue(TEXT("Centre offset 1 at the right edge"), FMath::IsNearlyEqual(FMDLockOnRules::CentreOffset(FVector2D(1920, 540), View), 1.0f, 1.0e-3f));
+
+	// Nearest in view wins; off-screen, behind and out-of-range candidates are ignored even when they are closer.
+	TArray<FMDSoftCandidate> C;
+	C.Add(Make(0, 800.0f, Centre));                           // in view, 8 m
+	C.Add(Make(1, 500.0f, FVector2D(1500, 540)));             // in view, 5 m, right of centre: the nearest in view
+	C.Add(Make(2, 300.0f, Centre, false));                    // 3 m but behind the camera
+	C.Add(Make(3, 400.0f, FVector2D(3000, 540)));             // 4 m but far off-screen
+	C.Add(Make(4, 1300.0f, Centre));                          // in view but beyond 12 m
+	TestEqual(TEXT("Nearest in view"), FMDLockOnRules::PickSoftBest(C, T, false), 1);
+
+	// Ties: same distance and offset -> lower id; same score but nearer wins.
+	C.Reset();
+	C.Add(Make(5, 600.0f, Centre));
+	C.Add(Make(3, 600.0f, Centre));
+	TestEqual(TEXT("Exact tie: lower id"), FMDLockOnRules::PickSoftBest(C, T, false), 3);
+
+	// Distance dominates centring: a 4 m target at the screen edge beats a 10 m one dead centre.
+	C.Reset();
+	C.Add(Make(0, 1000.0f, Centre));
+	C.Add(Make(1, 400.0f, FVector2D(1850, 540)));
+	TestEqual(TEXT("Distance is dominant"), FMDLockOnRules::PickSoftBest(C, T, false), 1);
+
+	// Nothing qualifies: empty, all off-screen, all too far.
+	TestEqual(TEXT("No candidates"), FMDLockOnRules::PickSoftBest(TArray<FMDSoftCandidate>(), T, false), (int32)INDEX_NONE);
+	C.Reset();
+	C.Add(Make(0, 300.0f, FVector2D(-900, 540)));
+	C.Add(Make(1, 1201.0f, Centre));
+	TestEqual(TEXT("Only off-screen / out-of-range"), FMDLockOnRules::PickSoftBest(C, T, false), (int32)INDEX_NONE);
+	return true;
+}
+
+bool FMDLockOnSoftInputTest::RunTest(const FString& Parameters)
+{
+	using namespace MDLockOnSoftTestLocal;
+	const FMDLockOnTuning T;
+	// A: closer (5 m) but behind the move input (150 deg). B: 7 m, straight ahead of the input (10 deg).
+	TArray<FMDSoftCandidate> C;
+	C.Add(Make(0, 500.0f, Centre, true, 150.0f));
+	C.Add(Make(1, 700.0f, Centre, true, 10.0f));
+	TestEqual(TEXT("No input: the closer one"), FMDLockOnRules::PickSoftBest(C, T, false), 0);
+	TestEqual(TEXT("Moving toward B: the input wins the close call"), FMDLockOnRules::PickSoftBest(C, T, true), 1);
+
+	// The input never drags a pick beyond the range or off screen.
+	C.Reset();
+	C.Add(Make(0, 500.0f, Centre, true, 150.0f));
+	C.Add(Make(1, 1300.0f, Centre, true, 0.0f));
+	C.Add(Make(2, 300.0f, Centre, false, 0.0f));
+	TestEqual(TEXT("Input cannot pick out of range or behind"), FMDLockOnRules::PickSoftBest(C, T, true), 0);
+
+	// A much closer enemy still beats a slightly better aligned far one (distance dominates).
+	C.Reset();
+	C.Add(Make(0, 150.0f, Centre, true, 120.0f));
+	C.Add(Make(1, 1150.0f, Centre, true, 30.0f));
+	TestEqual(TEXT("Distance still dominates"), FMDLockOnRules::PickSoftBest(C, T, true), 0);
+
+	// Retarget at attack start.
+	FMDSoftRetargetInput In;
+	TestFalse(TEXT("Healthy target stays"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In.bTargetValid = false;
+	TestTrue(TEXT("Dead / invalid target retargets"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In = FMDSoftRetargetInput();
+	In.bInView = false;
+	TestTrue(TEXT("Out of view retargets"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In = FMDSoftRetargetInput();
+	In.DistanceCm = 1500.0f;
+	TestFalse(TEXT("Exactly 15 m stays"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In.DistanceCm = 1501.0f;
+	TestTrue(TEXT("Beyond 15 m retargets"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In = FMDSoftRetargetInput();
+	In.bHasMoveInput = true;
+	In.TargetInputAngleDeg = 90.0f;
+	TestFalse(TEXT("Input 90 deg away but nobody else in the input cone: stay"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In.bOtherInInputCone = true;
+	TestTrue(TEXT("Input 90 deg away and another target in the cone: retarget"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In.TargetInputAngleDeg = 60.0f;
+	TestFalse(TEXT("Exactly 60 deg: stay"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In.TargetInputAngleDeg = 30.0f;
+	TestFalse(TEXT("Input toward the target: stay"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+	In.TargetInputAngleDeg = 120.0f;
+	In.bHasMoveInput = false;
+	TestFalse(TEXT("No input: never input-retargets"), FMDLockOnRules::ShouldSoftRetarget(In, T));
+
+	// The input cone: another in-view candidate within 45 deg of the input, never the current target itself.
+	C.Reset();
+	C.Add(Make(0, 500.0f, Centre, true, 120.0f)); // current
+	C.Add(Make(1, 800.0f, Centre, true, 46.0f));
+	TestFalse(TEXT("46 deg is outside the cone"), FMDLockOnRules::HasCandidateInInputCone(C, 0, T));
+	C.Add(Make(2, 900.0f, Centre, true, 45.0f));
+	TestTrue(TEXT("45 deg is inside the cone"), FMDLockOnRules::HasCandidateInInputCone(C, 0, T));
+	C.Reset();
+	C.Add(Make(0, 500.0f, Centre, true, 10.0f));
+	TestFalse(TEXT("Only the current target is in the cone"), FMDLockOnRules::HasCandidateInInputCone(C, 0, T));
+	return true;
+}
+
+bool FMDLockOnSoftChainTest::RunTest(const FString& Parameters)
+{
+	using namespace MDLockOnSoftTestLocal;
+	const FMDLockOnTuning T;
+	// Three enemies in view plus one behind the player. Each kill immediately yields the next best, with no attack-window requirement
+	// (the picker takes no time input at all).
+	TArray<FMDSoftCandidate> C;
+	C.Add(Make(0, 900.0f, Centre));
+	C.Add(Make(1, 400.0f, Centre));
+	C.Add(Make(2, 650.0f, Centre));
+	C.Add(Make(3, 200.0f, Centre, false)); // behind
+	TArray<int32> Order;
+	for (int32 Guard = 0; Guard < 6; ++Guard)
+	{
+		const int32 Pick = FMDLockOnRules::PickSoftBest(C, T, false);
+		if (Pick == INDEX_NONE)
+		{
+			break;
+		}
+		Order.Add(Pick);
+		C.RemoveAll([Pick](const FMDSoftCandidate& X) { return X.Id == Pick; }); // the kill
+	}
+	TestEqual(TEXT("Chained through all three in-view enemies"), Order.Num(), 3);
+	if (Order.Num() == 3)
+	{
+		TestTrue(TEXT("Closest first, then the next closest, then the last"), Order[0] == 1 && Order[1] == 2 && Order[2] == 0);
+	}
+	TestEqual(TEXT("Only the one behind the camera is left: chain ends"), FMDLockOnRules::PickSoftBest(C, T, false), (int32)INDEX_NONE);
+
+	// The chain keeps steering by input too: after the kill the input-aligned enemy is next.
+	C.Reset();
+	C.Add(Make(0, 600.0f, Centre, true, 160.0f));
+	C.Add(Make(1, 750.0f, Centre, true, 5.0f));
+	TestEqual(TEXT("Chain after a kill honours the move input"), FMDLockOnRules::PickSoftBest(C, T, true), 1);
+	return true;
+}
+
+bool FMDLockOnSoftTimeoutTest::RunTest(const FString& Parameters)
+{
+	FMDLockOnTuning T;
+	TestEqual(TEXT("Default timeout is 4 s"), T.SoftTimeout, 4.0f);
+	TestFalse(TEXT("Just attacked"), FMDLockOnRules::IsSoftExpired(0.0f, T));
+	TestFalse(TEXT("3.9 s since the last attack"), FMDLockOnRules::IsSoftExpired(3.9f, T));
+	TestFalse(TEXT("Exactly 4 s still holds"), FMDLockOnRules::IsSoftExpired(4.0f, T));
+	TestTrue(TEXT("4.01 s drops"), FMDLockOnRules::IsSoftExpired(4.01f, T));
+	T.SoftTimeout = 2.0f;
+	TestTrue(TEXT("The timeout is tunable (md.LockOn.SoftTimeout)"), FMDLockOnRules::IsSoftExpired(2.5f, T));
+	TestFalse(TEXT("...and an attack inside it keeps the lock"), FMDLockOnRules::IsSoftExpired(1.0f, T));
+	return true;
+}
+
+bool FMDLockOnHardOverridesSoftTest::RunTest(const FString& Parameters)
+{
+	// An attack soft-locks only with the option on and no hard lock.
+	TestTrue(TEXT("Soft on, no hard lock: attacks soft-lock"), FMDLockOnRules::ShouldSoftAcquire(true, false));
+	TestFalse(TEXT("A hard lock overrides: attacks leave it alone"), FMDLockOnRules::ShouldSoftAcquire(true, true));
+	TestFalse(TEXT("Option off: no soft lock"), FMDLockOnRules::ShouldSoftAcquire(false, false));
+	TestFalse(TEXT("Option off and hard locked"), FMDLockOnRules::ShouldSoftAcquire(false, true));
+
+	// The warp feed treats both locks the same (the target comes from GetLockTarget); snapping to a locked target needs no move input.
+	TestTrue(TEXT("Locked and standing: snap to the target"), FMDLockOnRules::ShouldSnapToTarget(true, false));
+	TestFalse(TEXT("Moving: input facing wins"), FMDLockOnRules::ShouldSnapToTarget(true, true));
+
+	// The component: no lock means neither mode; a fresh component is not hard locked.
+	UMDLockOnComponent* Lock = NewObject<UMDLockOnComponent>(GetTransientPackage());
+	TestNotNull(TEXT("Component created"), Lock);
+	if (Lock)
+	{
+		TestFalse(TEXT("Not locked: not hard"), Lock->IsHardLock());
+		TestFalse(TEXT("Not locked: not soft"), Lock->IsSoftLock());
+		TestFalse(TEXT("Not locked: no target"), Lock->HasLockTarget());
+	}
+	return true;
+}
+
+bool FMDLockOnSoftNoCameraTest::RunTest(const FString& Parameters)
+{
+	const FMDLockOnTuning T;
+	// Only a hard lock drives the camera assist (the component gates UpdateCameraAssist on this).
+	TestFalse(TEXT("Soft lock: no camera assist"), FMDLockOnRules::ShouldAssistCamera(false));
+	TestTrue(TEXT("Hard lock: camera assist"), FMDLockOnRules::ShouldAssistCamera(true));
+	// The assist maths itself is unchanged for the hard lock.
+	TestTrue(TEXT("Hard assist still turns toward the target"), FMDLockOnRules::AssistStep(10.0f, 0.6f, 5.0f, 0.016f, T) > 0.0f);
+	return true;
+}
+
+bool FMDLockOnSoftServerTest::RunTest(const FString& Parameters)
+{
+	const FMDLockOnTuning T;
+	TestTrue(TEXT("Soft: 15 m + 3 m tolerance (18 m)"), FMDLockOnRules::ValidateServerTarget(true, true, 1800.0f, 0.0f, T, true));
+	TestFalse(TEXT("Soft: beyond 18 m"), FMDLockOnRules::ValidateServerTarget(true, true, 1801.0f, 0.0f, T, true));
+	TestTrue(TEXT("Hard: the same 18.01 m is fine (30 m range)"), FMDLockOnRules::ValidateServerTarget(true, true, 1801.0f, 0.0f, T, false));
+	TestFalse(TEXT("Soft: dead target"), FMDLockOnRules::ValidateServerTarget(false, true, 500.0f, 0.0f, T, true));
+	TestFalse(TEXT("Soft: not seen for 2.5 s"), FMDLockOnRules::ValidateServerTarget(true, true, 500.0f, 2.5f, T, true));
 	return true;
 }
 

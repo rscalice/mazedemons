@@ -38,6 +38,40 @@ struct MAZEDEMONS_API FMDLockOnTuning
 	float AssistTargetScreenX = 0.5f;      // fraction of screen width
 	float AssistTargetScreenY = 0.35f;     // fraction of screen height (from the top)
 	float AssistFollowRate = 6.0f;         // exponential follow rate per second at strength 1
+
+	// Autonomous soft lock (attacking picks the best enemy in view; never touches the camera).
+	float SoftRange = 1200.0f;             // 12 m (md.LockOn.SoftRange)
+	float SoftBreakRange = 1500.0f;        // retarget at attack start beyond 15 m (md.LockOn.SoftBreakRange)
+	float SoftTimeout = 4.0f;              // seconds without an attack before the soft lock drops (md.LockOn.SoftTimeout)
+	float SoftViewMargin = 0.10f;          // fraction of the viewport the "in view" test is widened by (md.LockOn.SoftViewMargin)
+	float SoftRetargetInputDeg = 60.0f;    // move input pointing further than this from the target may retarget
+	float SoftInputConeDeg = 45.0f;        // ...when another candidate lies within this of the input
+	float SoftInputFullDeg = 90.0f;        // alignment term reaches 0 at this angle from the input
+	// Soft score weights: distance dominates, input alignment (only while moving) wins close calls, centre breaks ties.
+	float SoftWeightDistance = 0.60f;
+	float SoftWeightCentre = 0.15f;
+	float SoftWeightInput = 0.35f;
+};
+
+// One soft-lock candidate. Only level-geometry LOS-passing, hostile, alive pawns are fed in.
+struct MAZEDEMONS_API FMDSoftCandidate
+{
+	int32 Id = 0;
+	float DistanceCm = 0.0f;
+	float CentreOffset = 0.0f;     // 0 = screen centre, 1 = at the screen edge (see FMDLockOnRules::CentreOffset)
+	float InputAngleDeg = -1.0f;   // planar angle between the move input and the direction to the candidate; < 0 = no input
+	bool bInView = true;           // in the camera view (viewport widened by SoftViewMargin)
+};
+
+// What the soft retarget check looks at, evaluated at the start of every attack.
+struct MAZEDEMONS_API FMDSoftRetargetInput
+{
+	bool bTargetValid = true;          // exists, alive, hostile, targetable
+	bool bInView = true;
+	float DistanceCm = 0.0f;
+	bool bHasMoveInput = false;
+	float TargetInputAngleDeg = 0.0f;  // angle between the move input and the direction to the current target
+	bool bOtherInInputCone = false;    // another candidate lies within SoftInputConeDeg of the input
 };
 
 // One lock-on candidate as the scorer sees it.
@@ -109,7 +143,38 @@ struct MAZEDEMONS_API FMDLockOnRules
 	static bool IsLineOfSightOccluder(bool bHitIsPawn, bool bAttachedToPlayerOrTarget) { return !bHitIsPawn && !bAttachedToPlayerOrTarget; }
 
 	// Server check of Server_SetLockTarget: alive, hostile, within range (+ tolerance) and seen within the LOS window.
-	static bool ValidateServerTarget(bool bAlive, bool bHostile, float DistanceCm, float SecondsSinceLOS, const FMDLockOnTuning& Tuning);
+	// A soft lock uses SoftBreakRange (15 m) + tolerance instead of MaxRange.
+	static bool ValidateServerTarget(bool bAlive, bool bHostile, float DistanceCm, float SecondsSinceLOS, const FMDLockOnTuning& Tuning, bool bSoft = false);
+
+	// ---- Autonomous soft lock ----
+
+	// Soft score: SoftWeightDistance x close (1 at 0, 0 at SoftRange) + SoftWeightCentre x centred + (moving) SoftWeightInput x alignment.
+	static float SoftScore(const FMDSoftCandidate& Candidate, const FMDLockOnTuning& Tuning, bool bHasMoveInput);
+
+	// Best in-view candidate within SoftRange (ties: nearest, then lower Id); INDEX_NONE when none. Returns the candidate Id.
+	static int32 PickSoftBest(const TArray<FMDSoftCandidate>& Candidates, const FMDLockOnTuning& Tuning, bool bHasMoveInput, float* OutScore = nullptr);
+
+	// In view = projected in front of the camera and inside the viewport widened by Margin (fraction of the size) on every side.
+	static bool IsInView(const FVector2D& Pixel, bool bProjected, const FVector2D& ViewSize, float Margin);
+
+	// 0 at the screen centre, 1 at the nearest-axis screen edge (max of |dx| / half width and |dy| / half height; may exceed 1).
+	static float CentreOffset(const FVector2D& Pixel, const FVector2D& ViewSize);
+
+	// True when a candidate other than ExcludeId (and in view, within SoftRange) lies within SoftInputConeDeg of the move input.
+	static bool HasCandidateInInputCone(const TArray<FMDSoftCandidate>& Candidates, int32 ExcludeId, const FMDLockOnTuning& Tuning);
+
+	// At attack start: retarget when the target is invalid, out of view, beyond SoftBreakRange, or the move input points further than
+	// SoftRetargetInputDeg from it while another candidate lies inside the input cone.
+	static bool ShouldSoftRetarget(const FMDSoftRetargetInput& Input, const FMDLockOnTuning& Tuning);
+
+	// The soft lock drops after SoftTimeout seconds without an attack.
+	static bool IsSoftExpired(float SecondsSinceAttack, const FMDLockOnTuning& Tuning) { return SecondsSinceAttack > Tuning.SoftTimeout; }
+
+	// An attack soft-locks only with the option on and no hard lock (a hard lock overrides the soft one).
+	static bool ShouldSoftAcquire(bool bSoftEnabled, bool bHardLockActive) { return bSoftEnabled && !bHardLockActive; }
+
+	// Only a hard lock drives the camera assist; a soft lock never touches the camera.
+	static bool ShouldAssistCamera(bool bHardLock) { return bHardLock; }
 
 	// Camera assist: degrees to turn this frame to bring ErrorDeg to zero. Zero while the player moved the camera within the
 	// pause window (the assist never fights input) or at strength 0. Exponential, never overshoots.
