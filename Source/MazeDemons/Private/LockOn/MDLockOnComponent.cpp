@@ -27,11 +27,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogMDLockOn, Log, All);
 namespace MDLockOnLocal
 {
 	// Subtle lock highlight: the same overlay material as the hit / tell flash (M_HitFlashOverlay, parameter HitFlash) at a low value.
-	// The hit-flash overlay asset currently sits under Content/Fab/Staticshes (the path the combat code loads, /Game/Materials/Combat, does
-	// not exist), so try both.
-	const TCHAR* const HighlightOverlayPaths[] = {
-		TEXT("/Game/Materials/Combat/M_HitFlashOverlay.M_HitFlashOverlay"),
-		TEXT("/Game/Fab/Staticshes/Materials/Combat/M_HitFlashOverlay.M_HitFlashOverlay") };
+	const TCHAR* const HighlightOverlayPath = TEXT("/Game/Materials/Combat/M_HitFlashOverlay.M_HitFlashOverlay");
 	const FName HighlightParameter(TEXT("HitFlash"));
 	constexpr float HighlightIntensity = 0.14f;
 	TAutoConsoleVariable<int32> CVarDebug(TEXT("md.LockOn.Debug"), 0,
@@ -264,13 +260,9 @@ void UMDLockOnComponent::ApplyHighlight(AActor* Target)
 	}
 	if (!HighlightMID)
 	{
-		for (const TCHAR* Path : MDLockOnLocal::HighlightOverlayPaths)
+		if (UMaterialInterface* Overlay = LoadObject<UMaterialInterface>(nullptr, MDLockOnLocal::HighlightOverlayPath, nullptr, LOAD_NoWarn | LOAD_Quiet))
 		{
-			if (UMaterialInterface* Overlay = LoadObject<UMaterialInterface>(nullptr, Path, nullptr, LOAD_NoWarn | LOAD_Quiet))
-			{
-				HighlightMID = UMaterialInstanceDynamic::Create(Overlay, this);
-				break;
-			}
+			HighlightMID = UMaterialInstanceDynamic::Create(Overlay, this);
 		}
 	}
 	if (!HighlightMID)
