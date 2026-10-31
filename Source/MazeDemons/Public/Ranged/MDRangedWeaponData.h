@@ -63,9 +63,30 @@ struct MAZEDEMONS_API FMDRangedBeamParams
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "0"))
 	float HeatPerSecond = 0.0f;
 
+	// Unused (the idle vent rate is VentPerSecond); kept so existing assets still load.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "0"))
 	float VentSeconds = 0.0f;
 
+	// R5: heat lost per second while the trigger is up (Duskray: 8).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "0"))
+	float VentPerSecond = 8.0f;
+
+	// R5: heat at which the weapon overheats (Duskray: 100). Mirrors the MaxHeat attribute on the player state.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "1"))
+	float MaxHeat = 100.0f;
+
+	// R5: durability a landed beam costs per second (only ticks that hit something count).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "0"))
+	float BeamDurabilityPerSecond = 0.5f;
+
+	// R5 (staff, V2): charge regained per second while the trigger is up, and the size of the pool.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "0"))
+	float ChargeRegenPerSecond = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "1"))
+	float MaxCharge = 100.0f;
+
+	// Seconds the weapon is locked after overheating (Duskray: 2.5).
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam", meta = (ClampMin = "0"))
 	float OverheatLock = 0.0f;
 
@@ -287,6 +308,18 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cues", meta = (ClampMin = "0.1"))
 	float TracerThickness = 3.0f;
+
+	// ---- R5 beam cosmetics (referenced Fab assets, never edited) ----
+	// The laser system (FreeStylizedLaserBeamVFX NS_Laser_xx). Needs the user parameters LaserEnd (world position) and Color.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam")
+	TSoftObjectPtr<UNiagaraSystem> BeamFX;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam")
+	FLinearColor BeamColor = FLinearColor(0.8f, 0.3f, 1.0f, 1.0f);
+
+	// Steam puff at the muzzle when the weapon overheats (one-shot, capped), and a smaller one when the lock ends and it has vented.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Beam")
+	TSoftObjectPtr<UNiagaraSystem> OverheatFX;
 
 	// Loads the mesh (static or skeletal). Null when none is set or it cannot load.
 	UObject* LoadWeaponMesh() const;

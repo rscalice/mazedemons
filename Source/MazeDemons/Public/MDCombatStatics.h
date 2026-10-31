@@ -27,6 +27,9 @@ struct FMDRangedHitParams
 	int32 KillHitStopFrames = 3;
 	// Camera shake scale sent to the shooter (CS_Hit_Light x this).
 	float ShakeScale = 0.5f;
+	// R5 beams: when set, ApplyRangedHit does NOT send Client_ConfirmHit; it fills this instead so the caller can roll many ticks into one
+	// damage number (FMDBeamNumbers) and send it with UMDCombatStatics::SendHitConfirm.
+	struct FMDHitConfirm* OutConfirm = nullptr;
 };
 
 UCLASS()
@@ -42,6 +45,10 @@ public:
 	// is a player holding a gun. Returns true when damage was applied; false means the bolt should fly on (blocked by team rules,
 	// dodge i-frames, a corpse).
 	static bool ApplyRangedHit(AActor* Attacker, AActor* Victim, const FHitResult& Hit, const FMDRangedHitParams& Params);
+
+	// Server only. Sends a hit confirm (damage number, hit marker, kill hit-stop) to the attacker's machine. ApplyRangedHit does this itself
+	// unless Params.OutConfirm is set (beams aggregate their ticks first).
+	static void SendHitConfirm(AActor* Attacker, const struct FMDHitConfirm& Confirm);
 
 	// Server only. The one entry point AC_Combat's weapon trace calls for each target it hits (once per target per swing).
 	// Builds the hit context from the attacker's active combo step (or a default light step without one), runs

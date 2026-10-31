@@ -29,6 +29,7 @@
 #include "MDCombatFeedbackComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
+#include "Ranged/MDBeamComponent.h"
 #include "Ranged/MDProjectile.h"
 #include "Ranged/MDRangedFX.h"
 #include "MDUISettings.h"
@@ -878,6 +879,11 @@ void UMDRangedComponent::SetFireHeld(bool bHeld)
 	{
 		bFireHeld = false;
 		bSemiPending = false;
+		// R5: letting go of the trigger ends a beam at once (the server stops its 10 Hz ticks and starts venting).
+		if (UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner()))
+		{
+			Beam->OwnerStopBeam();
+		}
 	}
 }
 
@@ -889,7 +895,7 @@ bool UMDRangedComponent::TryActivateFire()
 	{
 		return false;
 	}
-	if (GetViewMagRounds() <= 0)
+	if (Data->HitModel != EMDRangedHitModel::Beam && GetViewMagRounds() <= 0) // beams have no magazine: heat / charge gate them
 	{
 		// R3: an empty magazine cannot fire; pulling the trigger asks for the reload (when auto-reload is on).
 		if (IsAutoReloadEnabled() && !Data->AmmoRow.IsNone())
@@ -917,6 +923,12 @@ bool UMDRangedComponent::FireShotLocal()
 	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
 	UWorld* World = GetWorld();
 	APawn* Pawn = GetPawn();
+	if (Data && World && Pawn && bRangedMode && Data->HitModel == EMDRangedHitModel::Beam)
+	{
+		// R5: a beam weapon "fires" by starting the beam (hold-to-fire; UMDBeamComponent gates it, runs the soft lock and asks the server).
+		UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+		return Beam && Beam->OwnerStartBeam();
+	}
 	if (!Data || !World || !Pawn || !bRangedMode || Data->HitModel != EMDRangedHitModel::Projectile)
 	{
 		return false;
@@ -1261,7 +1273,17 @@ void UMDRangedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 	// ---- trigger ----
 	if (bFireHeld && IsOwnerLocal() && bRangedMode && Data)
 	{
-		if (Data->FireMode == EMDFireMode::Auto)
+		if (Data->HitModel == EMDRangedHitModel::Beam)
+		{
+			// R5: holding the trigger keeps the beam on; the activation only happens when it is off (the first press, or after an
+			// overheat lock ended while the trigger stayed down).
+			const UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+			if (Beam && !Beam->IsOwnerBeamOn())
+			{
+				TryActivateFire();
+			}
+		}
+		else if (Data->FireMode == EMDFireMode::Auto)
 		{
 			TryActivateFire();
 		}
@@ -1348,11 +1370,52 @@ int32 UMDRangedComponent::GetMagSize() const
 	return Data ? Data->MagSize : 0;
 }
 
-float UMDRangedComponent::GetHeat() const { return 0.0f; }
-float UMDRangedComponent::GetMaxHeat() const { return 0.0f; }
-float UMDRangedComponent::GetCharge() const { return 0.0f; }
-float UMDRangedComponent::GetMaxCharge() const { return 0.0f; }
-bool UMDRangedComponent::IsOverheated() const { return false; }
+// R5: the beam numbers come from UMDBeamComponent (heat / charge as this machine knows them; every machine knows the overheat flag).
+float UMDRangedComponent::GetHeat() const
+{
+	const UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+	return Beam && IsBeamWeapon() ? Beam->GetHeatView() : 0.0f;
+}
+
+float UMDRangedComponent::GetMaxHeat() const
+{
+	const UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+	return Beam && IsBeamWeapon() ? Beam->GetMaxHeatView() : 0.0f;
+}
+
+float UMDRangedComponent::GetCharge() const
+{
+	const UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+	return Beam && IsChargeStyleBeam() ? Beam->GetChargeView() : 0.0f;
+}
+
+float UMDRangedComponent::GetMaxCharge() const
+{
+	const UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+	return Beam && IsChargeStyleBeam() ? Beam->GetMaxChargeView() : 0.0f;
+}
+
+bool UMDRangedComponent::IsOverheated() const
+{
+	const UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+	return Beam && IsBeamWeapon() && Beam->IsOverheatedView();
+}
+
+float UMDRangedComponent::GetOverheatLockFraction() const
+{
+	const UMDBeamComponent* Beam = UMDBeamComponent::Find(GetOwner());
+	return Beam && IsBeamWeapon() ? Beam->GetOverheatLockFraction() : 0.0f;
+}
+
+bool UMDRangedComponent::ComputeServerBeamAim(FVector& OutMuzzle, FVector& OutDir) const
+{
+	if (!GetPawn() || !GetMuzzleWorld(OutMuzzle))
+	{
+		return false;
+	}
+	float Distance = 0.0f;
+	return ComputeAimServer(OutMuzzle, OutDir, Distance);
+}
 
 bool UMDRangedComponent::IsBeamWeapon() const
 {

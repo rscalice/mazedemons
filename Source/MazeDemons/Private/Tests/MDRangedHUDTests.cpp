@@ -281,9 +281,19 @@ bool FMDR7HeatMeterStatesTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestTrue(TEXT("beam weapon detected"), Fx.Ranged->IsBeamWeapon());
-	TestEqual(TEXT("stub heat is 0"), Fx.Ranged->GetHeat(), 0.0f);
-	TestEqual(TEXT("stub max heat is 0"), Fx.Ranged->GetMaxHeat(), 0.0f);
-	TestFalse(TEXT("stub never overheats"), Fx.Ranged->IsOverheated());
+	// R5: the meter reads the beam component. A cold weapon: no heat, the data's max heat, not overheated.
+	TestEqual(TEXT("cold beam has no heat"), Fx.Ranged->GetHeat(), 0.0f);
+	TestEqual(TEXT("max heat comes from the weapon data"), Fx.Ranged->GetMaxHeat(), Beam->Beam.MaxHeat);
+	TestFalse(TEXT("a cold beam is not overheated"), Fx.Ranged->IsOverheated());
+	TestEqual(TEXT("no lock radial while cold"), Fx.Ranged->GetOverheatLockFraction(), 0.0f);
+
+	// R5 reticle ring / slot bar sweep: the heat while it works, the lock still to run while overheated, nothing for a gun.
+	TestEqual(TEXT("ring: a gun draws nothing"), FMDRangedUIRules::HeatRingSweep(EState::Hidden, 0.7f, 0.5f), 0.0f);
+	TestEqual(TEXT("ring: heating shows the heat"), FMDRangedUIRules::HeatRingSweep(EState::Heating, 0.4f, 0.0f), 0.4f);
+	TestEqual(TEXT("ring: warning shows the heat"), FMDRangedUIRules::HeatRingSweep(EState::Warning, 0.9f, 0.0f), 0.9f);
+	TestEqual(TEXT("ring: overheated unwinds with the lock"), FMDRangedUIRules::HeatRingSweep(EState::Overheated, 1.0f, 0.6f), 0.6f);
+	TestEqual(TEXT("ring: the lock radial is clamped"), FMDRangedUIRules::HeatRingSweep(EState::Overheated, 1.0f, 1.7f), 1.0f);
+	TestEqual(TEXT("ring: a charge staff shows the charge left"), FMDRangedUIRules::HeatRingSweep(EState::Charging, 0.5f, 0.0f), 0.5f);
 	UMDAmmoCounterWidget* Counter = CreateWidget<UMDAmmoCounterWidget>(Fx.World);
 	if (!TestNotNull(TEXT("counter widget"), Counter))
 	{
@@ -292,7 +302,7 @@ bool FMDR7HeatMeterStatesTest::RunTest(const FString& Parameters)
 	Counter->SetRanged(Fx.Ranged);
 	Counter->Refresh();
 	TestTrue(TEXT("meter visible for a beam"), Counter->IsHeatMeterVisible());
-	TestEqual(TEXT("meter idle on the stub"), Counter->GetHeatState(), EState::Idle);
+	TestEqual(TEXT("meter idle while cold"), Counter->GetHeatState(), EState::Idle);
 	TestFalse(TEXT("a beam shows the meter instead of the ammo numbers"), Counter->IsAmmoSectionVisible());
 	TestEqual(TEXT("no reload prompt for a beam"), Counter->GetPrompt(), EMDAmmoPrompt::None);
 

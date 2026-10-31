@@ -111,6 +111,40 @@ int32 UMDRangedReticleWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 		FSlateDrawElement::MakeLines(OutDrawElements, Layer, Geo, Pts, ESlateDrawEffect::None, Tint, false, 2.0f);
 	}
 
+	// R5: a beam weapon's heat (or charge) as a ring around the reticle, clockwise from the top. Orange -> red as it fills; while the weapon
+	// is overheated the ring is the lock still to run and unwinds as it cools (FMDRangedUIRules::HeatRingSweep).
+	if (RangedComp->IsBeamWeapon())
+	{
+		const bool bCharge = RangedComp->IsChargeStyleBeam();
+		const float Value = bCharge ? RangedComp->GetCharge() : RangedComp->GetHeat();
+		const float Max = bCharge ? RangedComp->GetMaxCharge() : RangedComp->GetMaxHeat();
+		const EMDHeatMeterState HeatState = FMDRangedUIRules::HeatMeterState(true, bCharge, Value, Max, RangedComp->IsOverheated());
+		const float Sweep = FMDRangedUIRules::HeatRingSweep(HeatState, FMDRangedUIRules::MeterFraction(Value, Max), RangedComp->GetOverheatLockFraction());
+		const float Radius = Gap + Length + 14.0f * Scale;
+		auto DrawArc = [&](float FromFraction, float ToFraction, const FLinearColor& Color, float Thickness, int32 LayerOffset)
+		{
+			const int32 Segments = FMath::Max(2, FMath::CeilToInt((ToFraction - FromFraction) * 72.0f));
+			TArray<FVector2D> Pts;
+			Pts.Reserve(Segments + 1);
+			for (int32 i = 0; i <= Segments; ++i)
+			{
+				const float Angle = -HALF_PI + TWO_PI * (FromFraction + (ToFraction - FromFraction) * static_cast<float>(i) / static_cast<float>(Segments));
+				Pts.Add(Center + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * Radius);
+			}
+			FSlateDrawElement::MakeLines(OutDrawElements, Layer + LayerOffset, Geo, Pts, ESlateDrawEffect::None, Color, false, Thickness);
+		};
+		FLinearColor Track = Base;
+		Track.A = 0.18f;
+		DrawArc(0.0f, 1.0f, Track * InWidgetStyle.GetColorAndOpacityTint(), 2.0f, 0);
+		if (Sweep > 0.002f)
+		{
+			FLinearColor Fill = UMDUIStatics::GetColor(FMDRangedUIRules::HeatMeterToken(HeatState));
+			Fill.A = 0.95f;
+			DrawArc(0.0f, Sweep, Fill * InWidgetStyle.GetColorAndOpacityTint(), 3.5f, 1);
+		}
+		++Layer;
+	}
+
 	if (IsMarkerActive())
 	{
 		const UWorld* World = GetWorld();

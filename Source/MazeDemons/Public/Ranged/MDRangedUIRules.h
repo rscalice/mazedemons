@@ -62,6 +62,10 @@ struct MAZEDEMONS_API FMDRangedUIRules
 	// Bar fill 0..1 (0 for a zero or negative max).
 	static float MeterFraction(float Value, float Max);
 
+	// R5: how much of the reticle ring is drawn (0..1 of the circle, clockwise from the top). Heat / charge fraction while the weapon
+	// works; while overheated the ring is the lock still to run (LockFraction 1 -> 0), so it unwinds as the weapon cools. Hidden = 0.
+	static float HeatRingSweep(EMDHeatMeterState State, float MeterFractionValue, float LockFraction);
+
 	static EMDAmmoPrompt AmmoPrompt(int32 Mag, int32 Reserve, bool bReloading);
 
 	// 1 while the player is in ranged mode with a gun, else 0.

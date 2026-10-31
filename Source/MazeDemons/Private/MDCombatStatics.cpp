@@ -212,7 +212,7 @@ bool UMDCombatStatics::ApplyRangedHit(AActor* Attacker, AActor* Victim, const FH
 	}
 
 	// The shooter: damage number (typed colour, crit red), hit marker, kill hit-stop.
-	if (UMDCombatFeedbackComponent* Feedback = Attacker ? MDCombatNumberLocal::FindFeedback(Attacker) : nullptr)
+	if (Params.OutConfirm || (Attacker && MDCombatNumberLocal::FindFeedback(Attacker)))
 	{
 		const bool bKill = VictimASC->IsDead();
 		FMDHitConfirm Confirm;
@@ -227,7 +227,14 @@ bool UMDCombatStatics::ApplyRangedHit(AActor* Attacker, AActor* Victim, const FH
 		Confirm.bRanged = true;
 		Confirm.bKill = bKill;
 		Confirm.bHeadshot = Params.bHeadshot;
-		Feedback->Client_ConfirmHit(Confirm);
+		if (Params.OutConfirm)
+		{
+			*Params.OutConfirm = Confirm; // a beam rolls its ticks into one number and sends it later
+		}
+		else
+		{
+			SendHitConfirm(Attacker, Confirm);
+		}
 	}
 
 	// Guns wear per landed hit (0.5), not per shot.
@@ -239,6 +246,14 @@ bool UMDCombatStatics::ApplyRangedHit(AActor* Attacker, AActor* Victim, const FH
 		}
 	}
 	return true;
+}
+
+void UMDCombatStatics::SendHitConfirm(AActor* Attacker, const FMDHitConfirm& Confirm)
+{
+	if (UMDCombatFeedbackComponent* Feedback = Attacker ? MDCombatNumberLocal::FindFeedback(Attacker) : nullptr)
+	{
+		Feedback->Client_ConfirmHit(Confirm);
+	}
 }
 
 bool UMDCombatStatics::ApplyTypedDamage(AActor* Instigator, AActor* Victim, float Damage, FGameplayTag DamageType, FVector Location)

@@ -9,6 +9,8 @@
 #include "MDInventoryComponent.h"
 #include "MDPhysicalHitReactComponent.h"
 #include "MDPerkComponent.h"
+#include "Ranged/MDBeamComponent.h"
+#include "Ranged/MDRangedAttributeSet.h"
 #include "Ranged/MDRangedComponent.h"
 #include "MDRagdollTuning.h"
 #include "MDStaminaComponent.h"
@@ -62,6 +64,10 @@ AMDPlayerState::AMDPlayerState()
 	PerkComponent = CreateDefaultSubobject<UMDPerkComponent>(TEXT("PerkComponent"));
 
 	RangedComponent = CreateDefaultSubobject<UMDRangedComponent>(TEXT("RangedComponent"));
+
+	RangedAttributes = CreateDefaultSubobject<UMDRangedAttributeSet>(TEXT("RangedAttributes"));
+
+	BeamComponent = CreateDefaultSubobject<UMDBeamComponent>(TEXT("BeamComponent"));
 
 	SetNetUpdateFrequency(100.0f);
 }
@@ -347,6 +353,10 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 
 	AbilitySystem->InitAbilityActorInfo(this, NewPawn);
 	AbilitySystem->RegisterAttributeSet(Attributes);
+	if (RangedAttributes && !AbilitySystem->GetSet<UMDRangedAttributeSet>())
+	{
+		AbilitySystem->AddAttributeSetSubobject(RangedAttributes.Get()); // R5: Heat / Charge
+	}
 
 	// Single OnDeath binding for the PlayerState's lifetime; the handler always targets the current pawn,
 	// so respawns (OldPawn -> NewPawn) cannot stack bindings.

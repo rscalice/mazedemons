@@ -264,8 +264,8 @@ public:
 	bool IsAutoReloadEnabled() const;
 
 	// ================= R7 HUD bindings =================
-	// Beam weapons (R5): the HUD heat / charge meter reads these. STUBS until R5: every getter returns 0 / false, so the meter stays
-	// empty. R5 only has to return the real attribute values (Heat / MaxHeat on the player ASC, Charge / MaxCharge for staves).
+	// Beam weapons (R5): the HUD heat / charge meter reads these. They forward to UMDBeamComponent (the owner's predicted values, the
+	// server's own on the host; 0 on other machines, which only see IsOverheated).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
 	float GetHeat() const;
 
@@ -280,6 +280,20 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
 	bool IsOverheated() const;
+
+	// 0..1 of the overheat lock still to run (the HUD radial); 0 when not locked.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetOverheatLockFraction() const;
+
+	// ---- R5 beam hooks (UMDBeamComponent) ----
+	// The pawn this player controls (the test pawn in unit tests).
+	APawn* GetOwningPawn() const { return GetPawn(); }
+
+	// Server: muzzle and aim direction for a beam tick (the same eye-ray aim the shot validation uses).
+	bool ComputeServerBeamAim(FVector& OutMuzzle, FVector& OutDir) const;
+
+	// Owner machine: muzzle and camera aim direction (the same aim as a shot).
+	bool ComputeLocalBeamAim(FVector& OutMuzzle, FVector& OutDir, float& OutDistance) const { return ComputeAimLocal(OutMuzzle, OutDir, OutDistance); }
 
 	// The equipped gun is a beam weapon (data driven; true for the Duskray / Ember rows once R5 gives them a Beam fire mode).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")

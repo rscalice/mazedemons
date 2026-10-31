@@ -12,6 +12,7 @@ UMDRangedFireAbility::UMDRangedFireAbility()
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
 	ActivationRequiredTags.AddTag(TAG_State_RangedMode.GetTag());
 	ActivationBlockedTags.AddTag(TAG_State_Staggered.GetTag());
+	ActivationBlockedTags.AddTag(TAG_State_Overheated.GetTag()); // R5: a locked beam weapon cannot start a beam (the tag is replicated to everyone)
 }
 
 void UMDRangedFireAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,

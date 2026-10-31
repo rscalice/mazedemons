@@ -6,6 +6,7 @@
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_RangedMode, "State.RangedMode");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Reloading, "State.Reloading");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Aiming, "State.Aiming");
+UE_DEFINE_GAMEPLAY_TAG(TAG_State_Overheated, "State.Overheated");
 
 UObject* UMDRangedWeaponData::LoadWeaponMesh() const
 {
@@ -86,6 +87,10 @@ TArray<FString> UMDRangedWeaponData::GetValidationErrors() const
 		if (Beam.DamagePerSecond <= 0.0f) { Errors.Add(TEXT("Beam.DamagePerSecond must be > 0")); }
 		if (Beam.Range <= 0.0f) { Errors.Add(TEXT("Beam.Range must be > 0")); }
 		if (Beam.TickHz < 1.0f) { Errors.Add(TEXT("Beam.TickHz must be >= 1")); }
+		if (Beam.HeatPerSecond <= 0.0f && Beam.ChargeDrainPerSecond <= 0.0f) { Errors.Add(TEXT("A beam needs HeatPerSecond (heat) or ChargeDrainPerSecond (charge)")); }
+		if (Beam.HeatPerSecond > 0.0f && Beam.OverheatLock <= 0.0f) { Errors.Add(TEXT("A heat beam needs OverheatLock > 0")); }
+		if (Beam.BeamDurabilityPerSecond < 0.0f) { Errors.Add(TEXT("Beam.BeamDurabilityPerSecond must be >= 0")); }
+		if (BeamFX.IsNull()) { Errors.Add(TEXT("A beam needs BeamFX (an NS_Laser system)")); }
 	}
 	return Errors;
 }

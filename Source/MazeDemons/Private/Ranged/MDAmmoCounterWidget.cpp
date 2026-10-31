@@ -195,7 +195,7 @@ void UMDAmmoCounterWidget::Refresh()
 
 	Prompt = bUsesAmmo ? FMDRangedUIRules::AmmoPrompt(Mag, Reserve, bReloading) : EMDAmmoPrompt::None;
 
-	// ---- heat / charge meter (stub values until R5) ----
+	// ---- heat / charge meter (R5: real values from UMDBeamComponent; the bar unwinds with the overheat lock) ----
 	const bool bCharge = RangedComp->IsChargeStyleBeam();
 	const float Value = bCharge ? RangedComp->GetCharge() : RangedComp->GetHeat();
 	const float Max = bCharge ? RangedComp->GetMaxCharge() : RangedComp->GetMaxHeat();
@@ -208,7 +208,7 @@ void UMDAmmoCounterWidget::Refresh()
 	else
 	{
 		HeatBox->SetVisibility(ESlateVisibility::HitTestInvisible);
-		HeatBar->SetPercent(HeatState == EMDHeatMeterState::Overheated ? 1.0f : HeatFraction);
+		HeatBar->SetPercent(FMDRangedUIRules::HeatRingSweep(HeatState, HeatFraction, RangedComp->GetOverheatLockFraction()));
 		HeatBar->SetFillToken(FMDRangedUIRules::HeatMeterToken(HeatState));
 	}
 	if (HeatState == EMDHeatMeterState::Overheated)

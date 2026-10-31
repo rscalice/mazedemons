@@ -10,6 +10,8 @@ class UMDAbilitySystemComponent;
 class UMDAttributeSet;
 class UMDPerkComponent;
 class UMDRangedComponent;
+class UMDRangedAttributeSet;
+class UMDBeamComponent;
 class UMDStaminaComponent;
 class UMDStatusEffectComponent;
 class USkeletalMesh;
@@ -51,6 +53,14 @@ public:
 	// R0 ranged weapons: State.RangedMode, aim flag, per-slot magazines. Next to the inventory (D1), replicated for late join (D5).
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Ranged")
 	TObjectPtr<UMDRangedComponent> RangedComponent;
+
+	// R5 beams: Heat / MaxHeat / Charge / MaxCharge on the player ASC (owner-only replication).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Ranged")
+	TObjectPtr<UMDRangedAttributeSet> RangedAttributes;
+
+	// R5 beams: hold-to-fire beam state (server ticks, heat, overheat, replicated beam end) and the cosmetic laser.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Ranged")
+	TObjectPtr<UMDBeamComponent> BeamComponent;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Stats", meta = (ClampMin = "1"))
 	float StartingMaxHealth = 100.0f;

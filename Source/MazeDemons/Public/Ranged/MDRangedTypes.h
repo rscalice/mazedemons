@@ -15,6 +15,9 @@ MAZEDEMONS_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Reloading);
 // R4: loose tag on the ASC (every machine, from the replicated aim flag) while the player aims down the gun.
 MAZEDEMONS_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Aiming);
 
+// R5: loose tag on the ASC (every machine, from the replicated overheat flag) while a beam weapon is locked out after overheating.
+MAZEDEMONS_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Overheated);
+
 // How the weapon is held. Drives the support-hand IK alpha (see FMDRangedRules::SupportHandIKAlpha).
 UENUM(BlueprintType)
 enum class EMDGripType : uint8

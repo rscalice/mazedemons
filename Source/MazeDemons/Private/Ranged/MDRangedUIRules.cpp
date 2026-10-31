@@ -52,6 +52,19 @@ EMDHeatMeterState FMDRangedUIRules::HeatMeterState(bool bBeamWeapon, bool bCharg
 	return Fraction > 0.0f ? EMDHeatMeterState::Heating : EMDHeatMeterState::Idle;
 }
 
+float FMDRangedUIRules::HeatRingSweep(EMDHeatMeterState State, float MeterFractionValue, float LockFraction)
+{
+	switch (State)
+	{
+	case EMDHeatMeterState::Hidden:
+		return 0.0f;
+	case EMDHeatMeterState::Overheated:
+		return FMath::Clamp(LockFraction, 0.0f, 1.0f);
+	default:
+		return FMath::Clamp(MeterFractionValue, 0.0f, 1.0f);
+	}
+}
+
 EMDColor FMDRangedUIRules::HeatMeterToken(EMDHeatMeterState State)
 {
 	switch (State)
