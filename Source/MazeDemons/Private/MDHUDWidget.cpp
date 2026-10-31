@@ -11,7 +11,10 @@
 #include "MDPlayerController.h"
 #include "MDPlayerState.h"
 #include "MDStaminaComponent.h"
+#include "MDStatusBarWidget.h"
 #include "Ranged/MDHUDOptions.h"
+#include "Blueprint/UserWidget.h"
+#include "Engine/GameViewportClient.h"
 
 #include "GameFramework/GameStateBase.h"
 #include "Engine/World.h"
@@ -56,6 +59,11 @@ void UMDHUDWidget::Unbind()
 		PC->OnPickupNotified.RemoveDynamic(this, &UMDHUDWidget::HandlePickupNotified);
 		PC->OnUseRejected.RemoveDynamic(this, &UMDHUDWidget::HandleUseRejected);
 		PC->OnToastNotified.RemoveDynamic(this, &UMDHUDWidget::HandleToast);
+	}
+	if (StatusBar)
+	{
+		StatusBar->RemoveFromParent();
+		StatusBar = nullptr;
 	}
 	BoundASC.Reset();
 	BoundStamina.Reset();
@@ -204,11 +212,30 @@ void UMDHUDWidget::TryBind()
 	bDead = ASC->IsDead();
 	bBound = true;
 
+	CreateStatusBar(PC);
+
 	OnBound();
 	OnHealthUpdated(GetHealthPercent(), 0.0f);
 	OnStaminaUpdated(GetStaminaPercent(), bExhausted);
 	OnDeathStateChanged(bDead);
 	OnPerkPointsChanged(PerkPointsAvailable);
+}
+
+void UMDHUDWidget::CreateStatusBar(APlayerController* PC)
+{
+	// Only a real local player's HUD gets one (not a dedicated-server or headless widget).
+	if (!bShowStatusBar || StatusBar || !PC || !PC->IsLocalController() || !GetWorld() || !GetWorld()->GetGameViewport())
+	{
+		return;
+	}
+	StatusBar = CreateWidget<UMDStatusBarWidget>(PC);
+	if (StatusBar)
+	{
+		StatusBar->AddToViewport(40);
+		StatusBar->SetAnchorsInViewport(FAnchors(0.0f, 1.0f));
+		StatusBar->SetAlignmentInViewport(FVector2D(0.0f, 1.0f));
+		StatusBar->SetPositionInViewport(StatusBarOffset, false);
+	}
 }
 
 void UMDHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)

@@ -4,6 +4,7 @@
 #include "MDGameplayTags.h"
 #include "MDPerkCatalog.h"
 #include "MDPlayerState.h"
+#include "MDStatusEffectComponent.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -43,7 +44,15 @@ UMDAbilitySystemComponent* UMDStaminaComponent::GetASC() const
 float UMDStaminaComponent::ScaleCost(float Cost) const
 {
 	const UMDAbilitySystemComponent* ASC = GetASC();
-	return ASC ? UMDPerkCatalog::ScaleStaminaCost(Cost, ASC->GetStaminaCostScale()) : Cost;
+	const float Scaled = ASC ? UMDPerkCatalog::ScaleStaminaCost(Cost, ASC->GetStaminaCostScale()) : Cost;
+	const UMDStatusEffectComponent* Status = UMDStatusEffectComponent::FindFor(GetOwner());
+	return Status ? Scaled * Status->GetStaminaDrainScale() : Scaled;
+}
+
+bool UMDStaminaComponent::IsRegenBlocked() const
+{
+	const UMDStatusEffectComponent* Status = UMDStatusEffectComponent::FindFor(GetOwner());
+	return Status && Status->BlocksStaminaRegen();
 }
 
 void UMDStaminaComponent::SetRegenDelayModifier(float ReductionSeconds)
@@ -91,7 +100,7 @@ FMDStaminaStepOutput UMDStaminaComponent::Step(const FMDStaminaStepInput& In)
 		Out.Stamina = FMath::Max(Out.Stamina - In.SprintDrainPerSec * In.DeltaTime, 0.0f);
 		Out.bSpent = true;
 	}
-	else if (In.TimeSinceSpend >= In.RegenDelay)
+	else if (!In.bRegenBlocked && In.TimeSinceSpend >= In.RegenDelay)
 	{
 		Out.Stamina = FMath::Min(Out.Stamina + In.RegenPerSec * In.DeltaTime, In.MaxStamina);
 	}
@@ -144,6 +153,7 @@ void UMDStaminaComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
 	In.TimeSinceSpend = static_cast<float>(Now - LastSpendTime);
 	In.bSprinting = IsPawnSprinting();
 	In.bExhausted = bExhausted;
+	In.bRegenBlocked = IsRegenBlocked();
 
 	const FMDStaminaStepOutput Out = Step(In);
 	if (!FMath::IsNearlyEqual(Out.Stamina, In.Stamina))

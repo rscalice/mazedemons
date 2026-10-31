@@ -36,6 +36,11 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Map")
 	TObjectPtr<UMDMapComponent> MapComponent;
 
+	// V1 WP7 soft lock-on (reticle, target select / cycle, camera assist, warp target). Input is bound below in SetupInputComponent:
+	// keyboard Middle Mouse (lock), mouse wheel or [ ] (cycle); gamepad Right Stick click (lock), Right Stick flick left / right (cycle).
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|LockOn")
+	TObjectPtr<class UMDLockOnComponent> LockOn;
+
 	// ---- Quick slots / pause input (assets set in BP_MDPlayerController defaults) ----
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Maze Demons|Input")
 	TObjectPtr<UInputAction> QuickSlot1Action;
@@ -438,6 +443,11 @@ private:
 	// R1: LMB / right trigger -> UMDRangedComponent::SetFireHeld (ignored while a menu is open).
 	void RangedFirePressed();
 	void RangedFireReleased();
+	// V1 WP7 lock-on keys (forward to LockOn; the component re-checks menus and death).
+	void LockOnPressed();
+	void LockOnReleased();
+	void LockOnCycleLeft();
+	void LockOnCycleRight();
 
 	UFUNCTION(Server, Reliable)
 	void Server_RequestRangedSwap();

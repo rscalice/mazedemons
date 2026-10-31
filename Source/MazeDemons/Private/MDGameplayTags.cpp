@@ -7,6 +7,11 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Frost, "Damage.Type.Frost");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Fire, "Damage.Type.Fire");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Poison, "Damage.Type.Poison");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Damage_Type_Bleed, "Damage.Type.Bleed");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Data_IsDoT, "Data.IsDoT");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Status_Bleed, "Status.Bleed");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Status_Frost, "Status.Frost");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Status_Poison, "Status.Poison");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Status_Burn, "Status.Burn");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Exhausted, "State.Exhausted");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Sprinting, "State.Sprinting");
 

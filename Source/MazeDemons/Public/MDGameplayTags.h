@@ -14,6 +14,14 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Fire);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Poison);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Damage_Type_Bleed);
 
+// V1 WP6 status effects. Data.IsDoT is the SetByCaller flag the DoT effect carries (UMDDoTExecCalc only works with it set; the damage
+// path reads it to skip armor wear and crits). Status.<Name> is granted to the target by the status effect's GE while it is active.
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Data_IsDoT);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Status_Bleed);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Status_Frost);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Status_Poison);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Status_Burn);
+
 // Stamina state, kept as loose tags on the server by UMDStaminaComponent. Attacks never check these.
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Exhausted);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_State_Sprinting);

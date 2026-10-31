@@ -11,6 +11,7 @@ class UMDAttributeSet;
 class UMDPerkComponent;
 class UMDRangedComponent;
 class UMDStaminaComponent;
+class UMDStatusEffectComponent;
 class USkeletalMesh;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMDRunStatsChanged);
@@ -38,6 +39,10 @@ public:
 	// Server-side stamina rules (drain/regen/exhaustion). Pool size and regen come from its tunables.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Stamina")
 	TObjectPtr<UMDStaminaComponent> StaminaComponent;
+
+	// V1 WP6: Bleed / Frost / Poison / Burn on this player (server rules, replicated to everyone). Next to the ASC so it survives respawns.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Status")
+	TObjectPtr<UMDStatusEffectComponent> StatusEffects;
 
 	// Perk ranks and everything they drive (U3). Ranks persist across respawns.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Maze Demons|Perks")

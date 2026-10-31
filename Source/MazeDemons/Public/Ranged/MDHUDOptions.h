@@ -29,6 +29,25 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
 	static void SetOffscreenThreat(bool bEnabled);
 
+	// ---- Soft lock-on (V1 WP7) ----
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
+	static void SetLockOnAssistStrength(float Strength01);
+
+	// False: the lock key toggles. True: the lock holds only while the key is held.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
+	static void SetLockOnHold(bool bHold);
+
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
+	static void SetLockOnReticleScale(float Scale);
+
+	// Autonomous soft lock on / off (default on).
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
+	static void SetSoftLockOn(bool bEnabled);
+
+	// Old name of SetSoftLockOn (the "auto-lock when attacking" option became the soft lock). Kept so existing Blueprint calls still work.
+	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options", meta = (DeprecatedFunction, DeprecationMessage = "Use SetSoftLockOn"))
+	static void SetLockOnAutoAcquire(bool bAuto);
+
 	// Pushes the saved values that live in console variables (the off-screen threat toggle). Cheap; the HUD calls it on construct.
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|Options")
 	static void ApplySavedOptions();

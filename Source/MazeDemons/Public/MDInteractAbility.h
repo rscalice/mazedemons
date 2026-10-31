@@ -33,6 +33,10 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Interact")
 	AActor* FindInteractTarget() const;
 
+	/** True when Actor is (recursively) attached to a pawn, e.g. an equipped weapon or armor piece. */
+	static bool IsAttachedToPawn(const AActor* Actor);
+
 	// Shared target search (ability and the local focus trace both use it): closest tagged actor in front of Avatar.
+	// Ignores actors attached to any pawn so held weapons never occlude interactables.
 	static AActor* FindInteractTargetFor(const AActor* Avatar, float Range, float Radius, FName RequiredTag);
 };

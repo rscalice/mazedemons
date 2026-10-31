@@ -106,4 +106,22 @@ public:
 	// Off-screen threat arrows and tell pings (md.UI.OffscreenThreat).
 	UPROPERTY(Config, BlueprintReadWrite, Category = "Ranged")
 	bool bOffscreenThreat = true;
+
+	// ---- Soft lock-on (V1 WP7, Options > Gameplay). Local; UMDHUDOptions sets them. ----
+	// Camera assist strength 0..1 (0 = reticle only). The assist never fights the player's own camera input.
+	UPROPERTY(Config, BlueprintReadWrite, Category = "LockOn", meta = (ClampMin = "0", ClampMax = "1"))
+	float LockOnAssistStrength = 0.6f;
+
+	// False (default): the lock key toggles the lock. True: the lock holds only while the key is held.
+	UPROPERTY(Config, BlueprintReadWrite, Category = "LockOn")
+	bool bLockOnHold = false;
+
+	// Reticle size multiplier.
+	UPROPERTY(Config, BlueprintReadWrite, Category = "LockOn", meta = (ClampMin = "0.5", ClampMax = "2"))
+	float LockOnReticleScale = 1.0f;
+
+	// Autonomous soft lock (default on): attacking soft-locks the best enemy in view and keeps chaining after kills; no button. The lock key
+	// (Middle Mouse / right stick click) is still the hard lock and overrides it. Replaces the old "auto-lock when attacking" option.
+	UPROPERTY(Config, BlueprintReadWrite, Category = "LockOn")
+	bool bSoftLockOn = true;
 };

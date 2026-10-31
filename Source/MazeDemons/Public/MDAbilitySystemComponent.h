@@ -147,6 +147,15 @@ public:
 	// has State.Invulnerable (dodge i-frames). Fills OutResult; returns true when Health went down. Server only.
 	bool ApplyDamage(const FMDHitContext& Context, FMDDamageResult& OutResult);
 
+	// V1 WP6, server only. One damage-over-time tick (Bleed, Poison, Burn): Damage is the raw amount; Defense still reduces it. Same team
+	// rules, dodge i-frames, kill credit and run stats as a hit, but it never crits, never uses Executioner, wears no armor or weapon (it
+	// broadcasts OnDoTDamageApplied, not OnDamageApplied, so the durability listeners never hear it) and is applied with UMDDoTEffect /
+	// UMDDoTExecCalc. DamageType is a Damage.Type.* tag (copied to OutResult). Returns true when Health went down.
+	bool ApplyDoTDamage(float Damage, AActor* DamageInstigator, FGameplayTag DamageType, FMDDamageResult& OutResult);
+
+	// Server only; a DoT tick reduced Health by Applied (> 0). Armor wear listens to OnDamageApplied and deliberately not to this.
+	FMDDamageAppliedNative OnDoTDamageApplied;
+
 	UFUNCTION(BlueprintCallable, Category = "Maze Demons|GAS")
 	void ApplyHealing(float Amount);
 
@@ -223,7 +232,8 @@ private:
 
 	// The shared damage path behind both ApplyDamage overloads. OutResult may be null.
 	// bWearAttackerWeapon = false for ranged / beam hits (a gun wears its own durability, never the melee weapon).
-	void ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult, bool bWearAttackerWeapon = true);
+	// bDoT = a status effect tick (see ApplyDoTDamage): no crit, no Executioner, no wear, applied with the DoT effect.
+	void ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult, bool bWearAttackerWeapon = true, bool bDoT = false);
 
 	void BindAttributeDelegates();
 	bool bDelegatesBound = false;

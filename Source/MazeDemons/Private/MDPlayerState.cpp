@@ -12,6 +12,7 @@
 #include "Ranged/MDRangedComponent.h"
 #include "MDRagdollTuning.h"
 #include "MDStaminaComponent.h"
+#include "MDStatusEffectComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -55,6 +56,8 @@ AMDPlayerState::AMDPlayerState()
 	Attributes = CreateDefaultSubobject<UMDAttributeSet>(TEXT("MazeDemonsAttributes"));
 
 	StaminaComponent = CreateDefaultSubobject<UMDStaminaComponent>(TEXT("StaminaComponent"));
+
+	StatusEffects = CreateDefaultSubobject<UMDStatusEffectComponent>(TEXT("StatusEffects"));
 
 	PerkComponent = CreateDefaultSubobject<UMDPerkComponent>(TEXT("PerkComponent"));
 
@@ -397,6 +400,10 @@ void AMDPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* 
 			if (StaminaComponent)
 			{
 				StaminaComponent->ResetForRespawn();
+			}
+			if (StatusEffects)
+			{
+				StatusEffects->ClearAll(); // a new life starts clean (death already ended them; this covers a debug revive)
 			}
 			if (PerkComponent)
 			{

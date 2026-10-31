@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
 #include "GameplayTagContainer.h"
+#include "MDStatusTypes.h"
 #include "MDCombatTypes.generated.h"
 
 class AActor;
@@ -173,6 +174,14 @@ struct MAZEDEMONS_API FMDAttackStep
 	// Damage.Type.* of this step's hit (decides the floating number's color). Empty = Physical.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")
 	FGameplayTag DamageType;
+
+	// V1 WP6: status effect this step puts on the victim when it lands (Ghoul swipe = Bleed, Cultist bolt = Frost, Grave Brute sweep = Poison).
+	// None = no status. Applied by the server in ApplyMeleeHit after the damage went through, with OnHitStatusChance.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step|Status")
+	EMDStatusType OnHitStatus = EMDStatusType::None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step|Status", meta = (ClampMin = "0", ClampMax = "1"))
+	float OnHitStatusChance = 1.0f;
 
 	// Swing whoosh played when the step starts (every machine). Empty = silent; fill from the "General Whoosh SFX" pack.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Step")

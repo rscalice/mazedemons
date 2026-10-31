@@ -23,6 +23,7 @@ static TAutoConsoleVariable<FString> CVarArmorProbeTimes(TEXT("md.ArmorProbe.Tim
 static TAutoConsoleVariable<int32> CVarArmorProbeEquipAt(TEXT("md.ArmorProbe.EquipAt"), 0, TEXT("Second at which the server gives and equips md.ArmorProbe.Equip to every player (0 = never)."));
 static TAutoConsoleVariable<int32> CVarArmorProbeUnequipAt(TEXT("md.ArmorProbe.UnequipAt"), 0, TEXT("Second at which the server unequips every player's armor slots 4-8 (0 = never)."));
 static TAutoConsoleVariable<int32> CVarArmorProbeExecAt(TEXT("md.ArmorProbe.ExecAt"), 0, TEXT("Second at which every machine runs md.ArmorProbe.Exec (0 = never)."));
+static TAutoConsoleVariable<int32> CVarArmorProbeActions(TEXT("md.ArmorProbe.Actions"), 0, TEXT("Safety switch: the UnequipAt / EquipAt / ExecAt actions only run while this is > 0."));
 static TAutoConsoleVariable<FString> CVarArmorProbeExec(TEXT("md.ArmorProbe.Exec"), TEXT(""), TEXT("Console command for md.ArmorProbe.ExecAt, e.g. KillPlayer."));
 static TAutoConsoleVariable<FString> CVarArmorProbeEquip(TEXT("md.ArmorProbe.Equip"), TEXT(""), TEXT("Comma separated item rows."));
 #endif
@@ -88,7 +89,9 @@ void UMDArmorProbeSubsystem::Deinitialize()
 
 bool UMDArmorProbeSubsystem::Tick(float DeltaTime)
 {
-#if !UE_BUILD_SHIPPING
+#if UE_BUILD_SHIPPING
+	return false;
+#else
 	if (CVarArmorProbe.GetValueOnGameThread() <= 0)
 	{
 		return true;
@@ -117,16 +120,24 @@ bool UMDArmorProbeSubsystem::Tick(float DeltaTime)
 				Dump(Second);
 			}
 		}
+		// Actions mutate gameplay state (unequip / equip / console exec): they need the explicit md.ArmorProbe.Actions opt-in on top of the *At cvars.
+		if (CVarArmorProbeActions.GetValueOnGameThread() <= 0)
+		{
+			continue;
+		}
 		if (CVarArmorProbeUnequipAt.GetValueOnGameThread() == Second)
 		{
+			UE_LOG(LogMDArmorProbe, Error, TEXT("ARMORPROBE ACTION Unequip at second %d"), Second);
 			UnequipArmor();
 		}
 		if (CVarArmorProbeEquipAt.GetValueOnGameThread() == Second)
 		{
+			UE_LOG(LogMDArmorProbe, Error, TEXT("ARMORPROBE ACTION Equip at second %d: %s"), Second, *CVarArmorProbeEquip.GetValueOnGameThread());
 			EquipRows();
 		}
 		if (CVarArmorProbeExecAt.GetValueOnGameThread() == Second && GEngine)
 		{
+			UE_LOG(LogMDArmorProbe, Error, TEXT("ARMORPROBE ACTION Exec at second %d: %s"), Second, *CVarArmorProbeExec.GetValueOnGameThread());
 			GEngine->Exec(GetWorld(), *CVarArmorProbeExec.GetValueOnGameThread());
 		}
 	}

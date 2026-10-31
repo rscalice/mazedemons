@@ -5,6 +5,7 @@
 #include "MDGameplayStatics.h"
 #include "MDPoiseComponent.h"
 #include "MDPoiseProfile.h"
+#include "MDStatusEffectComponent.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequenceBase.h"
 #include "Animation/AnimSingleNodeInstance.h"
@@ -68,6 +69,8 @@ AMDTestDummy::AMDTestDummy()
 	AbilitySystem->SetReplicationMode(EGameplayEffectReplicationMode::Minimal);
 
 	Attributes = CreateDefaultSubobject<UMDAttributeSet>(TEXT("MazeDemonsAttributes"));
+
+	StatusEffects = CreateDefaultSubobject<UMDStatusEffectComponent>(TEXT("StatusEffects"));
 }
 
 UAbilitySystemComponent* AMDTestDummy::GetAbilitySystemComponent() const

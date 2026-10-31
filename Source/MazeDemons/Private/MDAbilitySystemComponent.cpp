@@ -3,6 +3,7 @@
 #include "MDAttributeSet.h"
 #include "MDDamageEffect.h"
 #include "MDDamageNumbers.h"
+#include "MDStatusEffects.h"
 #include "MDGameplayStatics.h"
 #include "MDGameplayTags.h"
 #include "MDGameSettings.h"
@@ -343,8 +344,21 @@ bool UMDAbilitySystemComponent::ApplyDamage(const FMDHitContext& Context, FMDDam
 	return OutResult.bApplied;
 }
 
-void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult, bool bWearAttackerWeapon)
+bool UMDAbilitySystemComponent::ApplyDoTDamage(float Damage, AActor* DamageInstigator, FGameplayTag DamageType, FMDDamageResult& OutResult)
 {
+	OutResult = FMDDamageResult();
+	ApplyDamageCore(Damage, DamageInstigator, DamageInstigator, false, &OutResult, false, true);
+	OutResult.DamageType = MDDamageNumbers::ResolveType(DamageType);
+	return OutResult.bApplied;
+}
+
+void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInstigator, AActor* DamageCauser, bool bAllowCrit, FMDDamageResult* OutResult, bool bWearAttackerWeapon, bool bDoT)
+{
+	if (bDoT)
+	{
+		bAllowCrit = false; // a tick never crits, whatever the caller said
+		bWearAttackerWeapon = false;
+	}
 	if (OutResult)
 	{
 		*OutResult = FMDDamageResult();
@@ -407,7 +421,7 @@ void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInst
 				}
 			}
 		}
-		const float ExecutionerPct = AttackerASC->GetPerkCombatState().ExecutionerPct;
+		const float ExecutionerPct = bDoT ? 0.0f : AttackerASC->GetPerkCombatState().ExecutionerPct;
 		if (ExecutionerPct > 0.0f)
 		{
 			const float MaxHealthNow = GetMaxHealth();
@@ -420,13 +434,17 @@ void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInst
 	FGameplayEffectContextHandle Context = MakeEffectContext();
 	Context.AddInstigator(DamageInstigator, DamageCauser ? DamageCauser : DamageInstigator);
 
-	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UMDDamageEffect::StaticClass(), 1.0f, Context);
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(bDoT ? TSubclassOf<UGameplayEffect>(UMDDoTEffect::StaticClass()) : TSubclassOf<UGameplayEffect>(UMDDamageEffect::StaticClass()), 1.0f, Context);
 	if (Spec.IsValid() && Spec.Data.IsValid())
 	{
 		// Set before the effect lands so a lethal hit's OnDeath handlers already see who killed.
 		LastDamageInstigator = DamageInstigator;
 		const float HealthBefore = GetHealth();
 		Spec.Data->SetSetByCallerMagnitude(TAG_Data_Damage.GetTag(), FinalDamage);
+		if (bDoT)
+		{
+			Spec.Data->SetSetByCallerMagnitude(TAG_Data_IsDoT.GetTag(), 1.0f); // UMDDoTExecCalc refuses to run without it
+		}
 		ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
 
 		const float Applied = HealthBefore - GetHealth();
@@ -440,7 +458,14 @@ void UMDAbilitySystemComponent::ApplyDamageCore(float Damage, AActor* DamageInst
 		if (Applied > 0.0f)
 		{
 			LastDamageTakenTime = GetServerNow(); // the 5 s out-of-combat clock for perk spending and Recovery
-			OnDamageApplied.Broadcast(DamageInstigator, Applied);
+			if (bDoT)
+			{
+				OnDoTDamageApplied.Broadcast(DamageInstigator, Applied); // no armor wear: the inventory listens to OnDamageApplied only
+			}
+			else
+			{
+				OnDamageApplied.Broadcast(DamageInstigator, Applied);
+			}
 
 			// Run tab stats (owner-only replicated on the PlayerState). The victim is a player when this ASC lives on a PlayerState.
 			AMDPlayerState* VictimState = Cast<AMDPlayerState>(GetOwner());
