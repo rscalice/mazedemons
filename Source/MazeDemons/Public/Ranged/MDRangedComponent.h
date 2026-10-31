@@ -56,8 +56,61 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
 	bool IsAimed() const { return bAimed; }
 
-	// Authority. R4 sets it from the aim input.
+	// Authority. Sets the replicated aim flag (only while in ranged mode), the loose State.Aiming tag and wakes the tick. Does not run the
+	// FMDAimRules gates: the aim request paths (RequestAim / Server_SetAim) and EvaluateAimRules do.
 	void SetAimed(bool bNewAimed);
+
+	// ================= R4 aim =================
+	// What the local view should use: the replicated flag, or on the owning client the predicted one (so the camera and spread react
+	// before the server's answer arrives). Other machines see the replicated flag only.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	bool IsAimingLocal() const { return bAimed || (bAimPredicted && IsOwnerLocal()); }
+
+	// The aim rules (FMDAimRules::CanAim) for the pawn right now, with the sprint state given (tests pass it; the tick measures it).
+	bool CanAimNow(bool bSprinting) const;
+
+	// True when the pawn moves fast enough to count as sprinting (UMDStaminaComponent's rule), false without a stamina component.
+	bool IsPawnSprintingNow() const;
+
+	// Owner machine: RMB / left trigger. bPressed true/false; with bToggle (UMDLocalSettings::bAimToggle) only presses count and they flip.
+	// Keeps the wish (bAimWanted) so a hold-aim resumes after a sprint and a stun.
+	void SetAimInput(bool bPressed, bool bToggle);
+	bool IsAimWanted() const { return bAimWanted; }
+
+	// Owner machine: activates the LocalPredicted UMDAimAbility when the ASC has it, else asks directly.
+	bool TryActivateAim();
+
+	// Owner machine (and the ability): aim on / off. The host sets the flag; a client predicts it and sends Server_SetAim.
+	void RequestAim(bool bAim);
+
+	// Server: validates (FMDAimRules::CanAim with the server's own sprint / stagger / death view) and sets the replicated flag. Aiming
+	// is refused, never trusted: the flag other clients render is the server's.
+	UFUNCTION(Server, Reliable)
+	void Server_SetAim(bool bAim);
+
+	// Authority: the validation Server_SetAim runs (tests call it directly). Returns the aim flag afterwards.
+	bool ProcessAimRequest(bool bAim);
+
+	// Runs the aim rules once with the given sprint state: the authority drops the aim when CanAim turned false (sprint, stagger,
+	// death, holster); the owner machine updates its wish and prediction. The tick calls it with the measured sprint state; tests call it
+	// directly.
+	void EvaluateAimRules(bool bSprinting);
+
+	// ---- Anim BP hooks (every machine; replicated inputs only) ----
+	// Seconds since a shot of this player was seen on this machine (huge before the first).
+	float GetSecondsSinceShot() const;
+
+	// Aim offset layer inputs: (yaw, pitch) of the aim direction relative to the pawn, clamped to +-90 / +-60.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	FVector2D GetAimOffset() const;
+
+	// 1 while aimed, or for 1.5 s after a shot in ranged mode; 0 otherwise. Blend the AimOffset layer by it.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	float GetAimOffsetAlpha() const;
+
+	// True when the character should face the camera (aimed strafe locomotion): aimed, or just shot. Anim BP / movement hook.
+	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
+	bool WantsAimedStrafe() const { return bRangedMode && (bAimed || (bAimPredicted && IsOwnerLocal())); }
 
 	// Data asset of the gun equipped in the Ranged slot, or null when none (or the row has no RangedData).
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Ranged")
@@ -285,8 +338,12 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_RangedMode, BlueprintReadOnly, Category = "Maze Demons|Ranged")
 	bool bRangedMode = false;
 
-	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Ranged")
+	// Replicated to everyone: remote pawns need it for the aimed pose, the support-hand IK and the State.Aiming tag.
+	UPROPERTY(ReplicatedUsing = OnRep_Aimed, BlueprintReadOnly, Category = "Maze Demons|Ranged")
 	bool bAimed = false;
+
+	UFUNCTION()
+	void OnRep_Aimed();
 
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Maze Demons|Ranged")
 	TArray<FMDSlotMag> Mags;
@@ -317,6 +374,16 @@ protected:
 	bool bAutoReloadPref = true;
 
 private:
+	void ApplyAimTagLocally();
+	// Owner machine: the player wants to aim (button held, or toggled on). Survives sprints and stuns in hold mode.
+	bool bAimWanted = false;
+	bool bAimToggleMode = false;
+	// Owner machine: the client's guess that the server will accept the aim; dropped when the server says no or the rules turn false.
+	bool bAimPredicted = false;
+	double AimPredictedAt = 0.0;
+	// World time (this machine) of the last shot seen from this player.
+	double LastShotSeenTime = -1000.0;
+
 	void SyncAutoReloadPref();
 	void ApplyReloadTagLocally();
 	void ClearReloadState();

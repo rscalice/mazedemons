@@ -22,6 +22,9 @@
 #include "LockOn/MDLockOnComponent.h"
 #include "Ranged/MDRangedComponent.h"
 #include "Ranged/MDRangedCameraModifier.h"
+#include "Ranged/MDAimRules.h"
+#include "Ranged/MDRangedMath.h"
+#include "HAL/IConsoleManager.h"
 #include "Camera/PlayerCameraManager.h"
 #include "MDStatCalculator.h"
 #include "GameFramework/GameModeBase.h"
@@ -275,6 +278,12 @@ void AMDPlayerController::SetupInputComponent()
 			InputComponent->BindKey(FireKey, IE_Pressed, this, &AMDPlayerController::RangedFirePressed).bConsumeInput = false;
 			InputComponent->BindKey(FireKey, IE_Released, this, &AMDPlayerController::RangedFireReleased).bConsumeInput = false;
 		}
+		// R4 aim: RMB / left trigger (hold, or toggle by option). Not consumed: IA_Aim in the GASP character reads the same keys.
+		for (const FKey& AimKey : { EKeys::RightMouseButton, EKeys::Gamepad_LeftTrigger })
+		{
+			InputComponent->BindKey(AimKey, IE_Pressed, this, &AMDPlayerController::AimPressed).bConsumeInput = false;
+			InputComponent->BindKey(AimKey, IE_Released, this, &AMDPlayerController::AimReleased).bConsumeInput = false;
+		}
 	}
 }
 
@@ -477,6 +486,157 @@ void AMDPlayerController::RangedFireReleased()
 	}
 }
 
+void AMDPlayerController::AimPressed()
+{
+	if (IsAnyMenuOpen())
+	{
+		return;
+	}
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->SetAimInput(true, GetDefault<UMDLocalSettings>()->bAimToggle);
+	}
+}
+
+void AMDPlayerController::AimReleased()
+{
+	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
+	{
+		Ranged->SetAimInput(false, GetDefault<UMDLocalSettings>()->bAimToggle);
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// R4 aim assist (local controller): friction on the mouse, magnetism on the gamepad, both on the WP7 lock target. Never a snap.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace MDAimAssistLocal
+{
+	static TAutoConsoleVariable<int32> CVarAssist(TEXT("md.Aim.Assist"), 1, TEXT("R4: 0 turns the aim assist (friction + magnetism) off."));
+	static TAutoConsoleVariable<float> CVarStrength(TEXT("md.Aim.Strength"), -1.0f,
+		TEXT("R4: aim assist strength 0..1 for testing; -1 uses the player's option (UMDLocalSettings::AimAssistStrength)."));
+	static TAutoConsoleVariable<float> CVarRadius(TEXT("md.Aim.TargetRadius"), FMDAimRules::DefaultTargetRadiusCm,
+		TEXT("R4: radius in cm of the target's chest sphere the reticle must overlap for friction."));
+	static TAutoConsoleVariable<float> CVarRange(TEXT("md.Aim.Range"), 3000.0f, TEXT("R4: the assist ignores lock targets farther than this, cm."));
+	static TAutoConsoleVariable<int32> CVarDebug(TEXT("md.Aim.Debug"), 0, TEXT("R4: log the aim assist state once a second."));
+}
+
+AMDPlayerController::FMDAimAssistFrame AMDPlayerController::BuildAimAssistFrame() const
+{
+	using namespace MDAimAssistLocal;
+	FMDAimAssistFrame Frame;
+	if (!IsLocalController() || CVarAssist.GetValueOnGameThread() == 0 || IsAnyMenuOpen() || !LockOn)
+	{
+		return Frame;
+	}
+	const UMDRangedComponent* Ranged = UMDRangedComponent::Find(this);
+	const APawn* LocalPawn = GetPawn();
+	if (!Ranged || !Ranged->IsRangedMode() || !Ranged->HasGunEquipped() || !LocalPawn || UMDGameplayStatics::IsPawnDead(LocalPawn))
+	{
+		return Frame;
+	}
+	FVector AimPoint;
+	if (!LockOn->GetLockAimPoint(AimPoint))
+	{
+		return Frame;
+	}
+	FVector CamLoc;
+	FRotator CamRot;
+	GetPlayerViewPoint(CamLoc, CamRot);
+	const FVector ToTarget = AimPoint - CamLoc;
+	const float Dist = static_cast<float>(ToTarget.Size());
+	if (Dist < 1.0f || Dist > CVarRange.GetValueOnGameThread())
+	{
+		return Frame;
+	}
+	const FRotator Desired = ToTarget.Rotation();
+	Frame.YawErrorDeg = FRotator::NormalizeAxis(Desired.Yaw - CamRot.Yaw);
+	Frame.PitchErrorDeg = FRotator::NormalizeAxis(Desired.Pitch - CamRot.Pitch);
+	Frame.DistanceCm = Dist;
+	Frame.bOverlap = FMDAimRules::ReticleOverlaps(FMDRangedMath::AngleBetweenDeg(CamRot.Vector(), ToTarget), Dist, CVarRadius.GetValueOnGameThread());
+	Frame.bAimed = Ranged->IsAimingLocal();
+	Frame.bHardLock = LockOn->IsHardLock();
+	const float Override = CVarStrength.GetValueOnGameThread();
+	Frame.Strength = Override >= 0.0f ? FMath::Clamp(Override, 0.0f, 1.0f) : FMath::Clamp(GetDefault<UMDLocalSettings>()->AimAssistStrength, 0.0f, 1.0f);
+	Frame.bActive = true;
+	return Frame;
+}
+
+float AMDPlayerController::GetAimFrictionScale() const
+{
+	const FMDAimAssistKind Kind = FMDAimRules::KindFor(bUsingGamepad);
+	if (!Kind.bFriction)
+	{
+		return 1.0f; // the gamepad gets magnetism only
+	}
+	const FMDAimAssistFrame Frame = BuildAimAssistFrame();
+	return Frame.bActive ? FMDAimRules::FrictionMultiplier(Frame.Strength, Frame.bOverlap) : 1.0f;
+}
+
+void AMDPlayerController::AddYawInput(float Val)
+{
+	Super::AddYawInput(Val != 0.0f ? Val * GetAimFrictionScale() : Val);
+}
+
+void AMDPlayerController::AddPitchInput(float Val)
+{
+	Super::AddPitchInput(Val != 0.0f ? Val * GetAimFrictionScale() : Val);
+}
+
+void AMDPlayerController::PlayerTick(float DeltaTime)
+{
+	Super::PlayerTick(DeltaTime); // the look input runs in here
+	if (IsLocalController())
+	{
+		ApplyAimMagnetism(DeltaTime);
+	}
+}
+
+void AMDPlayerController::ApplyAimMagnetism(float DeltaTime)
+{
+	using namespace MDAimAssistLocal;
+	const FMDAimAssistKind Kind = FMDAimRules::KindFor(bUsingGamepad);
+	if (!Kind.bMagnetism)
+	{
+		return; // the mouse gets friction only
+	}
+	const FMDAimAssistFrame Frame = BuildAimAssistFrame();
+	if (!Frame.bActive || !FMDAimRules::MagnetismAllowed(Frame.bHardLock))
+	{
+		bHaveMagnetismRotation = false;
+		return;
+	}
+	// What the player turned this frame = how the control rotation moved since magnetism left it (works for any look source and sign).
+	const FRotator Current = GetControlRotation();
+	FVector2D Input = FVector2D::ZeroVector;
+	if (bHaveMagnetismRotation)
+	{
+		Input.X = FRotator::NormalizeAxis(Current.Yaw - LastMagnetismRotation.Yaw);
+		Input.Y = FRotator::NormalizeAxis(Current.Pitch - LastMagnetismRotation.Pitch);
+	}
+	const float Weight = FMDAimRules::MagnetismWeight(Frame.bAimed, Frame.Strength);
+	const float DYaw = FMDAimRules::MagnetismStep(Frame.YawErrorDeg, Weight, DeltaTime, Input.X);
+	const float DPitch = FMDAimRules::MagnetismStep(Frame.PitchErrorDeg, Weight, DeltaTime, Input.Y);
+	if (CVarDebug.GetValueOnGameThread() != 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("MDAim: err %.2f/%.2f dist %.0f overlap %d aimed %d w %.2f step %.3f/%.3f input %.3f/%.3f"), Frame.YawErrorDeg, Frame.PitchErrorDeg,
+			Frame.DistanceCm, Frame.bOverlap ? 1 : 0, Frame.bAimed ? 1 : 0, Weight, DYaw, DPitch, Input.X, Input.Y);
+	}
+	if (FMath::Abs(DYaw) + FMath::Abs(DPitch) > 1.0e-5f)
+	{
+		FRotator Next = Current;
+		Next.Yaw += DYaw;
+		Next.Pitch = FRotator::NormalizeAxis(Current.Pitch) + DPitch;
+		if (PlayerCameraManager)
+		{
+			Next.Pitch = FMath::Clamp(Next.Pitch, PlayerCameraManager->ViewPitchMin, PlayerCameraManager->ViewPitchMax);
+		}
+		SetControlRotation(Next);
+	}
+	LastMagnetismRotation = GetControlRotation();
+	bHaveMagnetismRotation = true;
+}
+
 void AMDPlayerController::Server_RequestRangedSwap_Implementation()
 {
 	if (UMDRangedComponent* Ranged = UMDRangedComponent::Find(this))
@@ -555,7 +715,12 @@ void AMDPlayerController::SetInteractFocus(AActor* NewFocus, FText Prompt)
 
 bool AMDPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
-	if (IsLocalController() && (Params.Event == IE_Pressed || Params.Event == IE_Repeat))
+	// R4: the aim assist differs per device (mouse friction, gamepad magnetism), so a look axis counts as device use too: a stick
+	// pushed past 30 %, or the mouse moving. Buttons switch the device as before.
+	const bool bAxisUse = Params.Event == IE_Axis
+		&& ((Params.Key.IsGamepadKey() && FMath::Abs(Params.AmountDepressed) > 0.3f)
+			|| ((Params.Key == EKeys::MouseX || Params.Key == EKeys::MouseY) && !FMath::IsNearlyZero(Params.AmountDepressed)));
+	if (IsLocalController() && (Params.Event == IE_Pressed || Params.Event == IE_Repeat || bAxisUse))
 	{
 		const bool bGamepad = Params.Key.IsGamepadKey();
 		const bool bKeyboardMouse = !bGamepad && !Params.Key.IsTouch();

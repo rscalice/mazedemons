@@ -34,6 +34,10 @@
 #include "MDUISettings.h"
 #include "Ranged/MDReloadAbility.h"
 #include "Ranged/MDRangedFireAbility.h"
+#include "Ranged/MDAimAbility.h"
+#include "Ranged/MDAimRules.h"
+#include "MDStaminaComponent.h"
+#include "MDUISettings.h"
 #include "Ranged/MDRangedReticleWidget.h"
 #include "Ranged/MDRangedStatics.h"
 
@@ -51,6 +55,7 @@ namespace MDRangedComponentLocal
 	constexpr float SemiBufferSeconds = 0.15f;
 	constexpr float AimTraceRange = 6000.0f;
 	constexpr float MovingSpeed = 50.0f;
+	constexpr double AimPredictionTimeout = 0.75; // seconds the owner trusts its own aim guess without the server confirming it
 }
 
 UMDRangedComponent::UMDRangedComponent()
@@ -133,6 +138,10 @@ void UMDRangedComponent::BeginPlay()
 			{
 				ASC->GrantAbility(UMDReloadAbility::StaticClass());
 			}
+			if (!ASC->FindAbilitySpecFromClass(UMDAimAbility::StaticClass()))
+			{
+				ASC->GrantAbility(UMDAimAbility::StaticClass());
+			}
 		}
 	}
 	ApplyModeLocally();
@@ -181,8 +190,199 @@ void UMDRangedComponent::SetAimed(bool bNewAimed)
 {
 	if (GetOwner() && GetOwner()->HasAuthority())
 	{
-		bAimed = bNewAimed && bRangedMode;
+		const bool bNew = bNewAimed && bRangedMode;
+		if (bAimed != bNew)
+		{
+			bAimed = bNew;
+			ApplyAimTagLocally();
+		}
+		if (bAimed)
+		{
+			SetComponentTickEnabled(true); // the tick watches the sprint / stagger / death rules while aimed
+		}
 	}
+}
+
+void UMDRangedComponent::OnRep_Aimed()
+{
+	if (!bAimed)
+	{
+		bAimPredicted = false; // the server's answer wins over the owner's guess
+	}
+	ApplyAimTagLocally();
+}
+
+void UMDRangedComponent::ApplyAimTagLocally()
+{
+	if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		const bool bHasTag = ASC->HasMatchingGameplayTag(TAG_State_Aiming);
+		if (bAimed && !bHasTag)
+		{
+			ASC->AddLooseGameplayTag(TAG_State_Aiming);
+		}
+		else if (!bAimed && bHasTag)
+		{
+			ASC->RemoveLooseGameplayTag(TAG_State_Aiming);
+		}
+	}
+}
+
+bool UMDRangedComponent::IsPawnSprintingNow() const
+{
+	const UMDStaminaComponent* Stamina = GetOwner() ? GetOwner()->FindComponentByClass<UMDStaminaComponent>() : nullptr;
+	return Stamina && Stamina->IsSprintingNow();
+}
+
+bool UMDRangedComponent::CanAimNow(bool bSprinting) const
+{
+	const APawn* Pawn = GetPawn();
+	return FMDAimRules::CanAim(bRangedMode, HasGunEquipped(), !Pawn || UMDGameplayStatics::IsPawnDead(Pawn),
+		Pawn && UMDPoiseComponent::IsActorStunned(Pawn), bSprinting);
+}
+
+void UMDRangedComponent::SetAimInput(bool bPressed, bool bToggle)
+{
+	if (!IsOwnerLocal())
+	{
+		return;
+	}
+	bAimToggleMode = bToggle;
+	if (bToggle)
+	{
+		if (!bPressed)
+		{
+			return; // toggle mode reacts to presses only
+		}
+		bAimWanted = !bAimWanted;
+	}
+	else
+	{
+		bAimWanted = bPressed;
+	}
+	if (bAimWanted && bRangedMode)
+	{
+		TryActivateAim();
+	}
+	else
+	{
+		RequestAim(false);
+	}
+}
+
+bool UMDRangedComponent::TryActivateAim()
+{
+	if (!IsOwnerLocal() || !bRangedMode)
+	{
+		return false;
+	}
+	if (UMDAbilitySystemComponent* ASC = UMDGameplayStatics::GetMDAbilitySystemComponent(GetOwner()))
+	{
+		if (ASC->FindAbilitySpecFromClass(UMDAimAbility::StaticClass()))
+		{
+			if (ASC->TryActivateAbilityByClass(UMDAimAbility::StaticClass()))
+			{
+				return true;
+			}
+			SetComponentTickEnabled(true); // refused (stagger, ...): the tick retries while the wish stands
+			return false;
+		}
+	}
+	RequestAim(true);
+	return true;
+}
+
+void UMDRangedComponent::RequestAim(bool bAim)
+{
+	if (!GetOwner())
+	{
+		return;
+	}
+	const bool bAllowed = bAim && CanAimNow(IsPawnSprintingNow());
+	if (GetOwner()->HasAuthority())
+	{
+		SetAimed(bAllowed);
+	}
+	else
+	{
+		bAimPredicted = bAllowed;
+		if (bAllowed)
+		{
+			AimPredictedAt = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		}
+		Server_SetAim(bAim); // the server re-checks with its own view
+	}
+	if (bAim || bAimWanted)
+	{
+		SetComponentTickEnabled(true);
+	}
+}
+
+void UMDRangedComponent::Server_SetAim_Implementation(bool bAim)
+{
+	ProcessAimRequest(bAim);
+}
+
+bool UMDRangedComponent::ProcessAimRequest(bool bAim)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return bAimed;
+	}
+	SetAimed(bAim && CanAimNow(IsPawnSprintingNow()));
+	return bAimed;
+}
+
+void UMDRangedComponent::EvaluateAimRules(bool bSprinting)
+{
+	const bool bCan = CanAimNow(bSprinting);
+	if (GetOwner() && GetOwner()->HasAuthority() && bAimed && !bCan)
+	{
+		SetAimed(false);
+	}
+	if (!IsOwnerLocal())
+	{
+		return;
+	}
+	bAimWanted = FMDAimRules::WantedAfterRules(bAimWanted, bAimToggleMode, bCan, bRangedMode);
+	if (bAimPredicted && !bAimed && GetWorld() && GetWorld()->GetTimeSeconds() - AimPredictedAt > MDRangedComponentLocal::AimPredictionTimeout)
+	{
+		bAimPredicted = false; // the server never confirmed (it refused): fall back to the real flag; a held button asks again below
+	}
+	if (bAimPredicted && !bCan)
+	{
+		bAimPredicted = false;
+		if (!GetOwner()->HasAuthority())
+		{
+			Server_SetAim(false);
+		}
+	}
+	else if (bAimWanted && bCan && !IsAimingLocal())
+	{
+		RequestAim(true); // the sprint ended / the stun wore off while the button is still down
+	}
+}
+
+float UMDRangedComponent::GetSecondsSinceShot() const
+{
+	const UWorld* World = GetWorld();
+	return World ? static_cast<float>(World->GetTimeSeconds() - LastShotSeenTime) : 1000.0f;
+}
+
+FVector2D UMDRangedComponent::GetAimOffset() const
+{
+	const APawn* Pawn = GetPawn();
+	if (!Pawn)
+	{
+		return FVector2D::ZeroVector;
+	}
+	// GetBaseAimRotation: the controller's rotation on the owner and the server, the replicated view pitch + actor yaw elsewhere.
+	return FMDAimRules::ComputeAimOffset(Pawn->GetBaseAimRotation(), Pawn->GetActorRotation());
+}
+
+float UMDRangedComponent::GetAimOffsetAlpha() const
+{
+	return FMDAimRules::AimOffsetAlpha(IsAimingLocal(), bRangedMode, GetSecondsSinceShot());
 }
 
 bool UMDRangedComponent::TrySwapMode()
@@ -256,7 +456,10 @@ void UMDRangedComponent::ApplyModeLocally()
 	{
 		bFireHeld = false;
 		bSemiPending = false;
+		bAimWanted = false;
+		bAimPredicted = false;
 	}
+	ApplyAimTagLocally();
 }
 
 void UMDRangedComponent::SetMeleeWeaponsHidden(bool bHidden)
@@ -567,7 +770,8 @@ float UMDRangedComponent::GetCurrentSpread(bool bServer) const
 	}
 	const APawn* Pawn = GetPawn();
 	const bool bMoving = Pawn && Pawn->GetVelocity().Size2D() > MDRangedComponentLocal::MovingSpeed;
-	const float Base = bAimed ? Data->SpreadAimed : Data->SpreadHip;
+	// The owner's view reacts to its own aim at once; the server (and everyone else) uses the replicated flag.
+	const float Base = (bServer ? bAimed : IsAimingLocal()) ? Data->SpreadAimed : Data->SpreadHip;
 	// SpreadMoving is a multiplier on the base spread while the shooter moves.
 	return FMDRangedMath::ComputeSpread(Base, bMoving, Data->SpreadMoving, GetBloomNow(bServer));
 }
@@ -956,6 +1160,10 @@ void UMDRangedComponent::NotifyShotLanded()
 
 void UMDRangedComponent::PlayShotCosmetics(const FVector& Origin, const FVector& Dir)
 {
+	if (const UWorld* ShotWorld = GetWorld())
+	{
+		LastShotSeenTime = ShotWorld->GetTimeSeconds(); // keeps the aim offset layer on for a moment after a shot (every machine)
+	}
 	UWorld* World = GetWorld();
 	const UMDRangedWeaponData* Data = GetEquippedWeaponData();
 	if (!World || !Data || World->GetNetMode() == NM_DedicatedServer || Data->MuzzleFlashFX.IsNull())
@@ -1044,6 +1252,12 @@ void UMDRangedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		}
 	}
 
+	// ---- aim rules: sprint / stagger / death / holster leave aim (server), the owner's wish resumes aim after a sprint ----
+	if (bAimed || bAimWanted || bAimPredicted)
+	{
+		EvaluateAimRules(IsPawnSprintingNow());
+	}
+
 	// ---- trigger ----
 	if (bFireHeld && IsOwnerLocal() && bRangedMode && Data)
 	{
@@ -1110,7 +1324,8 @@ void UMDRangedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		bKickApplied = false;
 	}
 
-	if (!bFireHeld && !bSemiPending && RecoilPitch == 0.0f && RecoilYaw == 0.0f && !bKickApplied && !bReloading)
+	if (!bFireHeld && !bSemiPending && RecoilPitch == 0.0f && RecoilYaw == 0.0f && !bKickApplied && !bReloading
+		&& !bAimed && !bAimWanted && !bAimPredicted)
 	{
 		SetComponentTickEnabled(false);
 	}

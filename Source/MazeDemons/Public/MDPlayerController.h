@@ -150,6 +150,26 @@ public:
 
 	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 	virtual void SetupInputComponent() override;
+	// R4 aim assist: PlayerTick applies magnetism after the input ran; AddYaw/PitchInput apply friction (mouse only).
+	virtual void PlayerTick(float DeltaTime) override;
+	virtual void AddYawInput(float Val) override;
+	virtual void AddPitchInput(float Val) override;
+
+	// R4: the aim assist's view of the lock target this frame (local controller). Pure data, also read by tests and the debug overlay.
+	struct FMDAimAssistFrame
+	{
+		bool bActive = false;     // ranged mode with a gun, a lock target in range, no menu
+		float YawErrorDeg = 0.0f; // target direction minus view direction
+		float PitchErrorDeg = 0.0f;
+		float DistanceCm = 0.0f;
+		bool bOverlap = false;    // the reticle is on the target's chest sphere
+		bool bAimed = false;
+		bool bHardLock = false;
+		float Strength = 0.0f;    // the assist strength option 0..1 (md.Aim.Strength overrides)
+	};
+	FMDAimAssistFrame BuildAimAssistFrame() const;
+	// Look sensitivity multiplier right now: friction on a mouse while the reticle is on the lock target, else 1.
+	float GetAimFrictionScale() const;
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -443,6 +463,14 @@ private:
 	// R1: LMB / right trigger -> UMDRangedComponent::SetFireHeld (ignored while a menu is open).
 	void RangedFirePressed();
 	void RangedFireReleased();
+	// R4: RMB / left trigger -> UMDRangedComponent::SetAimInput (hold, or toggle by UMDLocalSettings::bAimToggle). Not consumed:
+	// the GASP IA_Aim in CBP_SandboxCharacter keeps reading the same keys.
+	void AimPressed();
+	void AimReleased();
+	void ApplyAimMagnetism(float DeltaTime);
+	// The rotation magnetism left the camera at, to tell the player's own turning (anything else that moved it) from the assist.
+	FRotator LastMagnetismRotation = FRotator::ZeroRotator;
+	bool bHaveMagnetismRotation = false;
 	// V1 WP7 lock-on keys (forward to LockOn; the component re-checks menus and death).
 	void LockOnPressed();
 	void LockOnReleased();

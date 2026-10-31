@@ -91,6 +91,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
 	bool IsSprintAllowedFor(bool bPawnLocallyControlled) const;
 
+	// True while the pawn runs on the ground at sprint speed (the rule the stamina drain uses). R4: sprinting leaves aim.
+	bool IsSprintingNow() const { return IsPawnSprinting(); }
+
 	// Cost is the unscaled cost; the perk StaminaCostScale attribute (Light Step) is applied here.
 	UFUNCTION(BlueprintPure, Category = "Maze Demons|Stamina")
 	bool HasStaminaFor(float Cost) const;
