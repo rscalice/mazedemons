@@ -1,10 +1,7 @@
-﻿import unreal, traceback, json
+import unreal, traceback, json
 # V1 WP4 assets (run with the editor closed as a commandlet; idempotent):
 #   1. DT_IntelligenceTiers (/Game/AI): FMDIntelligenceTier rows T0..T4 with the v1-design 3.2 numbers
-#   2. MDAN_Tell notify at the wind-up start of AM_Ghoul_Swipe and AM_Ghoul_Lunge (the notify fires the tell cue on every machine)
-#   3. DA_Archetype_Ghoul: TellSound (a short growl from the Fab MonsterRoarsAndGrowls pack, referenced only, never edited)
-#      at low volume, and the off-screen ThreatSting
-# ghoulassets.py applies the same notify and archetype fields when it rebuilds the montages. Report: Saved/ClaudeDump/gtell.txt
+#   (The MDAN_Tell notifies and the archetype tell / sting sounds are set by ghoulcombat.py.)
 out = r"C:/Users/Robert Scalice/Documents/Unreal Projects/mazedemons/Saved/ClaudeDump/gtell.txt"
 L = []
 def P(s):
@@ -51,47 +48,5 @@ def s_table():
     for col in ("ReactionTime", "TellTimeMultiplier", "MaxTokensPerPlayer", "ShareDelay"):
         P("  %s: %s" % (col, [str(x) for x in unreal.DataTableFunctionLibrary.get_data_table_column_as_string(table, col)]))
 sec("DT_IntelligenceTiers", s_table)
-
-ANIM_DIR = "/Game/Animations/Enemies/Ghoul"
-TELL_TIME = 0.02  # a notify exactly at 0 can be skipped on the first montage tick
-
-def add_tell(path):
-    m = unreal.load_asset(path)
-    if m is None:
-        P("  missing %s" % path); return
-    for nm in ("MD Tell", "MDAN_Tell"):
-        try: lib.remove_animation_notify_events_by_name(m, nm)
-        except Exception: pass
-    names = [str(x) for x in lib.get_animation_notify_track_names(m)]
-    if "Tell" not in names:
-        lib.add_animation_notify_track(m, "Tell", unreal.LinearColor(1.0, 0.85, 0.2, 1.0))
-    cls = unreal.load_class(None, "/Script/MazeDemons.MDAN_Tell")
-    lib.add_animation_notify_event(m, "Tell", TELL_TIME, cls)
-    m.modify(); EAL.save_asset(path, only_if_is_dirty=False)
-    m = unreal.load_asset(path)
-    P("  %s: notifies %s" % (path.split("/")[-1], [str(x) for x in lib.get_animation_notify_event_names(m)]))
-
-def s_notify():
-    for p in (ANIM_DIR + "/AM_Ghoul_Swipe", ANIM_DIR + "/AM_Ghoul_Lunge"):
-        add_tell(p)
-sec("MDAN_Tell", s_notify)
-
-TELL_SOUND = "/Game/Fab/MonsterRoarsAndGrowls/cues/11_Menacing_Growl_Cue"
-STING_SOUND = "/Game/Fab/MonsterRoarsAndGrowls/cues/10_Attack_Roar_Cue"
-
-def s_archetype():
-    da = unreal.load_asset("/Game/Data/Enemies/DA_Archetype_Ghoul")
-    for prop, path in (("tell_sound", TELL_SOUND), ("threat_sting", STING_SOUND)):
-        asset = unreal.load_asset(path)
-        P("  %s -> %s (%s)" % (prop, path, asset.get_name() if asset else "NOT FOUND"))
-        if asset:
-            da.set_editor_property(prop, asset)
-    da.set_editor_property("tell_volume", 0.3)
-    da.set_editor_property("threat_sting_volume", 0.7)
-    da.modify(); EAL.save_asset("/Game/Data/Enemies/DA_Archetype_Ghoul", only_if_is_dirty=False)
-    da = unreal.load_asset("/Game/Data/Enemies/DA_Archetype_Ghoul")
-    P("  now: tell %s vol %.2f, sting %s vol %.2f" % (da.get_editor_property("tell_sound"), da.get_editor_property("tell_volume"),
-                                                    da.get_editor_property("threat_sting"), da.get_editor_property("threat_sting_volume")))
-sec("Archetype", s_archetype)
 
 open(out, "w").write("\n".join(L))

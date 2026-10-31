@@ -201,6 +201,10 @@ private:
 	// bThreatening / ThreatTarget (only writes on a change). Called wherever the token, the intent or the cooldown changes.
 	void SyncThreat();
 
+	// The nimble facing rule: while engaged with a target inside the archetype's EngageFaceRange the enemy faces it and moves
+	// directionally (strafe / circle / backpedal) instead of turning with its movement. Server only; CMC replicates the result.
+	void ApplyNimbleFacing(const FMDBrainContext& Context, EMDIntent Intent);
+
 	void UpdateKnownActors(double Now);
 	// The near sense (MDPerception::NearSenseRange): players this close with only world geometry in between are sensed now.
 	void ApplyNearSense(double Now);

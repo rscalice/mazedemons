@@ -33,6 +33,9 @@ public class MazeDemonsEditor : ModuleRules
 			"AnimGraph",               // MD_AILibrary: builds ABP_Ghoul's AnimGraph
 			"AnimGraphRuntime",
 			"NavigationSystem",        // MD_AILibrary: nav bounds + build for the prototype map
+			"PoseSearchEditor",        // Ghoul ABP: motion matching + history collector graph nodes
+			"BlendStack",
+			"BlendStackEditor",
 			"PoseSearch",              // R0: MD_PoseSearchLibrary builds the per-stance ranged databases
 			"BSPUtils",                // FBSPOps::csgPrepMovingBrush for the spawned NavMeshBoundsVolume
 		});

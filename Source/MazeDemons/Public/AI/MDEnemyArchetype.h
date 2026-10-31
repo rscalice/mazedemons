@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
@@ -28,6 +28,14 @@ struct MAZEDEMONS_API FMDEnemyAttack
 	// The attack may start when the target is within this distance (cm, centre to centre).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0"))
 	float Range = 220.0f;
+
+	// The attack may not start when the target is closer than this (cm). 0 = none. A gap closer (the leap) sets it so it is never chosen at melee range.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0"))
+	float MinRange = 0.0f;
+
+	// Relative chance among the attacks that cover the distance (PickAttackWeighted). All 0 = the tightest attack always wins.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0"))
+	float SelectionWeight = 0.0f;
 
 	// Readable wind-up (1.3): seconds from the montage start to the first trace window at T0 (tiers scale it, floor 0.35 s).
 	// The attack component slows the montage during the wind-up to reach it; 0 = play as authored.
@@ -86,6 +94,27 @@ public:
 	// cm/s
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats", meta = (ClampMin = "0"))
 	float MoveSpeed = 450.0f;
+
+	// ---- Nimble movement (0 = leave the movement component default) ----
+
+	// Slow approach speed for bait / stalk (cm/s). 0 = same as MoveSpeed.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats|Nimble", meta = (ClampMin = "0"))
+	float WalkSpeed = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats|Nimble", meta = (ClampMin = "0"))
+	float MaxAcceleration = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats|Nimble", meta = (ClampMin = "0"))
+	float BrakingDeceleration = 0.0f;
+
+	// Yaw turn rate in degrees per second.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats|Nimble", meta = (ClampMin = "0"))
+	float RotationYawRate = 0.0f;
+
+	// Within this distance of its target (cm) an engaged enemy faces the target while it moves (strafe, circle, backpedal)
+	// instead of turning with its movement. 0 = off.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats|Nimble", meta = (ClampMin = "0"))
+	float EngageFaceRange = 0.0f;
 
 	// Gold shared among the players in range when this enemy dies (the U2 kill-gold split). 0 = none.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Rewards", meta = (ClampMin = "0"))
@@ -146,6 +175,17 @@ public:
 	// Index of the attack to use at Distance: the one with the smallest Range that still covers it (a swipe up close, the
 	// lunge from further out). INDEX_NONE when nothing reaches.
 	int32 PickAttack(float Distance) const;
+
+	// Like PickAttack, but among the attacks covering Distance (MinRange <= Distance <= Range) picks by SelectionWeight with
+	// Roll in [0,1). Falls back to the tightest attack when no covering attack has a weight.
+	int32 PickAttackWeighted(float Distance, float Roll) const;
+
+	// The nimble facing rule: an engaged enemy with a target inside EngageFaceRange faces it (strafes) rather than orienting to
+	// its movement. EngageFaceRange 0 or no target = orient to movement.
+	static bool ShouldFaceTarget(bool bHasTarget, float Distance, float EngageFaceRange, bool bAttacking);
+
+	// The ground speed for an intent: WalkSpeed for a slow approach (bait / stalk) when set, otherwise MoveSpeed.
+	float GetSpeedFor(bool bWalk) const { return (bWalk && WalkSpeed > 0.0f) ? WalkSpeed : MoveSpeed; }
 
 	// The tags a dead enemy of this archetype carries for kill credit (empty when ArchetypeTag is unset).
 	FGameplayTagContainer GetVictimTags() const;

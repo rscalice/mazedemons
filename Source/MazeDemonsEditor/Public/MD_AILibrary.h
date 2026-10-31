@@ -11,6 +11,7 @@
 #include "MD_AILibrary.generated.h"
 
 class UBlendSpace;
+class UPoseSearchDatabase;
 class USkeletalMesh;
 class USkeleton;
 
@@ -47,11 +48,11 @@ public:
 	/**
 	 * Builds the enemy anim Blueprint at PackagePath (e.g. "/Game/Animations/Enemies/Ghoul/ABP_Ghoul"): parent class
 	 * UMDEnemyAnimInstance (it computes Speed etc. in C++), TargetSkeleton = Skeleton, and an AnimGraph of four nodes laid out
-	 * left to right: Get Speed -> Blend Space Player (BlendSpace, X = Speed) -> Slot "DefaultSlot" -> Output Pose.
+	 * left to right: Motion Matching (Database) -> Pose History (trajectory generated from the character movement) -> Slot "DefaultSlot" -> Inertialization -> Output Pose.
 	 * Compiles and saves. Re-running rebuilds the graph. OutLog gets the compiler messages.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|AI")
-	static bool BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UBlendSpace* BlendSpace, TArray<FString>& OutLog);
+	static bool BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UPoseSearchDatabase* Database, TArray<FString>& OutLog);
 
 	/**
 	 * A blend space whose samples were set from a script has no triangulation/segment data until it is re-sampled (the editor

@@ -1,4 +1,4 @@
-﻿#include "AI/MDEnemyCharacter.h"
+#include "AI/MDEnemyCharacter.h"
 
 #include "AI/MDAIVoice.h"
 #include "AI/MDEnemyArchetype.h"
@@ -355,6 +355,9 @@ void AMDEnemyCharacter::ApplyArchetype(UMDEnemyArchetype* InArchetype)
 	if (UCharacterMovementComponent* Move = GetCharacterMovement())
 	{
 		Move->MaxWalkSpeed = Archetype->MoveSpeed;
+		if (Archetype->MaxAcceleration > 0.0f) { Move->MaxAcceleration = Archetype->MaxAcceleration; }
+		if (Archetype->BrakingDeceleration > 0.0f) { Move->BrakingDecelerationWalking = Archetype->BrakingDeceleration; }
+		if (Archetype->RotationYawRate > 0.0f) { Move->RotationRate.Yaw = Archetype->RotationYawRate; }
 	}
 
 	if (HasAuthority())

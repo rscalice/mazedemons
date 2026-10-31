@@ -27,12 +27,50 @@ int32 UMDEnemyArchetype::PickAttack(float Distance) const
 	int32 Best = INDEX_NONE;
 	for (int32 i = 0; i < Attacks.Num(); ++i)
 	{
-		if (Distance <= Attacks[i].Range && (Best == INDEX_NONE || Attacks[i].Range < Attacks[Best].Range))
+		if (Distance >= Attacks[i].MinRange && Distance <= Attacks[i].Range && (Best == INDEX_NONE || Attacks[i].Range < Attacks[Best].Range))
 		{
 			Best = i;
 		}
 	}
 	return Best;
+}
+
+int32 UMDEnemyArchetype::PickAttackWeighted(float Distance, float Roll) const
+{
+	float Total = 0.0f;
+	for (const FMDEnemyAttack& Attack : Attacks)
+	{
+		if (Distance >= Attack.MinRange && Distance <= Attack.Range)
+		{
+			Total += FMath::Max(Attack.SelectionWeight, 0.0f);
+		}
+	}
+	if (Total <= 0.0f)
+	{
+		return PickAttack(Distance);
+	}
+	float Remaining = FMath::Clamp(Roll, 0.0f, 0.9999f) * Total;
+	int32 Last = INDEX_NONE;
+	for (int32 i = 0; i < Attacks.Num(); ++i)
+	{
+		const FMDEnemyAttack& Attack = Attacks[i];
+		if (Distance < Attack.MinRange || Distance > Attack.Range || Attack.SelectionWeight <= 0.0f)
+		{
+			continue;
+		}
+		Last = i;
+		Remaining -= Attack.SelectionWeight;
+		if (Remaining < 0.0f)
+		{
+			return i;
+		}
+	}
+	return Last;
+}
+
+bool UMDEnemyArchetype::ShouldFaceTarget(bool bHasTarget, float Distance, float EngageFaceRange, bool bAttacking)
+{
+	return bHasTarget && !bAttacking && EngageFaceRange > 0.0f && Distance <= EngageFaceRange;
 }
 
 bool UMDEnemyArchetype::AllowsTier(EMDIntelligenceTier Tier) const

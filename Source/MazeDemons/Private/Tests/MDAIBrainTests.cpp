@@ -7,6 +7,8 @@
 #include "AI/MDAITypes.h"
 #include "AI/MDEnemyAnimInstance.h"
 #include "AI/MDEnemyArchetype.h"
+#include "AI/MDAN_Tell.h"
+#include "MDCombatNotifies.h"
 #include "AI/MDEnemyAttackComponent.h"
 #include "AIController.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -690,38 +692,17 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 {
 	using namespace MDAIBrainTestsLocal;
 	UMDEnemyArchetype* ShippedGhoul = LoadObject<UMDEnemyArchetype>(nullptr, TEXT("/Game/Data/Enemies/DA_Archetype_Ghoul.DA_Archetype_Ghoul"));
-	UAnimMontage* LungeMontage = LoadObject<UAnimMontage>(nullptr, TEXT("/Game/Animations/Enemies/Ghoul/AM_Ghoul_Lunge.AM_Ghoul_Lunge"));
-	if (!TestNotNull(TEXT("DA_Archetype_Ghoul"), ShippedGhoul) || !TestNotNull(TEXT("AM_Ghoul_Lunge asset (kept for when the Lunge returns)"), LungeMontage))
+	if (!TestNotNull(TEXT("DA_Archetype_Ghoul"), ShippedGhoul))
 	{
 		return false;
 	}
-	// The Lunge is disabled in the shipped archetype for now (Robert, 2026-10-28): only the Swipe is in its attack list. The montage
-	// asset stays and is tested here directly: this test works on a transient copy of the archetype with the Lunge put back, so the
-	// leap's root motion, warp window and runtime travel keep being verified. To re-enable it in the game: Scripts/Python/ghoullunge.py.
-	TestEqual(TEXT("the shipped ghoul has one attack (Swipe)"), ShippedGhoul->Attacks.Num(), 1);
+	// The shipped ghoul: ScratchCombo, ClawHeavy and LeapScratch (the old Swipe / Lunge placeholders are gone).
+	TestEqual(TEXT("the shipped ghoul has three attacks"), ShippedGhoul->Attacks.Num(), 3);
 	for (const FMDEnemyAttack& Shipped : ShippedGhoul->Attacks)
 	{
-		TestFalse(TEXT("the shipped ghoul has no Lunge while it is disabled"), Shipped.Name == FName(TEXT("Lunge")));
+		TestFalse(TEXT("no Swipe / Lunge placeholders"), Shipped.Name == FName(TEXT("Swipe")) || Shipped.Name == FName(TEXT("Lunge")));
 	}
-	UMDEnemyArchetype* Ghoul = DuplicateObject<UMDEnemyArchetype>(ShippedGhoul, GetTransientPackage());
-	{
-		FMDEnemyAttack& Lunge = Ghoul->Attacks.AddDefaulted_GetRef();
-		Lunge.Name = TEXT("Lunge");
-		Lunge.Montage = LungeMontage;
-		Lunge.Range = 450.0f;
-		Lunge.TellTime = 0.9f;
-		Lunge.Cooldown = 1.5f;
-		Lunge.TraceSockets = { TEXT("hand_r"), TEXT("hand_l") };
-		Lunge.Step.DamageMult = 1.3f;
-		Lunge.Step.PoiseDamage = 25.0f;
-		Lunge.Step.Reaction = EMDHitReaction::Flinch;
-		Lunge.Step.KnockbackStrength = 350.0f;
-		Lunge.Step.HitStopFrames = 4;
-		Lunge.Step.WarpRange = 520.0f;
-		Lunge.Step.WarpStopDistance = 90.0f;
-		Lunge.Step.RootMotionScale = 1.0f;
-	}
-	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/Enemies/Ghoul/SK_Ghoul.SK_Ghoul"));
+	UMDEnemyArchetype* Ghoul = DuplicateObject<UMDEnemyArchetype>(ShippedGhoul, GetTransientPackage());	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/Enemies/Ghoul/SK_Ghoul.SK_Ghoul"));
 	UClass* AnimClass = LoadObject<UClass>(nullptr, TEXT("/Game/Animations/Enemies/Ghoul/ABP_Ghoul.ABP_Ghoul_C"));
 	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (!TestNotNull(TEXT("DA_Archetype_Ghoul"), Ghoul) || !TestNotNull(TEXT("SK_Ghoul"), Mesh) || !TestNotNull(TEXT("ABP_Ghoul_C"), AnimClass) || !TestNotNull(TEXT("engine cube"), Cube))
@@ -729,8 +710,8 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// Data: every attack's montage has a root-motion sequence, and the lunge travels far enough to cover its range.
-	if (!TestTrue(TEXT("archetype has Swipe + Lunge"), Ghoul->Attacks.Num() >= 2))
+	// Data: every attack's montage has a root-motion sequence, and the leap travels far enough to cover its range.
+	if (!TestTrue(TEXT("archetype has the three Ghoul attacks"), Ghoul->Attacks.Num() >= 3))
 	{
 		return false;
 	}
@@ -745,13 +726,17 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 		// The ghoul claws (a werewolf clip with a baked root dash): the Swipe is a short step-in, the Lunge a 3-4 m leap, and neither
 		// lifts, flips or spins the root (the sword clips used before did all three).
 		const double Dist2D = Travel.GetTranslation().Size2D();
-		if (Attack.Name == FName(TEXT("Swipe")))
+		if (Attack.Name == FName(TEXT("ScratchCombo")))
 		{
-			TestTrue(*FString::Printf(TEXT("Swipe is a short step-in (%.0f cm, 15..60)"), Dist2D), Dist2D > 15.0 && Dist2D < 60.0);
+			TestTrue(*FString::Printf(TEXT("ScratchCombo steps in (%.0f cm, 60..110)"), Dist2D), Dist2D > 60.0 && Dist2D < 110.0);
 		}
-		else if (Attack.Name == FName(TEXT("Lunge")))
+		else if (Attack.Name == FName(TEXT("ClawHeavy")))
 		{
-			TestTrue(*FString::Printf(TEXT("Lunge is a forward leap (%.0f cm, 300..400)"), Dist2D), Dist2D > 300.0 && Dist2D < 400.0);
+			TestTrue(*FString::Printf(TEXT("ClawHeavy is a short step-in (%.0f cm, 25..70)"), Dist2D), Dist2D > 25.0 && Dist2D < 70.0);
+		}
+		else if (Attack.Name == FName(TEXT("LeapScratch")))
+		{
+			TestTrue(*FString::Printf(TEXT("LeapScratch is a forward leap (%.0f cm, 300..350)"), Dist2D), Dist2D > 300.0 && Dist2D < 350.0);
 		}
 		else
 		{
@@ -799,7 +784,26 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 				TestTrue(*FString::Printf(TEXT("%s warp window ignores Z"), *Attack.Name.ToString()), Warp->bIgnoreZAxis);
 			}
 		}
+		
+		// Windows: exactly one warp window, and one MD Weapon Trace window per swipe (3 for the combo), an MDAN_Tell before the first.
 		TestEqual(*FString::Printf(TEXT("%s has one warp window"), *Attack.Name.ToString()), WarpWindows, 1);
+		int32 TraceWindows = 0;
+		float FirstTrace = TNumericLimits<float>::Max();
+		float TellTime = -1.0f;
+		for (const FAnimNotifyEvent& Event : Attack.Montage->Notifies)
+		{
+			if (Event.NotifyStateClass && Event.NotifyStateClass->IsA<UMDANS_WeaponTrace>())
+			{
+				++TraceWindows;
+				FirstTrace = FMath::Min(FirstTrace, Event.GetTriggerTime());
+			}
+			else if (Event.Notify && Event.Notify->IsA<UMDAN_Tell>())
+			{
+				TellTime = Event.GetTriggerTime();
+			}
+		}
+		TestEqual(*FString::Printf(TEXT("%s trace windows (one per swipe)"), *Attack.Name.ToString()), TraceWindows, Attack.Name == FName(TEXT("ScratchCombo")) ? 3 : 1);
+		TestTrue(*FString::Printf(TEXT("%s has an MDAN_Tell before its first trace window"), *Attack.Name.ToString()), TellTime >= 0.0f && TellTime < FirstTrace);
 	}
 
 	// Runtime: a ghoul on a floor, no target (no warp), plays its last (longest) attack and must move.
@@ -852,7 +856,11 @@ bool FMDAIBrainGhoulAttackRootMotionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("walking on the floor"), Enemy->GetCharacterMovement()->MovementMode == MOVE_Walking);
 	const FVector Start = Enemy->GetActorLocation();
 
-	const int32 AttackIndex = Ghoul->Attacks.Num() - 1;
+	int32 AttackIndex = Ghoul->Attacks.Num() - 1; // the longest travel: LeapScratch
+	for (int32 i = 0; i < Ghoul->Attacks.Num(); ++i)
+	{
+		AttackIndex = Ghoul->Attacks[i].Name == FName(TEXT("LeapScratch")) ? i : AttackIndex;
+	}
 	if (!TestTrue(TEXT("attack starts"), Enemy->AttackComponent->StartAttack(AttackIndex, nullptr, 0.0f)))
 	{
 		return false;

@@ -9,6 +9,7 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "MD_PoseSearchLibrary.generated.h"
 
+class UAnimationAsset;
 class UAnimSequence;
 class UPoseSearchSchema;
 
@@ -39,4 +40,11 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|PoseSearch")
 	static int32 BuildDatabaseFromAnims(const FString& DatabasePath, const UPoseSearchSchema* Schema, const TArray<UAnimSequence*>& Sequences, TArray<FString>& OutLog);
+
+	/**
+	 * Same as BuildDatabaseFromAnims but accepts any animation asset the database supports (sequences, montages, composites,
+	 * blend spaces), e.g. the GASP-style traversal database, which holds montages. Same validation, index build and save.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "MazeDemons|Editor|PoseSearch")
+	static int32 BuildDatabaseFromAssets(const FString& DatabasePath, const UPoseSearchSchema* Schema, const TArray<UAnimationAsset*>& Assets, TArray<FString>& OutLog);
 };

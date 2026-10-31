@@ -7,7 +7,10 @@
 #include "AI/StateTree/MDSTEnemyTasks.h"
 #include "AI/StateTree/MDSTBehaviourTasks.h"
 #include "MDGameplayTags.h"
+#include "AnimGraphNode_MotionMatching.h"
+#include "AnimGraphNode_PoseSearchHistoryCollector.h"
 #include "AnimGraphNode_BlendSpacePlayer.h"
+#include "PoseSearch/PoseSearchDatabase.h"
 #include "AnimGraphNode_Inertialization.h"
 #include "AnimGraphNode_Root.h"
 #include "AnimGraphNode_Slot.h"
@@ -58,6 +61,39 @@ namespace MDAILibraryLocal
 		}
 	}
 
+	// The anim graph nodes keep their runtime node struct (Node) private: set its fields by reflection. Path walks nested structs.
+	bool SetNodeProperty(UObject* GraphNode, std::initializer_list<const char*> Path, const FString& Text)
+	{
+		const FStructProperty* NodeProp = FindFProperty<FStructProperty>(GraphNode->GetClass(), TEXT("Node"));
+		if (!NodeProp)
+		{
+			return false;
+		}
+		const UStruct* Struct = NodeProp->Struct;
+		void* Container = NodeProp->ContainerPtrToValuePtr<void>(GraphNode);
+		int32 Index = 0;
+		for (const char* Name : Path)
+		{
+			const FProperty* Property = Struct->FindPropertyByName(FName(ANSI_TO_TCHAR(Name)));
+			if (!Property)
+			{
+				return false;
+			}
+			void* Value = Property->ContainerPtrToValuePtr<void>(Container);
+			if (++Index == static_cast<int32>(Path.size()))
+			{
+				return Property->ImportText_Direct(*Text, Value, GraphNode, PPF_None) != nullptr;
+			}
+			const FStructProperty* Inner = CastField<FStructProperty>(Property);
+			if (!Inner)
+			{
+				return false;
+			}
+			Struct = Inner->Struct;
+			Container = Value;
+		}
+		return false;
+	}
 	const TCHAR* SeverityName(int32 Severity)
 	{
 		switch (Severity)
@@ -267,11 +303,11 @@ bool UMD_AILibrary::AssignSkeleton(USkeletalMesh* Mesh, USkeleton* Skeleton, FSt
 	return true;
 }
 
-bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UBlendSpace* BlendSpace, TArray<FString>& OutLog)
+bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleton* Skeleton, UPoseSearchDatabase* Database, TArray<FString>& OutLog)
 {
-	if (!Skeleton || !BlendSpace)
+	if (!Skeleton || !Database)
 	{
-		OutLog.Add(TEXT("Error: skeleton or blend space is null"));
+		OutLog.Add(TEXT("Error: skeleton or pose search database is null"));
 		return false;
 	}
 	if (!FPackageName::IsValidLongPackageName(PackagePath))
@@ -339,27 +375,35 @@ bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleto
 	Root->NodePosX = 300;
 	Root->NodePosY = 0;
 
-	// Get Speed (a UMDEnemyAnimInstance property, computed in C++).
-	UK2Node_VariableGet* SpeedNode = nullptr;
+	// Motion Matching on the ghoul database, then the pose history collector downstream of it (the node the matching reads its
+	// history from), generating the trajectory itself from the character movement: the enemy is AI driven, so velocity and
+	// acceleration based prediction is the right input. In-place playback: the capsule moves, the ABP root motion mode stays
+	// "from montages only" (UMDEnemyAnimInstance), so attack montages keep their root motion.
+	UAnimGraphNode_MotionMatching* Matching = nullptr;
 	{
-		FGraphNodeCreator<UK2Node_VariableGet> Creator(*AnimGraph);
-		SpeedNode = Creator.CreateNode();
-		SpeedNode->VariableReference.SetSelfMember(GET_MEMBER_NAME_CHECKED(UMDEnemyAnimInstance, Speed));
-		SpeedNode->NodePosX = -900;
-		SpeedNode->NodePosY = 90;
+		FGraphNodeCreator<UAnimGraphNode_MotionMatching> Creator(*AnimGraph);
+		Matching = Creator.CreateNode();
+		MDAILibraryLocal::SetNodeProperty(Matching, { "Database" }, Database->GetPathName());
+		Matching->NodePosX = -900;
+		Matching->NodePosY = 0;
 		Creator.Finalize();
 	}
-	// Blend Space Player: X = Speed.
-	UAnimGraphNode_BlendSpacePlayer* Player = nullptr;
+	UAnimGraphNode_PoseSearchHistoryCollector* History = nullptr;
 	{
-		FGraphNodeCreator<UAnimGraphNode_BlendSpacePlayer> Creator(*AnimGraph);
-		Player = Creator.CreateNode();
-		Player->Node.SetBlendSpace(BlendSpace);
-		Player->NodePosX = -600;
-		Player->NodePosY = 0;
+		FGraphNodeCreator<UAnimGraphNode_PoseSearchHistoryCollector> Creator(*AnimGraph);
+		History = Creator.CreateNode();
+		MDAILibraryLocal::SetNodeProperty(History, { "bGenerateTrajectory" }, TEXT("true"));
+		MDAILibraryLocal::SetNodeProperty(History, { "PoseCount" }, TEXT("24"));
+		MDAILibraryLocal::SetNodeProperty(History, { "TrajectoryHistoryCount" }, TEXT("10"));
+		MDAILibraryLocal::SetNodeProperty(History, { "TrajectoryPredictionCount" }, TEXT("8"));
+		MDAILibraryLocal::SetNodeProperty(History, { "PredictionSamplingInterval" }, TEXT("0.2"));
+		MDAILibraryLocal::SetNodeProperty(History, { "TrajectoryData", "MaxControllerYawRate" }, TEXT("720")); // as fast as the movement component turns (archetype RotationYawRate)
+		MDAILibraryLocal::SetNodeProperty(History, { "TrajectoryData", "RotateTowardsMovementSpeed" }, TEXT("20"));
+		MDAILibraryLocal::SetNodeProperty(History, { "TrajectoryData", "BendVelocityTowardsAcceleration" }, TEXT("0.4")); // sharp, quick direction changes
+		History->NodePosX = -600;
+		History->NodePosY = 0;
 		Creator.Finalize();
-	}
-	// Montage slot.
+	}	// Montage slot.
 	UAnimGraphNode_Slot* Slot = nullptr;
 	{
 		FGraphNodeCreator<UAnimGraphNode_Slot> Creator(*AnimGraph);
@@ -396,8 +440,8 @@ bool UMD_AILibrary::BuildEnemyAnimBlueprint(const FString& PackagePath, USkeleto
 		}
 		return true;
 	};
-	bool bOk = Connect(SpeedNode, TEXT("Speed"), Player, TEXT("X"));
-	bOk &= Connect(Player, TEXT("Pose"), Slot, TEXT("Source"));
+	bool bOk = Connect(Matching, TEXT("Pose"), History, TEXT("Source"));
+	bOk &= Connect(History, TEXT("Pose"), Slot, TEXT("Source"));
 	bOk &= Connect(Slot, TEXT("Pose"), Inertialization, TEXT("Source"));
 	bOk &= Connect(Inertialization, TEXT("Pose"), Root, TEXT("Result"));
 

@@ -47,6 +47,17 @@ int32 UMD_PoseSearchLibrary::BuildStanceDatabase(const FString& DatabasePath, co
 
 int32 UMD_PoseSearchLibrary::BuildDatabaseFromAnims(const FString& DatabasePath, const UPoseSearchSchema* Schema, const TArray<UAnimSequence*>& Sequences, TArray<FString>& OutLog)
 {
+	TArray<UAnimationAsset*> Assets;
+	Assets.Reserve(Sequences.Num());
+	for (UAnimSequence* Sequence : Sequences)
+	{
+		Assets.Add(Sequence);
+	}
+	return BuildDatabaseFromAssets(DatabasePath, Schema, Assets, OutLog);
+}
+
+int32 UMD_PoseSearchLibrary::BuildDatabaseFromAssets(const FString& DatabasePath, const UPoseSearchSchema* Schema, const TArray<UAnimationAsset*>& Sequences, TArray<FString>& OutLog)
+{
 	if (!Schema)
 	{
 		OutLog.Add(TEXT("Error: no schema given"));
@@ -79,8 +90,12 @@ int32 UMD_PoseSearchLibrary::BuildDatabaseFromAnims(const FString& DatabasePath,
 		Database->RemoveAnimationAssetAt(Database->GetNumAnimationAssets() - 1);
 	}
 	int32 Added = 0;
-	for (UAnimSequence* Sequence : Sequences)
+	for (UAnimationAsset* Sequence : Sequences)
 	{
+		if (!Sequence)
+		{
+			continue;
+		}
 		FPoseSearchDatabaseAnimationAsset Entry;
 		Entry.AnimAsset = Sequence;
 		if (!Entry.IsSkeletonCompatible(Schema))

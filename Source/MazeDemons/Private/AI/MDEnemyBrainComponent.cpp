@@ -1,4 +1,5 @@
-﻿#include "AI/MDEnemyBrainComponent.h"
+#include "AI/MDEnemyBrainComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 #include "AI/MDAISubsystem.h"
 #include "AI/MDEnemyArchetype.h"
@@ -736,7 +737,7 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 
 	if (Chosen == EMDIntent::Attack || Chosen == EMDIntent::Feint)
 	{
-		ChosenAttackIndex = E->Archetype ? E->Archetype->PickAttack(Context.DistanceToTarget) : INDEX_NONE;
+		ChosenAttackIndex = E->Archetype ? E->Archetype->PickAttackWeighted(Context.DistanceToTarget, FRandomStream(static_cast<int32>(HashCombine(static_cast<uint32>(Context.RunSeed), static_cast<uint32>(EnemyId * 131 + DecisionIndex)))).FRand()) : INDEX_NONE;
 		if (Chosen == EMDIntent::Attack && Greed.bBraced)
 		{
 			const int32 Counter = PickCounterAttack(Context.DistanceToTarget);
@@ -775,6 +776,7 @@ void UMDEnemyBrainComponent::RunDecision(double Now)
 
 	const bool bRestart = bIntentFinished || Chosen != CurrentIntent;
 	SetIntent(Chosen, bRestart);
+	ApplyNimbleFacing(Context, Chosen);
 	SyncThreat(); // SetIntent does nothing when the intent is unchanged, but the token may have been granted or lost
 	// md.AI.Debug: UMDAISubsystem draws the overlay (the nearest enemies only), not every brain on every decision.
 }
@@ -800,6 +802,40 @@ void UMDEnemyBrainComponent::SetIntent(EMDIntent Intent, bool bRestart)
 	}
 	SyncThreat();
 	OnIntentSelected.Broadcast(Intent, bRestart);
+}
+
+void UMDEnemyBrainComponent::ApplyNimbleFacing(const FMDBrainContext& Context, EMDIntent Intent)
+{
+	AMDEnemyCharacter* E = Enemy.Get();
+	if (!E || !E->Archetype || !E->HasAuthority())
+	{
+		return;
+	}
+	if (Intent != EMDIntent::Charge && Intent != EMDIntent::Attack && Intent != EMDIntent::Feint && E->Archetype->WalkSpeed > 0.0f)
+	{
+		if (UCharacterMovementComponent* Move = E->GetCharacterMovement())
+		{
+			Move->MaxWalkSpeed = E->Archetype->GetSpeedFor(Intent == EMDIntent::Bait); // bait / stalk walks, everything else runs
+		}
+	}
+	const bool bMovesRelative = Intent == EMDIntent::Chase || Intent == EMDIntent::HoldThreat || Intent == EMDIntent::Bait
+		|| Intent == EMDIntent::Flank || Intent == EMDIntent::Kite;
+	if (!bMovesRelative || E->Archetype->EngageFaceRange <= 0.0f)
+	{
+		return; // other intents and the behaviour tasks own their facing
+	}
+	AActor* Tgt = Target.Get();
+	if (UMDEnemyArchetype::ShouldFaceTarget(Tgt != nullptr, Context.DistanceToTarget, E->Archetype->EngageFaceRange, false))
+	{
+		if (!E->IsFacingTarget())
+		{
+			E->FaceTarget(Tgt);
+		}
+	}
+	else if (E->IsFacingTarget())
+	{
+		E->FaceMovement();
+	}
 }
 
 void UMDEnemyBrainComponent::SyncThreat()
