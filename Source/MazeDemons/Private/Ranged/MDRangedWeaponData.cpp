@@ -5,6 +5,7 @@
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_RangedMode, "State.RangedMode");
 UE_DEFINE_GAMEPLAY_TAG(TAG_State_Reloading, "State.Reloading");
+UE_DEFINE_GAMEPLAY_TAG(TAG_State_Aiming, "State.Aiming");
 
 UObject* UMDRangedWeaponData::LoadWeaponMesh() const
 {
